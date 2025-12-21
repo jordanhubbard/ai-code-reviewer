@@ -32,7 +32,25 @@
 
 **Any project with a build/test command works!**
 
-## Quick Start
+## Modes of Operation
+
+### Single-Node Mode
+One machine reviews the entire codebase sequentially. Simple setup, good for small to medium projects.
+
+### Distributed Mode (NEW!)
+Multiple machines with GPUs review code in parallel. Dramatically faster for large codebases.
+
+**Features:**
+- ✅ **Nx speedup** (N = number of workers)
+- ✅ **No central server** - workers coordinate via git
+- ✅ **Fault tolerant** - workers can crash/restart
+- ✅ **Easy scaling** - add more workers anytime
+
+See [docs/DISTRIBUTED-MODE.md](docs/DISTRIBUTED-MODE.md) for details.
+
+---
+
+## Quick Start (Single-Node Mode)
 
 ### 1. Install Dependencies
 
@@ -108,12 +126,25 @@ source:
 
 ### 4. Run
 
+**Single-Node Mode:**
 ```bash
 make run
 ```
 
+**Distributed Mode (Multiple GPUs):**
+```bash
+# On first machine: Initialize tasks
+make bootstrap
+
+# On each machine: Start worker
+make worker
+
+# Monitor progress (any machine)
+make status
+```
+
 The AI will:
-1. Pick a directory from your source tree
+1. Pick a directory from your source tree (or claim from queue in distributed mode)
 2. Review all files in that directory
 3. Make fixes
 4. Run your build command
@@ -304,6 +335,7 @@ make run
 - **Ollama server** (local or remote) with a code model
 - **Your project's build system** (make, cmake, cargo, etc.)
 - **Git repository** (for tracking changes)
+- **bd (beads)** (for distributed mode only) - https://github.com/jhutar/beads
 
 ## License
 

@@ -21,6 +21,7 @@ CONFIG?=	${SRCDIR}/config.yaml
 
 # Phony targets
 .PHONY: all deps check-deps validate run run-verbose test clean clean-all help
+.PHONY: bootstrap worker coordinator status distributed-help
 
 # Default target
 all: help
@@ -155,6 +156,62 @@ run-verbose:
 	cd ${SRCDIR} && ${PYTHON} reviewer.py --config ${CONFIG} -v
 
 #
+# Distributed mode targets
+#
+
+# Bootstrap: Initialize bd and create tasks (idempotent, safe to run multiple times)
+bootstrap: check-deps
+	@echo "Running bootstrap phase..."
+	cd ${SRCDIR} && ./bootstrap.sh --config ${CONFIG}
+
+# Start a worker node
+worker: check-deps
+	@echo "Starting worker node..."
+	cd ${SRCDIR} && ./worker-node.sh --config ${CONFIG}
+
+# Show coordinator status
+coordinator:
+	cd ${SRCDIR} && ./coordinator.sh
+
+# Watch status continuously
+status:
+	cd ${SRCDIR} && ./coordinator.sh --watch
+
+# Help for distributed mode
+distributed-help:
+	@echo "Distributed AI Code Review"
+	@echo "=========================="
+	@echo ""
+	@echo "Setup (run once per clone):"
+	@echo "  make bootstrap        Initialize bd and create review tasks"
+	@echo ""
+	@echo "Worker Nodes (run on each machine):"
+	@echo "  make worker           Start a worker node (processes tasks until done)"
+	@echo ""
+	@echo "Monitoring:"
+	@echo "  make coordinator      Show current status snapshot"
+	@echo "  make status           Watch status continuously (updates every 10s)"
+	@echo ""
+	@echo "Manual Control:"
+	@echo "  bd ready              Show available tasks"
+	@echo "  bd list               Show all tasks"
+	@echo "  bd show <id>          Show task details"
+	@echo "  bd update <id> --status pending   Reset failed task"
+	@echo ""
+	@echo "Architecture:"
+	@echo "  - Each worker claims tasks from shared bd queue (.beads/issues.jsonl)"
+	@echo "  - Tasks are synced via git (automatic with bd)"
+	@echo "  - Workers run independently, no central coordination needed"
+	@echo "  - Safe to run multiple workers on same or different machines"
+	@echo ""
+	@echo "Typical Workflow:"
+	@echo "  1. Clone repo on multiple machines (or multiple clones)"
+	@echo "  2. Run 'make bootstrap' on one machine (creates tasks)"
+	@echo "  3. Run 'make worker' on each machine"
+	@echo "  4. Monitor with 'make status' from any machine"
+	@echo ""
+
+#
 # Cleanup targets
 #
 
@@ -190,9 +247,17 @@ help:
 	@echo "  vim config.yaml   Configure Ollama server URL and model"
 	@echo "  make validate     Test connection to Ollama server"
 	@echo ""
-	@echo "Usage:"
+	@echo "Single-Node Mode:"
 	@echo "  make run          Start the review loop (auto-checks dependencies)"
 	@echo "  make run-verbose  Run with verbose logging"
+	@echo ""
+	@echo "Distributed Mode (Multiple GPUs/Machines):"
+	@echo "  make distributed-help   Show detailed distributed mode instructions"
+	@echo "  make bootstrap          Initialize task queue (run once)"
+	@echo "  make worker             Start a worker node"
+	@echo "  make status             Monitor progress across all workers"
+	@echo ""
+	@echo "Testing:"
 	@echo "  make test         Run component self-tests"
 	@echo ""
 	@echo "Cleanup:"
@@ -208,6 +273,7 @@ help:
 	@echo "  - Network access to Ollama server"
 	@echo "  - Source code at source.root (default: ../)"
 	@echo "  - Working build command (configured in config.yaml)"
+	@echo "  - bd (beads) for distributed mode (https://github.com/jhutar/beads)"
 	@echo ""
 	@echo "Supported Platforms:"
 	@echo "  - FreeBSD (pkg)"

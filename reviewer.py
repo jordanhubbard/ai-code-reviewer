@@ -383,11 +383,17 @@ class ReviewLoop:
         
         # Conversation history
         self.history: List[Dict[str, str]] = []
+        self.target_directory: Optional[str] = None  # For distributed mode
+        self.task_id: Optional[str] = None  # For bd task tracking
         
-        self._init_conversation()
+        # Note: _init_conversation() will be called from run() with target_directory
     
-    def _init_conversation(self) -> None:
-        """Initialize the conversation with system prompt, bootstrap, and index."""
+    def _init_conversation(self, target_directory: Optional[str] = None) -> None:
+        """Initialize the conversation with system prompt, bootstrap, and index.
+        
+        Args:
+            target_directory: If specified, directs AI to review only this directory
+        """
         system_prompt = self._build_system_prompt()
         
         # Get current position and next target from index
@@ -405,7 +411,13 @@ class ReviewLoop:
 {index_summary}
 
 """
-        if current:
+        # In distributed mode, override with target directory
+        if target_directory:
+            init_message += f"\n**DISTRIBUTED MODE**: You are assigned to review ONLY this directory:\n"
+            init_message += f"TARGET: `{target_directory}`\n\n"
+            init_message += f"Use: ACTION: SET_SCOPE {target_directory}\n"
+            init_message += f"Complete this directory and then HALT.\n"
+        elif current:
             init_message += f"\nRESUME reviewing: `{current}` (already in progress)\n"
             init_message += f"Use: ACTION: SET_SCOPE {current}\n"
         elif next_target:
@@ -1376,15 +1388,35 @@ Output ONLY the lesson entry, nothing else."""
         
         return reviewable
     
-    def run(self) -> None:
-        """Run the main review loop."""
-        logger.info("Starting review loop...")
+    def run(self, target_directory: Optional[str] = None, task_id: Optional[str] = None) -> None:
+        """Run the main review loop.
+        
+        Args:
+            target_directory: If specified, review only this directory (for distributed mode)
+            task_id: bd task ID for tracking (optional)
+        """
+        self.target_directory = target_directory
+        self.task_id = task_id
+        
+        if target_directory:
+            logger.info(f"Starting targeted review of: {target_directory}")
+            if task_id:
+                logger.info(f"Task ID: {task_id}")
+        else:
+            logger.info("Starting review loop...")
+        
+        # Initialize conversation with target directory
+        self._init_conversation(target_directory)
         
         # Show initial git status
         status = self.git.show_status()
         if status:
             print("\n*** Git status at start:")
             print(status)
+        
+        # In targeted mode, we only do one directory
+        if target_directory:
+            self.max_iterations = min(self.max_iterations, 20)  # Limit iterations for single directory
         
         for step in range(1, self.max_iterations + 1):
             # Show hierarchical progress
@@ -1508,6 +1540,18 @@ Examples:
         help='Enable verbose logging'
     )
     
+    parser.add_argument(
+        '--directory',
+        default=None,
+        help='Target specific directory for review (for distributed mode)'
+    )
+    
+    parser.add_argument(
+        '--task-id',
+        default=None,
+        help='bd task ID associated with this review (for distributed mode)'
+    )
+    
     args = parser.parse_args()
     
     log_level = logging.DEBUG if args.verbose else logging.INFO
@@ -1601,7 +1645,7 @@ Examples:
     )
     
     try:
-        loop.run()
+        loop.run(target_directory=args.directory, task_id=args.task_id)
     except KeyboardInterrupt:
         logger.info("Interrupted by user")
         sys.exit(130)
