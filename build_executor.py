@@ -455,10 +455,14 @@ def create_executor_from_config(config_dict: Dict[str, Any], run_pre_build: bool
     Returns:
         Configured BuildExecutor
     """
-    source_config = config_dict.get('source', {})
+    # Support both 'build' (new) and 'source' (old) config sections
+    build_config = config_dict.get('build', config_dict.get('source', {}))
     
     # Resolve source root relative to config file location
-    source_root = Path(source_config.get('root', '..'))
+    # Support both 'source_root' (new) and 'root' (old) keys
+    source_root_str = build_config.get('source_root', build_config.get('root', '..'))
+    source_root = Path(source_root_str)
+    
     if not source_root.is_absolute():
         # Default: assume config is in angry-ai/ subdirectory
         source_root = Path(__file__).parent / source_root
@@ -466,10 +470,10 @@ def create_executor_from_config(config_dict: Dict[str, Any], run_pre_build: bool
     
     config = BuildConfig(
         source_root=source_root,
-        build_command=source_config.get('build_command', 
+        build_command=build_config.get('build_command', 
             "sudo make -j$(sysctl -n hw.ncpu) buildworld"),
-        build_timeout=source_config.get('build_timeout', 7200),
-        pre_build_command=source_config.get('pre_build_command', 'sudo -v'),
+        build_timeout=build_config.get('build_timeout', 7200),
+        pre_build_command=build_config.get('pre_build_command', 'sudo -v'),
     )
     
     return BuildExecutor(config, run_pre_build=run_pre_build)
