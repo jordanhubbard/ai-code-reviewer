@@ -2,14 +2,15 @@
 #
 # AI-powered code reviewer for ANY codebase (C, C++, Rust, Go, Python, etc.)
 # Validates changes with YOUR build command (configurable in config.yaml).
+# Cross-platform: FreeBSD, macOS, Linux
 #
 # Quick start:
-#   make deps        # Install Python dependencies (PyYAML)
+#   make check-deps  # Auto-detect OS and install dependencies
 #   vim config.yaml  # Set your Ollama server URL
 #   make validate    # Test connection to Ollama
 #   make run         # Start the review loop
 
-# Python interpreter (FreeBSD typically has python3)
+# Python interpreter
 PYTHON?=	python3
 
 # Source directory (bmake sets .CURDIR to Makefile location, not obj dir)
@@ -31,24 +32,85 @@ all: help
 # Check and install system dependencies (Python3, pip, pyyaml)
 check-deps:
 	@echo "Checking dependencies..."
-	@# Check for python3
-	@if ! command -v python3 >/dev/null 2>&1; then \
+	@# Detect OS
+	@OS=$$(uname -s); \
+	echo "Detected OS: $$OS"; \
+	\
+	if ! command -v python3 >/dev/null 2>&1; then \
 		echo "Python3 not found. Installing..."; \
-		sudo pkg install -y python3; \
+		case "$$OS" in \
+			FreeBSD) \
+				sudo pkg install -y python3 ;; \
+			Darwin) \
+				if command -v brew >/dev/null 2>&1; then \
+					brew install python3; \
+				else \
+					echo "ERROR: Homebrew not found. Install from https://brew.sh"; \
+					exit 1; \
+				fi ;; \
+			Linux) \
+				if command -v apt-get >/dev/null 2>&1; then \
+					sudo apt-get update && sudo apt-get install -y python3; \
+				elif command -v yum >/dev/null 2>&1; then \
+					sudo yum install -y python3; \
+				elif command -v dnf >/dev/null 2>&1; then \
+					sudo dnf install -y python3; \
+				else \
+					echo "ERROR: No supported package manager found (apt-get, yum, dnf)"; \
+					exit 1; \
+				fi ;; \
+			*) \
+				echo "ERROR: Unsupported OS: $$OS"; \
+				exit 1 ;; \
+		esac \
 	else \
 		echo "✓ Python3 found: $$(python3 --version)"; \
 	fi
 	@# Check for pip
-	@if ! python3 -m pip --version >/dev/null 2>&1; then \
+	@OS=$$(uname -s); \
+	if ! python3 -m pip --version >/dev/null 2>&1; then \
 		echo "pip not found. Installing..."; \
-		sudo pkg install -y py311-pip; \
+		case "$$OS" in \
+			FreeBSD) \
+				sudo pkg install -y py311-pip ;; \
+			Darwin) \
+				python3 -m ensurepip --upgrade || curl https://bootstrap.pypa.io/get-pip.py | python3 ;; \
+			Linux) \
+				if command -v apt-get >/dev/null 2>&1; then \
+					sudo apt-get install -y python3-pip; \
+				elif command -v yum >/dev/null 2>&1; then \
+					sudo yum install -y python3-pip; \
+				elif command -v dnf >/dev/null 2>&1; then \
+					sudo dnf install -y python3-pip; \
+				else \
+					python3 -m ensurepip --upgrade || curl https://bootstrap.pypa.io/get-pip.py | python3; \
+				fi ;; \
+		esac \
 	else \
 		echo "✓ pip found: $$(python3 -m pip --version)"; \
 	fi
 	@# Check for pyyaml
 	@if ! python3 -c "import yaml" >/dev/null 2>&1; then \
 		echo "PyYAML not found. Installing..."; \
-		sudo pip install pyyaml; \
+		OS=$$(uname -s); \
+		case "$$OS" in \
+			Darwin) \
+				if python3 -m pip install --user pyyaml 2>/dev/null; then \
+					echo "✓ PyYAML installed via pip --user"; \
+				elif python3 -m pip install --break-system-packages pyyaml 2>/dev/null; then \
+					echo "✓ PyYAML installed via pip --break-system-packages"; \
+				else \
+					echo "WARNING: pip install failed. Trying Homebrew..."; \
+					if command -v brew >/dev/null 2>&1; then \
+						brew install libyaml && python3 -m pip install --break-system-packages pyyaml; \
+					else \
+						echo "ERROR: Could not install PyYAML"; \
+						exit 1; \
+					fi; \
+				fi ;; \
+			*) \
+				python3 -m pip install --user pyyaml ;; \
+		esac \
 	else \
 		echo "✓ PyYAML found"; \
 	fi
@@ -120,9 +182,11 @@ help:
 	@echo ""
 	@echo "AI-powered code reviewer with build validation for ANY codebase."
 	@echo "Uses remote Ollama server for AI, validates with YOUR build command."
+	@echo "Cross-platform: FreeBSD, macOS, Linux"
 	@echo ""
 	@echo "Setup:"
-	@echo "  make check-deps   Check/install Python3, pip, and PyYAML (auto-runs on 'make run')"
+	@echo "  make check-deps   Auto-detect OS and install Python3, pip, PyYAML"
+	@echo "                    (FreeBSD: pkg, macOS: brew, Linux: apt/yum/dnf)"
 	@echo "  vim config.yaml   Configure Ollama server URL and model"
 	@echo "  make validate     Test connection to Ollama server"
 	@echo ""
@@ -144,6 +208,11 @@ help:
 	@echo "  - Network access to Ollama server"
 	@echo "  - Source code at source.root (default: ../)"
 	@echo "  - Working build command (configured in config.yaml)"
+	@echo ""
+	@echo "Supported Platforms:"
+	@echo "  - FreeBSD (pkg)"
+	@echo "  - macOS (Homebrew)"
+	@echo "  - Linux (apt-get, yum, dnf)"
 	@echo ""
 	@echo "Works with: C/C++ (make/cmake), Rust, Go, Python, Node.js, etc."
 	@echo "Just configure your build command in config.yaml!"

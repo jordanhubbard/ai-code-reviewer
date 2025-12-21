@@ -36,14 +36,36 @@
 
 ### 1. Install Dependencies
 
-```bash
-# On FreeBSD
-sudo pkg install python3 py311-pip
-sudo pip install pyyaml
+The Makefile automatically detects your OS (FreeBSD, macOS, Linux) and uses the appropriate package manager:
 
-# On Linux
-sudo apt install python3 python3-pip
-pip3 install pyyaml
+```bash
+make check-deps
+```
+
+This will:
+- **FreeBSD**: Use `pkg install` for python3 and pip
+- **macOS**: Use Homebrew (`brew install`) for python3, then install pip
+- **Linux**: Use `apt-get` (Debian/Ubuntu), `yum` (RHEL/CentOS), or `dnf` (Fedora)
+- Install PyYAML via pip (cross-platform)
+
+Or install manually if you prefer:
+
+```bash
+# FreeBSD
+sudo pkg install python3 py311-pip
+python3 -m pip install --user pyyaml
+
+# macOS
+brew install python3
+python3 -m pip install --user pyyaml
+
+# Linux (Debian/Ubuntu)
+sudo apt-get install python3 python3-pip
+python3 -m pip install --user pyyaml
+
+# Linux (RHEL/CentOS/Fedora)
+sudo dnf install python3 python3-pip
+python3 -m pip install --user pyyaml
 ```
 
 ### 2. Set Up Ollama Server
