@@ -1,4 +1,4 @@
-# Angry AI - Universal Code Reviewer
+# Your Brain on AI - Universal Code Reviewer
 
 **AI-powered code reviewer with build validation for ANY codebase**
 
