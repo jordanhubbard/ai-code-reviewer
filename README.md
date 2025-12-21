@@ -133,15 +133,14 @@ make run
 
 **Distributed Mode (Multiple GPUs):**
 ```bash
-# On first machine: Initialize tasks
-make bootstrap
-
-# On each machine: Start worker
+# On each machine: Start worker (bootstrap runs automatically)
 make worker
 
 # Monitor progress (any machine)
 make status
 ```
+
+**Note:** Both `make run` and `make worker` automatically run bootstrap first (which is idempotent and safe to run multiple times).
 
 The AI will:
 1. Pick a directory from your source tree (or claim from queue in distributed mode)

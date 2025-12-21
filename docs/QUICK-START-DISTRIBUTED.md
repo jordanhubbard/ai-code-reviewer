@@ -47,29 +47,14 @@ Test it:
 make validate
 ```
 
-### Step 4: Bootstrap (One Machine Only)
-
-On **any one machine**:
-```bash
-make bootstrap
-```
-
-This creates review tasks for all directories in your source tree.
-
-**Output:**
-```
-[5/5] Discovering directories and creating tasks...
-Found 127 directories to process
-Task creation summary:
-  - New tasks created: 127
-```
-
-### Step 5: Start Workers
+### Step 4: Start Workers
 
 On **each machine**:
 ```bash
 make worker
 ```
+
+**Note:** `make worker` automatically runs bootstrap first, which is idempotent. The first worker will create all tasks, subsequent workers will see tasks already exist and create nothing new.
 
 Workers will:
 - Sync with git
@@ -78,7 +63,7 @@ Workers will:
 - Push results
 - Repeat until done
 
-### Step 6: Monitor Progress
+### Step 5: Monitor Progress
 
 From **any machine**:
 ```bash

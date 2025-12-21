@@ -147,8 +147,10 @@ test:
 # Run targets
 #
 
-# Run the review loop (checks dependencies first)
-run: check-deps
+# Run the review loop (bootstrap runs first to ensure tasks exist)
+# Note: In single-node mode, bootstrap creates tasks but they're optional
+# In distributed mode, bootstrap is required
+run: bootstrap
 	cd ${SRCDIR} && ${PYTHON} reviewer.py --config ${CONFIG}
 
 # Run with verbose logging
@@ -164,8 +166,8 @@ bootstrap: check-deps
 	@echo "Running bootstrap phase..."
 	cd ${SRCDIR} && ./bootstrap.sh --config ${CONFIG}
 
-# Start a worker node
-worker: check-deps
+# Start a worker node (bootstrap runs first to ensure tasks exist)
+worker: bootstrap
 	@echo "Starting worker node..."
 	cd ${SRCDIR} && ./worker-node.sh --config ${CONFIG}
 
@@ -182,11 +184,9 @@ distributed-help:
 	@echo "Distributed AI Code Review"
 	@echo "=========================="
 	@echo ""
-	@echo "Setup (run once per clone):"
-	@echo "  make bootstrap        Initialize bd and create review tasks"
-	@echo ""
-	@echo "Worker Nodes (run on each machine):"
-	@echo "  make worker           Start a worker node (processes tasks until done)"
+	@echo "Quick Start:"
+	@echo "  make worker           Start a worker node (bootstrap runs automatically)"
+	@echo "                        First worker creates tasks, others see existing tasks"
 	@echo ""
 	@echo "Monitoring:"
 	@echo "  make coordinator      Show current status snapshot"
@@ -205,9 +205,9 @@ distributed-help:
 	@echo "  - Safe to run multiple workers on same or different machines"
 	@echo ""
 	@echo "Typical Workflow:"
-	@echo "  1. Clone repo on multiple machines (or multiple clones)"
-	@echo "  2. Run 'make bootstrap' on one machine (creates tasks)"
-	@echo "  3. Run 'make worker' on each machine"
+	@echo "  1. Clone repo on multiple machines"
+	@echo "  2. Configure each: 'make check-deps && vim config.yaml'"
+	@echo "  3. Run 'make worker' on each machine (bootstrap runs automatically)"
 	@echo "  4. Monitor with 'make status' from any machine"
 	@echo ""
 
@@ -253,9 +253,9 @@ help:
 	@echo ""
 	@echo "Distributed Mode (Multiple GPUs/Machines):"
 	@echo "  make distributed-help   Show detailed distributed mode instructions"
-	@echo "  make bootstrap          Initialize task queue (run once)"
-	@echo "  make worker             Start a worker node"
+	@echo "  make worker             Start a worker node (bootstrap runs automatically)"
 	@echo "  make status             Monitor progress across all workers"
+	@echo "  make bootstrap          Manually run bootstrap (optional, worker does this)"
 	@echo ""
 	@echo "Testing:"
 	@echo "  make test         Run component self-tests"

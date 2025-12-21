@@ -87,38 +87,11 @@ vim config.yaml
 make validate
 ```
 
-### Bootstrap (Run Once)
-
-On **any one worker** (or all workers - it's idempotent):
-
-```bash
-make bootstrap
-```
-
-This will:
-- Check dependencies (Python, PyYAML, Ollama)
-- Initialize bd database
-- Scan source tree and create review tasks
-- Sync tasks to git repository
-
-**Output:**
-```
-[5/5] Discovering directories and creating tasks...
-Found 127 directories to process
-Creating task: Review directory: src/bin/cat
-Creating task: Review directory: src/bin/cp
-...
-Task creation summary:
-  - Total directories found: 127
-  - Existing tasks: 0
-  - New tasks created: 127
-```
-
 ## Running Workers
 
 ### Start a Worker
 
-On each worker node:
+On each worker node (bootstrap runs automatically first):
 
 ```bash
 make worker
@@ -131,6 +104,20 @@ Or with custom worker ID:
 ```
 
 **Worker Output:**
+
+First, bootstrap runs (idempotent):
+```
+==========================================
+AI Code Review - Bootstrap Phase
+==========================================
+...
+Task creation summary:
+  - Total directories found: 127
+  - Existing tasks: 127  ← Already exist, creates 0 new
+  - New tasks created: 0
+```
+
+Then worker starts:
 ```
 ==========================================
 AI Code Review - Worker Node
