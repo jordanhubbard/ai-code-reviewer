@@ -67,11 +67,15 @@ review:
   #   - REVIEW-SUMMARY.md (progress tracking)
   #   - AGENTS.md, @AGENTS.md (agent hints)
   #
+  # Available personas:
+  #   - freebsd-angry-ai: Ruthless security auditor (default, battle-tested)
+  #   - example: Balanced, educational template
+  #
   # Benefits:
   #   - Source tree stays clean (only code changes)
-  #   - Multiple personas (angry-ai, security-focused, friendly-helper)
+  #   - Multiple personas (security-focused, performance, friendly)
   #   - Portable personas (share/version separately)
-  persona: "personas/example"
+  persona: "personas/freebsd-angry-ai"
   
   # Maximum review/fix iterations before giving up on a file
   # Each iteration = one AI action (SET_SCOPE, READ_FILE, NEXT_CHUNK, EDIT_FILE, etc.)

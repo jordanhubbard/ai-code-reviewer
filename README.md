@@ -211,21 +211,48 @@ Files over 800 lines are automatically chunked by function:
 └─────────────────────────────────────────────────────┘
 ```
 
-## Why "Angry AI"?
+## Personas
 
-The default persona is an **unforgiving code reviewer** that:
-- Never accepts "good enough"
-- Finds subtle bugs
-- Enforces best practices
-- Educates through aggressive comments
-- Acts like a senior engineer blocking your commit
+The tool supports multiple **review personalities** via the persona system.
 
-**But you can customize the persona!** Edit `AI_START_HERE.md` to make it:
-- Friendly and helpful
-- Security-focused
-- Performance-focused
-- Style-focused
-- Or anything else
+### Default: FreeBSD Angry AI
+
+The default persona is **"The FreeBSD Commit Blocker"** - a ruthless security auditor that:
+- ✓ Battle-tested on FreeBSD source tree
+- ✓ Found 8+ critical bugs (buffer overflows, TOCTOU races, integer overflows)
+- ✓ 16 files reviewed with full history
+- ✓ Learned lessons from real security issues
+- ✓ Enforces style(9) and POSIX compliance
+- ✓ Never accepts "good enough"
+
+**Why this persona?** It's proven effective at finding subtle security vulnerabilities.
+
+### Available Personas
+
+Located in `personas/` directory:
+
+- **freebsd-angry-ai** (default): Ruthless security auditor
+- **example**: Balanced, educational template for creating your own
+
+### Creating Your Own Persona
+
+Copy and customize:
+```bash
+cp -r personas/example personas/my-persona
+vim personas/my-persona/AI_START_HERE.md  # Define behavior
+vim personas/my-persona/PERSONA.md        # Set personality
+
+# Update config.yaml
+review:
+  persona: "personas/my-persona"
+```
+
+Make it:
+- Friendly and encouraging
+- Security-paranoid
+- Performance-obsessed
+- Style-enforcing
+- Domain-specific (embedded, web, systems)
 
 ## Extracting to Standalone Repo
 
