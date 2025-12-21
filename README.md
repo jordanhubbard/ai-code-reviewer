@@ -231,8 +231,13 @@ The default persona is **"The FreeBSD Commit Blocker"** - a ruthless security au
 
 Located in `personas/` directory:
 
-- **freebsd-angry-ai** (default): Ruthless security auditor
-- **example**: Balanced, educational template for creating your own
+| Persona | Focus | Tone | Best For |
+|---------|-------|------|----------|
+| **freebsd-angry-ai** ⚡ | Security (default) | Ruthless | Production audits, proven on FreeBSD |
+| **security-hawk** 🦅 | Security (extreme) | Paranoid | High-value targets, compliance |
+| **performance-cop** 🚀 | Speed/Efficiency | Demanding | Hot paths, scalability |
+| **friendly-mentor** 🌟 | Learning | Supportive | Training, onboarding |
+| **example** 📝 | Template | Balanced | Creating custom personas |
 
 ### Creating Your Own Persona
 
