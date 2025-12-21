@@ -1,0 +1,102 @@
+# Angry AI Configuration - DEFAULT TEMPLATE
+# Copy this file to config.yaml and edit with your settings
+#
+# Generic AI code reviewer with build validation
+# Works with ANY codebase - just configure your build command
+
+# Remote Ollama server configuration
+ollama:
+  # URL of the Ollama server (must be reachable from this machine)
+  # CHANGE THIS to your Ollama server's address
+  url: "http://localhost:11434"
+  
+  # Model to use for code review (must be available on the Ollama server)
+  # Recommended: qwen2.5-coder:32b or similar code-focused model
+  model: "qwen2.5-coder:32b"
+  
+  # Request timeout in seconds
+  timeout: 300
+  
+  # Maximum tokens to generate per response
+  max_tokens: 4096
+  
+  # Temperature for generation (0.0 = deterministic, 1.0 = creative)
+  temperature: 0.1
+
+# Source tree configuration
+source:
+  # Path to source code root directory
+  # (Relative paths resolved from config file location)
+  # Default ".." assumes config is in a subdirectory like angry-ai/
+  root: ".."
+  
+  # Build command to validate ALL changes in current directory
+  # This is the ONLY project-specific configuration!
+  # The script chdir's to source root before running this command.
+  #
+  # Examples for different projects:
+  #   FreeBSD:     "sudo make -j$(sysctl -n hw.ncpu) buildworld"
+  #   Linux:       "make -j$(nproc)"
+  #   CMake:       "cmake --build build -j$(nproc)"
+  #   Autotools:   "./configure && make -j$(nproc)"
+  #   Rust:        "cargo build --release"
+  #   Go:          "go build ./..."
+  #   Python:      "python -m pytest" or "tox"
+  #   Node.js:     "npm test"
+  build_command: "sudo make -j$(sysctl -n hw.ncpu) buildworld"
+  
+  # Build timeout in seconds (adjust for your project)
+  # FreeBSD buildworld: ~2 hours
+  # Linux kernel: ~30 minutes
+  # Most projects: ~5-10 minutes
+  build_timeout: 7200  # 2 hours
+  
+  # Pre-build command to run once at startup
+  # Examples: "sudo -v" (cache sudo), "npm install" (deps), "" (none)
+  # Set to empty string to disable
+  pre_build_command: "sudo -v"
+
+# Review configuration
+review:
+  # Persona directory (contains AI behavior, lessons, progress tracking)
+  # Structure: personas/<name>/
+  #   - AI_START_HERE.md (bootstrap/instructions)
+  #   - PERSONA.md (personality definition)
+  #   - LESSONS.md (learned bug patterns)
+  #   - HANDOVER.md (workflow protocol)
+  #   - REVIEW-SUMMARY.md (progress tracking)
+  #   - AGENTS.md, @AGENTS.md (agent hints)
+  #
+  # Benefits:
+  #   - Source tree stays clean (only code changes)
+  #   - Multiple personas (angry-ai, security-focused, friendly-helper)
+  #   - Portable personas (share/version separately)
+  persona: "personas/example"
+  
+  # Maximum review/fix iterations before giving up on a file
+  # Each iteration = one AI action (SET_SCOPE, READ_FILE, NEXT_CHUNK, EDIT_FILE, etc.)
+  # For chunked files, need enough iterations to review all functions
+  # Example: 52-chunk file needs ~60-80 iterations (read all + make edits + build)
+  max_iterations: 200
+  
+  # Files/patterns to skip during review
+  skip_patterns:
+    - "*.o"
+    - "*.a"
+    - "*.so"
+    - ".git/*"
+    - "angry-ai/*"
+    - "*.pyc"
+    - "__pycache__/*"
+
+# Logging configuration
+logging:
+  # Directory for log files (relative to source root)
+  log_dir: ".angry-ai/logs"
+  
+  # Log level: DEBUG, INFO, WARNING, ERROR
+  level: "INFO"
+  
+  # Keep last N log files per session
+  max_log_files: 100
+

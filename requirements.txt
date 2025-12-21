@@ -1,0 +1,24 @@
+# Angry AI - FreeBSD Code Reviewer
+# Minimal dependencies for cross-platform support (including FreeBSD)
+
+# YAML config parsing (pure Python, works everywhere)
+PyYAML>=6.0
+
+# That's it! Everything else uses Python standard library:
+# - urllib for HTTP requests to Ollama
+# - json for API communication
+# - subprocess for build execution
+# - pathlib for file operations
+# - logging for output
+# - re for parsing
+# - dataclasses for data structures
+
+# NOTE: This project does NOT require:
+# - torch (GPU-dependent, not available on FreeBSD)
+# - transformers (requires torch)
+# - requests (we use urllib to minimize dependencies)
+# - numpy (not needed for this application)
+#
+# The AI model runs on a REMOTE Ollama server, not locally.
+# This script just needs to make HTTP requests and parse responses.
+
