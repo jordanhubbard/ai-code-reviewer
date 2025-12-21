@@ -334,7 +334,7 @@ make run
 - **Ollama server** (local or remote) with a code model
 - **Your project's build system** (make, cmake, cargo, etc.)
 - **Git repository** (for tracking changes)
-- **bd (beads)** (for distributed mode only) - https://github.com/jhutar/beads
+- **bd (beads)** (for distributed mode only) - https://github.com/steveyegge/beads
 
 ## License
 

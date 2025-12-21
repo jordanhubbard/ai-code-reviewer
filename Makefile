@@ -273,7 +273,7 @@ help:
 	@echo "  - Network access to Ollama server"
 	@echo "  - Source code at source.root (default: ../)"
 	@echo "  - Working build command (configured in config.yaml)"
-	@echo "  - bd (beads) for distributed mode (https://github.com/jhutar/beads)"
+	@echo "  - bd (beads) for distributed mode (https://github.com/steveyegge/beads)"
 	@echo ""
 	@echo "Supported Platforms:"
 	@echo "  - FreeBSD (pkg)"

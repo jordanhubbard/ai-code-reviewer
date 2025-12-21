@@ -66,7 +66,7 @@ bd handles conflicts automatically:
 **On each worker node:**
 - Python 3.8+ with PyYAML
 - Ollama with a code model (e.g., qwen2.5-coder:32b)
-- bd (beads) - Install from: https://github.com/jhutar/beads
+- bd (beads) - Install from: https://github.com/steveyegge/beads
 - Git access to shared repository
 
 ### Installation
@@ -475,5 +475,5 @@ Each worker can use different config:
 
 - [Platform Support](PLATFORM-SUPPORT.md) - OS-specific setup
 - [Chunking Explained](CHUNKING-EXPLAINED.md) - How large files are handled
-- [bd (beads) Documentation](https://github.com/jhutar/beads) - Task queue system
+- [bd (beads) Documentation](https://github.com/steveyegge/beads) - Task queue system
 

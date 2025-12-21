@@ -93,7 +93,7 @@ echo ""
 echo "[3/5] Checking bd (beads) setup..."
 if ! command -v bd >/dev/null 2>&1; then
     echo "ERROR: bd command not found."
-    echo "Install from: https://github.com/jhutar/beads"
+    echo "Install from: https://github.com/steveyegge/beads"
     exit 1
 fi
 

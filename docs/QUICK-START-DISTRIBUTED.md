@@ -6,7 +6,7 @@ Get multiple GPUs reviewing code in parallel in under 5 minutes.
 
 - ✅ Multiple machines with GPUs (or one machine with multiple GPUs)
 - ✅ Ollama running on each machine
-- ✅ bd (beads) installed: https://github.com/jhutar/beads
+- ✅ bd (beads) installed: https://github.com/steveyegge/beads
 - ✅ Git repository with code to review
 
 ## 5-Minute Setup
