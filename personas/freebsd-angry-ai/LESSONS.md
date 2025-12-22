@@ -271,3 +271,9 @@ When converting atoi()/atol() to strtol() with validation:
 ### COMPILER: Broken Pipe Error
 - What went wrong: The build system encountered a broken pipe error.
 - How to avoid it next time: Ensure all output streams are properly managed and check for any issues with resource limits or process termination.
+
+
+## 2025-12-21 16:03
+### COMPILER: Function Type Conflicts and Pointer Qualifiers
+- Conflicting function types and passing `const char *` to a non-const parameter caused build errors.
+- Ensure consistent function declarations and use `const char *` for functions that do not modify the string.
