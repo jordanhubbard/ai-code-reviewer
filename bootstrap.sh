@@ -201,7 +201,14 @@ echo "[5/5] Discovering directories and creating tasks..."
 
 cd "$SOURCE_ROOT"
 
-# Get existing tasks
+# One final sync before checking existing tasks (catch any just created by other workers)
+echo "  Final sync check before task generation..."
+git pull --rebase --quiet 2>/dev/null || true
+if [ -f .beads/issues.jsonl ]; then
+    bd sync --json >/dev/null 2>&1 || true
+fi
+
+# Get existing tasks (fresh from sync)
 EXISTING_TASKS=$(bd list --json 2>/dev/null || echo "[]")
 
 # Find all directories in source tree (relative to SOURCE_ROOT)
@@ -223,25 +230,66 @@ for DIR in $DIRS; do
         continue
     fi
     
-    # Check if task already exists for this directory
+    # Create task title (exact format we'll check against)
+    TASK_TITLE="Review directory: $DIR"
+    
+    # Check if task with this EXACT title already exists
     TASK_EXISTS=$(echo "$EXISTING_TASKS" | \
-                  python3 -c "import sys, json; tasks=json.load(sys.stdin); print('yes' if any('$DIR' in t.get('title','') or '$DIR' in t.get('description','') for t in tasks) else 'no')" 2>/dev/null || echo "no")
+                  python3 -c "
+import sys, json
+tasks = json.load(sys.stdin)
+target_title = '$TASK_TITLE'
+# Check for exact title match (not substring)
+exists = any(t.get('title', '') == target_title for t in tasks)
+print('yes' if exists else 'no')
+" 2>/dev/null || echo "no")
     
     if [ "$TASK_EXISTS" = "yes" ]; then
         EXISTING_COUNT=$((EXISTING_COUNT + 1))
+        # Optionally show which statuses exist
+        STATUS=$(echo "$EXISTING_TASKS" | \
+                 python3 -c "
+import sys, json
+tasks = json.load(sys.stdin)
+target = '$TASK_TITLE'
+for t in tasks:
+    if t.get('title', '') == target:
+        print(t.get('status', 'unknown'))
+        break
+" 2>/dev/null || echo "unknown")
+        # Only log if verbose or not completed
+        if [ "$STATUS" != "completed" ]; then
+            echo "  Task exists: $TASK_TITLE (status: $STATUS)"
+        fi
         continue
     fi
     
     # Create new task with relative path
-    TASK_TITLE="Review directory: $DIR"
     TASK_DESC="AI code review of all files in $DIR directory (relative to source root: $SOURCE_ROOT)"
     
     echo "Creating task: $TASK_TITLE"
-    bd create "$TASK_TITLE" \
+    if bd create "$TASK_TITLE" \
        --description="$TASK_DESC" \
        --type=task \
        --priority=2 \
-       --json >/dev/null 2>&1 && NEW_TASKS=$((NEW_TASKS + 1)) || echo "  Warning: Failed to create task"
+       --json >/dev/null 2>&1; then
+        NEW_TASKS=$((NEW_TASKS + 1))
+    else
+        echo "  ERROR: Failed to create task (may already exist)"
+        # Double-check if it now exists (race condition with another worker)
+        RECHECK=$(bd list --json 2>/dev/null | \
+                  python3 -c "
+import sys, json
+tasks = json.load(sys.stdin)
+target = '$TASK_TITLE'
+exists = any(t.get('title', '') == target for t in tasks)
+print('yes' if exists else 'no')
+" 2>/dev/null || echo "no")
+        if [ "$RECHECK" = "yes" ]; then
+            echo "  (Task now exists - created by another worker)"
+            EXISTING_COUNT=$((EXISTING_COUNT + 1))
+        fi
+    fi
 done
 
 echo ""
