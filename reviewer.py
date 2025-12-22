@@ -102,6 +102,7 @@ class ReviewSession:
     files_fixed: int = 0
     build_failures: int = 0
     total_errors_fixed: int = 0
+    last_build_failed: bool = False  # Track if most recent build failed
     
     # Current location in hierarchy
     current_directory: Optional[str] = None  # e.g., "bin/chio"
@@ -551,9 +552,18 @@ WORKFLOW:
    - If needs fixes: proceed to EDIT
 7. EDIT files to fix issues (security, correctness, style)
 8. When all files in directory are reviewed, run BUILD
-9. If build fails: fix errors, rebuild
-10. If build succeeds: directory is done, pick next directory
-11. HALT only when all directories reviewed or stuck
+9. If build fails: FIX EVERY ERROR (even in other directories), rebuild
+10. Repeat step 9 until build succeeds (may take multiple iterations)
+11. If build succeeds: directory is done, pick next directory
+12. HALT only when all directories reviewed or stuck
+
+CRITICAL: BUILD FAILURES MUST BE FIXED
+- When BUILD fails, you MUST fix the errors shown
+- Fix errors even if they are in different directories
+- The entire codebase builds together - one error fails everything
+- Do NOT move to next directory with a failing build
+- Do NOT HALT with a failing build
+- Keep fixing and rebuilding until BUILD succeeds
 
 SKIP FILES THAT ARE ALREADY FIXED:
 - If you see strtonum() already in use where atoi() would be, it's fixed
@@ -1188,6 +1198,7 @@ Output ONLY the lesson entry, nothing else."""
             
             if result.success:
                 # Build succeeded!
+                self.session.last_build_failed = False
                 self.session.files_fixed += len(changed_files)
                 
                 # Generate commit message using AI (include directory context)
@@ -1233,6 +1244,7 @@ Output ONLY the lesson entry, nothing else."""
             else:
                 # Build failed - STAY IN CURRENT DIRECTORY
                 self.session.build_failures += 1
+                self.session.last_build_failed = True
                 
                 # DO NOT mark directory complete
                 # DO NOT clear pending_changes
@@ -1249,14 +1261,31 @@ Output ONLY the lesson entry, nothing else."""
                 error_response = f"BUILD_FAILED: Build errors detected\n\n"
                 error_response += f"CURRENT STATE:\n{progress}\n\n"
                 error_response += f"BUILD ERROR REPORT:\n{error_report}\n\n"
-                error_response += f"RECOVERY ACTIONS:\n"
-                error_response += f"1. Analyze the build errors above\n"
-                error_response += f"2. Re-read affected files if needed (READ_FILE)\n"
-                error_response += f"3. Make additional fixes (EDIT_FILE)\n"
-                error_response += f"4. Try building again (BUILD)\n"
-                error_response += f"5. Repeat until build succeeds\n\n"
-                error_response += f"IMPORTANT: You are still in {self.session.current_directory}\n"
-                error_response += f"Do NOT move to next directory until build succeeds!\n"
+                error_response += f"RECOVERY ACTIONS (REQUIRED - NOT OPTIONAL):\n"
+                error_response += f"1. Analyze EVERY build error above\n"
+                error_response += f"2. For EACH error:\n"
+                error_response += f"   a. Note the file path and line number\n"
+                error_response += f"   b. READ_FILE that file to see the code\n"
+                error_response += f"   c. EDIT_FILE to fix the specific error\n"
+                error_response += f"3. After fixing ALL errors, BUILD again\n"
+                error_response += f"4. Repeat until build succeeds\n\n"
+                error_response += f"CRITICAL RULES:\n"
+                error_response += f"- Fix errors EVEN IF they are in other directories\n"
+                error_response += f"- The entire codebase builds together - all errors block progress\n"
+                error_response += f"- Do NOT assume errors are 'unrelated' or 'separate'\n"
+                error_response += f"- Do NOT HALT while build is failing\n"
+                error_response += f"- Do NOT skip to next directory while build is failing\n"
+                error_response += f"- MUST fix ALL errors before proceeding\n\n"
+                error_response += f"EXAMPLE from your current build:\n"
+                if "bin/chio/chio.c" in error_report:
+                    error_response += f"  Error: conflicting types for 'parse_element_type' in bin/chio/chio.c\n"
+                    error_response += f"  Action: READ_FILE bin/chio/chio.c\n"
+                    error_response += f"  Then: EDIT_FILE to change 'char *' to 'const char *' in declarations\n"
+                    error_response += f"  Then: BUILD again\n\n"
+                else:
+                    error_response += f"  See errors above - each one must be fixed\n\n"
+                error_response += f"Current directory: {self.session.current_directory}\n"
+                error_response += f"But you must fix errors in ANY directory to make build succeed.\n"
                 
                 # Return error report for AI to analyze
                 return error_response
@@ -1270,7 +1299,26 @@ Output ONLY the lesson entry, nothing else."""
                        f"Changed files: {', '.join(self.session.changed_files)}\n" \
                        f"Run BUILD to validate and commit these changes first."
             
-            # 2. Check if no directories have been completed
+            # 2. Check if last build failed
+            if self.session.last_build_failed:
+                return f"HALT_REJECTED: The last build FAILED.\n" \
+                       f"You must fix the build errors before halting.\n" \
+                       f"The build is currently BROKEN - you cannot leave it in this state.\n\n" \
+                       f"Build failures so far: {self.session.build_failures}\n\n" \
+                       f"Required actions:\n" \
+                       f"1. Run BUILD to see current errors (or recall previous errors)\n" \
+                       f"2. For each error:\n" \
+                       f"   - READ_FILE the file with the error\n" \
+                       f"   - EDIT_FILE to fix the error\n" \
+                       f"3. BUILD again\n" \
+                       f"4. Repeat until build succeeds\n" \
+                       f"5. Only then may you HALT or move to next directory\n\n" \
+                       f"Example: If bin/chio/chio.c has 'conflicting types', you must:\n" \
+                       f"  READ_FILE bin/chio/chio.c\n" \
+                       f"  EDIT_FILE bin/chio/chio.c (fix the const qualifiers)\n" \
+                       f"  BUILD (check if fixed)"
+            
+            # 3. Check if no directories have been completed
             if self.session.directories_completed == 0:
                 # Find directories that could be reviewed
                 suggestions = self._find_reviewable_directories()
