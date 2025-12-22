@@ -1048,8 +1048,12 @@ Output ONLY the lesson entry, nothing else."""
             rel_path = str(path.relative_to(self.source_root))
             self.session.current_file = rel_path
             
+            # CRITICAL: If last build failed, bypass chunking to allow immediate fixes
+            # Chunked mode's "use NEXT_CHUNK" instruction conflicts with BUILD_FAILED's "use EDIT_FILE" instruction
+            bypass_chunking = self.session.last_build_failed
+            
             # Check if file should be chunked
-            if self.chunker.should_chunk(path):
+            if not bypass_chunking and self.chunker.should_chunk(path):
                 # Start chunked review
                 self.current_chunks = self.chunker.chunk_file(path)
                 self.current_chunk_index = 0
@@ -1078,7 +1082,7 @@ Output ONLY the lesson entry, nothing else."""
                 chunk_content = format_chunk_for_review(chunk, total_chunks, 1)
                 return f"READ_FILE_RESULT for {path}:\n{header}```\n{chunk_content}\n```"
             
-            # Small files: original behavior
+            # Small files (or bypassed chunking): return full file
             self.session.current_file_chunks_total = 1
             self.session.current_file_chunks_reviewed = 1
             
@@ -1088,7 +1092,15 @@ Output ONLY the lesson entry, nothing else."""
             progress = self.session.get_progress_summary()
             
             warning = ""
-            if line_count > 500 or file_size > 20000:
+            if bypass_chunking:
+                warning = (
+                    f"\n🔧 BUILD FIX MODE: Chunking bypassed to enable immediate fixes\n"
+                    f"   The build is BROKEN. After reading this file:\n"
+                    f"   1. Identify the specific lines causing errors\n"
+                    f"   2. Use EDIT_FILE to fix each error\n"
+                    f"   3. Then BUILD again\n\n"
+                )
+            elif line_count > 500 or file_size > 20000:
                 warning = (
                     f"\n⚠️  NOTE: Medium-sized file ({line_count} lines, {file_size} bytes)\n"
                     f"   Analysis may take 5-10 minutes.\n\n"
