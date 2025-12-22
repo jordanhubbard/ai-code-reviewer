@@ -18,6 +18,7 @@ CONFIG_FILE="config.yaml"
 MAX_DEPTH=3
 WORKER_ID="${HOSTNAME:-worker-$$}"
 SOURCE_ROOT=""  # Will be read from config.yaml
+FORCE_DEDUPE=false  # Force deduplication even if no duplicates found
 
 # Parse arguments
 while [[ $# -gt 0 ]]; do
@@ -34,6 +35,10 @@ while [[ $# -gt 0 ]]; do
             WORKER_ID="$2"
             shift 2
             ;;
+        --deduplicate|--dedup)
+            FORCE_DEDUPE=true
+            shift
+            ;;
         --help)
             echo "Usage: $0 [OPTIONS]"
             echo ""
@@ -41,9 +46,15 @@ while [[ $# -gt 0 ]]; do
             echo "  --config FILE         Configuration file (default: config.yaml)"
             echo "  --max-depth N         Maximum directory depth to scan (default: 3)"
             echo "  --worker-id ID        Worker identifier (default: hostname or PID)"
+            echo "  --deduplicate         Force deduplication check (automatic on startup)"
             echo "  --help                Show this help message"
             echo ""
             echo "Note: source_root is read from config.yaml"
+            echo ""
+            echo "Deduplication:"
+            echo "  Bootstrap automatically checks for and merges duplicate tasks."
+            echo "  This fixes issues from older versions that may have created duplicates."
+            echo "  Use --deduplicate to force deduplication without creating new tasks."
             exit 0
             ;;
         *)
@@ -195,20 +206,114 @@ else
     echo "  Continuing anyway, but coordination may be affected..."
 fi
 
-# Phase 5: Generate tasks for unclaimed directories
+# Phase 5: Deduplicate any existing tasks (from older script versions)
 echo ""
-echo "[5/5] Discovering directories and creating tasks..."
+echo "[5/5] Checking for duplicate tasks..."
 
 cd "$SOURCE_ROOT"
 
 # One final sync before checking existing tasks (catch any just created by other workers)
-echo "  Final sync check before task generation..."
+echo "  Final sync check before deduplication..."
 git pull --rebase --quiet 2>/dev/null || true
 if [ -f .beads/issues.jsonl ]; then
     bd sync --json >/dev/null 2>&1 || true
 fi
 
-# Get existing tasks (fresh from sync)
+# Get all existing tasks
+ALL_TASKS=$(bd list --json 2>/dev/null || echo "[]")
+
+# Find and merge duplicates
+DUPLICATES_FOUND=$(echo "$ALL_TASKS" | python3 -c "
+import sys, json
+from collections import defaultdict
+
+tasks = json.load(sys.stdin)
+if not tasks:
+    print('0')
+    sys.exit(0)
+
+# Group by title
+by_title = defaultdict(list)
+for task in tasks:
+    title = task.get('title', '')
+    if title:
+        by_title[title].append(task)
+
+# Find titles with duplicates
+duplicates = {title: task_list for title, task_list in by_title.items() if len(task_list) > 1}
+
+if duplicates:
+    print(f'{len(duplicates)}')
+    for title, task_list in duplicates.items():
+        # Sort by status priority: in_progress > pending > completed > failed
+        status_priority = {'in_progress': 0, 'pending': 1, 'completed': 2, 'failed': 3}
+        sorted_tasks = sorted(task_list, key=lambda t: status_priority.get(t.get('status', 'pending'), 99))
+        
+        keeper = sorted_tasks[0]
+        dupes = sorted_tasks[1:]
+        
+        print(f'MERGE|{keeper[\"id\"]}|{keeper.get(\"status\", \"unknown\")}|{\"|\".join([d[\"id\"] for d in dupes])}', file=sys.stderr)
+else:
+    print('0')
+" 2>&1)
+
+DUPE_COUNT=$(echo "$DUPLICATES_FOUND" | head -1)
+DUPE_DETAILS=$(echo "$DUPLICATES_FOUND" | grep '^MERGE|' || true)
+
+if [ "$DUPE_COUNT" -gt 0 ] || [ "$FORCE_DEDUPE" = true ]; then
+    if [ "$DUPE_COUNT" -gt 0 ]; then
+        echo "  Found $DUPE_COUNT duplicate task titles - merging..."
+    elif [ "$FORCE_DEDUPE" = true ]; then
+        echo "  Force deduplication requested (no duplicates found)"
+    fi
+    
+    if [ "$DUPE_COUNT" -gt 0 ]; then
+        echo "$DUPE_DETAILS" | while IFS='|' read -r MERGE_CMD KEEPER_ID KEEPER_STATUS DUPE_IDS; do
+        if [ "$MERGE_CMD" = "MERGE" ]; then
+            echo "    Keeping: $KEEPER_ID (status: $KEEPER_STATUS)"
+            
+            # Close duplicate tasks
+            IFS='|' read -ra DUPES <<< "$DUPE_IDS"
+            for DUPE_ID in "${DUPES[@]}"; do
+                if [ -n "$DUPE_ID" ]; then
+                    echo "      Closing duplicate: $DUPE_ID"
+                    bd close "$DUPE_ID" --reason "Duplicate task - merged into $KEEPER_ID" 2>/dev/null || \
+                        bd update "$DUPE_ID" --status closed --json 2>/dev/null || \
+                        echo "        Warning: Could not close $DUPE_ID"
+                fi
+            done
+        fi
+        done
+        
+        # Sync the cleaned-up task list
+        echo "  Syncing deduplicated tasks to remote..."
+        sleep 6  # Wait for bd auto-export
+        if [ -f .beads/issues.jsonl ]; then
+            git add .beads/issues.jsonl
+            git commit -m "Bootstrap: Deduplicated $DUPE_COUNT duplicate tasks (worker: $WORKER_ID)" 2>/dev/null || true
+            
+            for i in {1..3}; do
+                if git push 2>/dev/null; then
+                    echo "  ✓ Deduplicated tasks synced to remote"
+                    break
+                else
+                    git pull --rebase 2>/dev/null || true
+                    sleep 2
+                fi
+            done
+        fi
+    fi
+else
+    echo "  ✓ No duplicate tasks found"
+fi
+
+# Phase 6: Generate tasks for unclaimed directories
+echo ""
+echo "[6/6] Discovering directories and creating tasks..."
+
+cd "$SOURCE_ROOT"
+
+# Refresh task list after deduplication
 EXISTING_TASKS=$(bd list --json 2>/dev/null || echo "[]")
 
 # Find all directories in source tree (relative to SOURCE_ROOT)
@@ -298,9 +403,9 @@ echo "  - Total directories found: $TOTAL_DIRS"
 echo "  - Existing tasks: $EXISTING_COUNT"
 echo "  - New tasks created: $NEW_TASKS"
 
-# Phase 6: Sync tasks to remote (in SOURCE_ROOT)
+# Phase 7: Sync tasks to remote (in SOURCE_ROOT)
 echo ""
-echo "[6/6] Syncing tasks to source repository remote..."
+echo "[7/7] Syncing tasks to source repository remote..."
 
 cd "$SOURCE_ROOT"
 

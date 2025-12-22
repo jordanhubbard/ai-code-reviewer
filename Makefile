@@ -21,7 +21,7 @@ CONFIG?=	${SRCDIR}/config.yaml
 
 # Phony targets
 .PHONY: all deps check-deps validate run run-verbose test clean clean-all help
-.PHONY: bootstrap worker coordinator status distributed-help
+.PHONY: bootstrap worker coordinator status distributed-help deduplicate
 
 # Default target
 all: help
@@ -179,6 +179,10 @@ coordinator:
 status:
 	cd ${SRCDIR} && ./coordinator.sh --watch
 
+# Deduplicate tasks (cleanup from older versions)
+deduplicate:
+	cd ${SRCDIR} && ./bootstrap.sh --deduplicate
+
 # Help for distributed mode
 distributed-help:
 	@echo "Distributed AI Code Review"
@@ -191,6 +195,9 @@ distributed-help:
 	@echo "Monitoring:"
 	@echo "  make coordinator      Show current status snapshot"
 	@echo "  make status           Watch status continuously (updates every 10s)"
+	@echo ""
+	@echo "Maintenance:"
+	@echo "  make deduplicate      Remove duplicate tasks (cleanup from older versions)"
 	@echo ""
 	@echo "Manual Control:"
 	@echo "  bd ready              Show available tasks"
@@ -256,6 +263,7 @@ help:
 	@echo "  make worker             Start a worker node (bootstrap runs automatically)"
 	@echo "  make status             Monitor progress across all workers"
 	@echo "  make bootstrap          Manually run bootstrap (optional, worker does this)"
+	@echo "  make deduplicate        Remove duplicate tasks (cleanup utility)"
 	@echo ""
 	@echo "Testing:"
 	@echo "  make test         Run component self-tests"
