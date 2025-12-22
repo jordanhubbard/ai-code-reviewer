@@ -248,6 +248,7 @@ for task in tasks:
 duplicates = {title: task_list for title, task_list in by_title.items() if len(task_list) > 1}
 
 if duplicates:
+    # Print count first, then MERGE lines - all to stdout for correct ordering
     print(f'{len(duplicates)}')
     for title, task_list in duplicates.items():
         # Sort by status priority: in_progress > pending > completed > failed
@@ -257,10 +258,10 @@ if duplicates:
         keeper = sorted_tasks[0]
         dupes = sorted_tasks[1:]
         
-        print(f'MERGE|{keeper[\"id\"]}|{keeper.get(\"status\", \"unknown\")}|{\"|\".join([d[\"id\"] for d in dupes])}', file=sys.stderr)
+        print(f'MERGE|{keeper[\"id\"]}|{keeper.get(\"status\", \"unknown\")}|{\"|\".join([d[\"id\"] for d in dupes])}')
 else:
     print('0')
-" 2>&1)
+")
 
 DUPE_COUNT=$(echo "$DUPLICATES_FOUND" | head -1)
 DUPE_DETAILS=$(echo "$DUPLICATES_FOUND" | grep '^MERGE|' || true)
