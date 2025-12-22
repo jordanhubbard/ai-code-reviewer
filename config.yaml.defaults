@@ -15,7 +15,7 @@ ollama:
   model: "qwen2.5-coder:32b"
   
   # Request timeout in seconds
-  timeout: 300
+  timeout: 600
   
   # Maximum tokens to generate per response
   max_tokens: 4096
