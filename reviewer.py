@@ -1301,7 +1301,7 @@ Output ONLY the lesson entry, nothing else."""
                 
                 # #region agent log H1: Track BUILD_FAILED message sent to AI
                 import json
-                from datetime import datetime
+                import time
                 log_path = "/Users/jkh/Src/ai-code-reviewer/.cursor/debug.log"
                 try:
                     with open(log_path, "a") as f:
@@ -1317,7 +1317,7 @@ Output ONLY the lesson entry, nothing else."""
                                 "has_critical_rules": "CRITICAL RULES" in error_response,
                                 "has_example": "EXAMPLE" in error_response
                             },
-                            "timestamp": int(datetime.now().timestamp() * 1000)
+                            "timestamp": int(time.time() * 1000)
                         }
                         f.write(json.dumps(log_entry) + "\n")
                 except: pass
@@ -1545,7 +1545,7 @@ Output ONLY the lesson entry, nothing else."""
             
             # #region agent log H2,H4: Track AI response and action parsing
             import json
-            from datetime import datetime
+            import time
             log_path = "/Users/jkh/Src/ai-code-reviewer/.cursor/debug.log"
             try:
                 with open(log_path, "a") as f:
@@ -1566,7 +1566,7 @@ Output ONLY the lesson entry, nothing else."""
                             "mentions_build_failed": "BUILD_FAILED" in response or "build" in response.lower(),
                             "mentions_edit_file": "EDIT_FILE" in response
                         },
-                        "timestamp": int(datetime.now().timestamp() * 1000)
+                        "timestamp": int(time.time() * 1000)
                     }
                     f.write(json.dumps(log_entry) + "\n")
             except: pass
@@ -1576,7 +1576,7 @@ Output ONLY the lesson entry, nothing else."""
             
             # #region agent log H3,H4: Track parsed action
             import json
-            from datetime import datetime
+            import time
             log_path = "/Users/jkh/Src/ai-code-reviewer/.cursor/debug.log"
             try:
                 with open(log_path, "a") as f:
@@ -1593,7 +1593,7 @@ Output ONLY the lesson entry, nothing else."""
                             "last_build_failed": self.session.last_build_failed,
                             "build_failures_count": self.session.build_failures
                         },
-                        "timestamp": int(datetime.now().timestamp() * 1000)
+                        "timestamp": int(time.time() * 1000)
                     }
                     f.write(json.dumps(log_entry) + "\n")
             except: pass
@@ -1625,7 +1625,7 @@ Output ONLY the lesson entry, nothing else."""
             
             # #region agent log H1,H5: Track message sent to AI after action
             import json
-            from datetime import datetime
+            import time
             log_path = "/Users/jkh/Src/ai-code-reviewer/.cursor/debug.log"
             try:
                 with open(log_path, "a") as f:
@@ -1643,7 +1643,7 @@ Output ONLY the lesson entry, nothing else."""
                             "result_has_critical": "CRITICAL RULES" in result,
                             "result_has_example": "EXAMPLE" in result
                         },
-                        "timestamp": int(datetime.now().timestamp() * 1000)
+                        "timestamp": int(time.time() * 1000)
                     }
                     f.write(json.dumps(log_entry) + "\n")
             except: pass
