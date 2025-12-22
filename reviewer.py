@@ -958,8 +958,25 @@ Output ONLY the lesson entry, nothing else."""
             # Normalize path (remove leading ./ or /)
             directory = directory.lstrip('./')
             
-            # IMPORTANT: Prevent changing directories with uncommitted changes
+            # IMPORTANT: Prevent changing directories with uncommitted changes OR failed builds
             if self.session.current_directory and self.session.current_directory != directory:
+                # Check for failed build first (highest priority)
+                if self.session.last_build_failed:
+                    return (
+                        f"SET_SCOPE_ERROR: Cannot change directory - BUILD IS BROKEN\n\n"
+                        f"Current directory: {self.session.current_directory}\n"
+                        f"The last build FAILED. You must fix the build before moving to another directory.\n\n"
+                        f"REQUIRED ACTIONS:\n"
+                        f"1. READ_FILE the files with build errors\n"
+                        f"2. EDIT_FILE to fix each error\n"
+                        f"3. Run BUILD again\n"
+                        f"4. Repeat until build succeeds\n"
+                        f"5. ONLY THEN can you move to: {directory}\n\n"
+                        f"You CANNOT leave a broken build behind.\n"
+                        f"Build failures so far: {self.session.build_failures}\n"
+                    )
+                
+                # Check for uncommitted changes
                 if self.session.pending_changes or self.git.has_changes():
                     return (
                         f"SET_SCOPE_ERROR: Cannot change directory with uncommitted changes\n\n"
