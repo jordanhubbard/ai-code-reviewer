@@ -83,6 +83,27 @@ if [ ! -d "$SOURCE_ROOT" ]; then
     exit 1
 fi
 
+# Early validation: config.yaml must exist
+if [ ! -f "$CONFIG_FILE" ]; then
+    echo "=========================================="
+    echo "ERROR: Configuration File Not Found"
+    echo "=========================================="
+    echo ""
+    echo "Config file does not exist: $CONFIG_FILE"
+    echo ""
+    echo "Please create it:"
+    echo "  cp config.yaml.defaults config.yaml"
+    echo "  vim config.yaml"
+    echo ""
+    echo "Required settings:"
+    echo "  - ollama.url: Your Ollama server URL"
+    echo "  - ollama.model: Model to use (e.g., qwen2.5-coder:32b)"
+    echo "  - source.root: Path to code repository to review"
+    echo "  - source.build_command: Your build command"
+    echo ""
+    exit 1
+fi
+
 echo "=========================================="
 echo "AI Code Review - Bootstrap Phase"
 echo "=========================================="
@@ -143,22 +164,35 @@ else
     echo "✓ bd database found in source repository"
 fi
 
-# Phase 4: Sync with remote to get latest tasks (in SOURCE_ROOT)
+# Phase 4: Sync source repository with remote (CRITICAL for multi-worker coordination)
 echo ""
 echo "[4/5] Syncing source repository with remote..."
 cd "$SOURCE_ROOT"
 
-git fetch origin 2>/dev/null || echo "Warning: Could not fetch from remote"
+echo "  Fetching from remote..."
+if ! git fetch origin 2>/dev/null; then
+    echo "  Warning: Could not fetch from remote (continuing anyway)"
+fi
 
-# Pull latest changes (including .beads/issues.jsonl)
-if git pull --rebase 2>/dev/null; then
-    echo "✓ Synced with remote"
-    # Re-import JSONL if it changed
-    if [ -f .beads/issues.jsonl ]; then
-        bd sync --json >/dev/null 2>&1 || true
+echo "  Pulling latest changes (including .beads/issues.jsonl)..."
+if git pull --rebase 2>&1; then
+    if git diff --quiet HEAD@{1} HEAD -- .beads/issues.jsonl 2>/dev/null; then
+        echo "✓ Already up to date"
+    else
+        echo "✓ Synced with remote (task queue updated)"
+        # Re-import JSONL if it changed
+        if [ -f .beads/issues.jsonl ]; then
+            bd sync --json >/dev/null 2>&1 || true
+        fi
     fi
 else
-    echo "Warning: Could not pull from remote (may need to resolve conflicts)"
+    EXIT_CODE=$?
+    echo "  Warning: Could not pull from remote (exit code: $EXIT_CODE)"
+    echo "  This may indicate:"
+    echo "    - No remote configured"
+    echo "    - Merge conflicts"
+    echo "    - Network issues"
+    echo "  Continuing anyway, but coordination may be affected..."
 fi
 
 # Phase 5: Generate tasks for unclaimed directories

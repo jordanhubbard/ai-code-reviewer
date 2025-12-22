@@ -58,11 +58,28 @@ done
 # Allow environment variable override
 WORKER_ID="${WORKER_ID:-${HOSTNAME:-worker-$$}}"
 
-# Read source_root from config.yaml
+# Early validation: config.yaml must exist
 if [ ! -f "$CONFIG_FILE" ]; then
-    echo "ERROR: Config file not found: $CONFIG_FILE"
+    echo "=========================================="
+    echo "ERROR: Configuration File Not Found"
+    echo "=========================================="
+    echo ""
+    echo "Config file does not exist: $CONFIG_FILE"
+    echo ""
+    echo "Please create it:"
+    echo "  cp config.yaml.defaults config.yaml"
+    echo "  vim config.yaml"
+    echo ""
+    echo "Required settings:"
+    echo "  - ollama.url: Your Ollama server URL"
+    echo "  - ollama.model: Model to use (e.g., qwen2.5-coder:32b)"
+    echo "  - source.root: Path to code repository to review"
+    echo "  - source.build_command: Your build command"
+    echo ""
     exit 1
 fi
+
+# Read source_root from config.yaml
 
 SOURCE_ROOT=$(python3 -c "
 import sys
@@ -135,15 +152,27 @@ while true; do
         break
     fi
     
-    # Sync source repository with remote before claiming work
+    # Sync source repository with remote before claiming work (CRITICAL)
     echo "[$(date '+%H:%M:%S')] Syncing source repository with remote..."
     cd "$SOURCE_ROOT"
-    if git pull --rebase 2>&1 | grep -q 'Already up to date'; then
-        : # Silent success
+    
+    # Fetch first to see what's changed
+    git fetch origin 2>/dev/null || echo "  Warning: Could not fetch from remote"
+    
+    # Pull and check if task queue changed
+    PULL_OUTPUT=$(git pull --rebase 2>&1)
+    if echo "$PULL_OUTPUT" | grep -q 'Already up to date'; then
+        echo "  Already up to date"
+    elif echo "$PULL_OUTPUT" | grep -q 'Fast-forward\|Applying'; then
+        echo "  ✓ Updated from remote"
+        # Check if .beads/issues.jsonl changed
+        if echo "$PULL_OUTPUT" | grep -q '.beads/issues.jsonl'; then
+            echo "  ✓ Task queue updated - re-importing..."
+            bd sync --json >/dev/null 2>&1 || true
+        fi
     else
-        echo "  Updated from remote"
-        # Re-import any JSONL changes
-        bd sync --json >/dev/null 2>&1 || true
+        echo "  Warning: Pull had issues (may need manual intervention)"
+        echo "  Output: $PULL_OUTPUT"
     fi
     
     # Get next available task (from SOURCE_ROOT/.beads/)

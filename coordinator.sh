@@ -51,11 +51,28 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-# Read source_root from config.yaml
+# Early validation: config.yaml must exist
 if [ ! -f "$CONFIG_FILE" ]; then
-    echo "ERROR: Config file not found: $CONFIG_FILE"
+    echo "=========================================="
+    echo "ERROR: Configuration File Not Found"
+    echo "=========================================="
+    echo ""
+    echo "Config file does not exist: $CONFIG_FILE"
+    echo ""
+    echo "Please create it:"
+    echo "  cp config.yaml.defaults config.yaml"
+    echo "  vim config.yaml"
+    echo ""
+    echo "Required settings:"
+    echo "  - ollama.url: Your Ollama server URL"
+    echo "  - ollama.model: Model to use (e.g., qwen2.5-coder:32b)"
+    echo "  - source.root: Path to code repository to review"
+    echo "  - source.build_command: Your build command"
+    echo ""
     exit 1
 fi
+
+# Read source_root from config.yaml
 
 SOURCE_ROOT=$(python3 -c "
 import sys
@@ -91,14 +108,21 @@ show_status() {
     echo "Updated: $(date)"
     echo ""
     
+    # Pull latest task queue updates before showing status
+    cd "$SOURCE_ROOT"
+    if ! git pull --rebase 2>&1 | grep -q 'Already up to date'; then
+        echo "✓ Synced task queue from remote"
+        if [ -f .beads/issues.jsonl ]; then
+            bd sync --json >/dev/null 2>&1 || true
+        fi
+    fi
+    echo ""
+    
     # Check if bd is available
     if ! command -v bd >/dev/null 2>&1; then
         echo "ERROR: bd command not found"
         return 1
     fi
-    
-    # Change to source root for bd operations
-    cd "$SOURCE_ROOT"
     
     # Get all tasks
     ALL_TASKS=$(bd list --json 2>/dev/null || echo "[]")
