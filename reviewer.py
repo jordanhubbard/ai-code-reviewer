@@ -1287,6 +1287,30 @@ Output ONLY the lesson entry, nothing else."""
                 error_response += f"Current directory: {self.session.current_directory}\n"
                 error_response += f"But you must fix errors in ANY directory to make build succeed.\n"
                 
+                # #region agent log H1: Track BUILD_FAILED message sent to AI
+                import json
+                from datetime import datetime
+                log_path = "/Users/jkh/Src/ai-code-reviewer/.cursor/debug.log"
+                try:
+                    with open(log_path, "a") as f:
+                        log_entry = {
+                            "sessionId": "debug-session",
+                            "hypothesisId": "H1",
+                            "location": "reviewer.py:1291",
+                            "message": "BUILD_FAILED error_response generated",
+                            "data": {
+                                "response_length": len(error_response),
+                                "response_preview": error_response[:500],
+                                "has_recovery_actions": "RECOVERY ACTIONS" in error_response,
+                                "has_critical_rules": "CRITICAL RULES" in error_response,
+                                "has_example": "EXAMPLE" in error_response
+                            },
+                            "timestamp": int(datetime.now().timestamp() * 1000)
+                        }
+                        f.write(json.dumps(log_entry) + "\n")
+                except: pass
+                # #endregion
+                
                 # Return error report for AI to analyze
                 return error_response
         
@@ -1507,7 +1531,61 @@ Output ONLY the lesson entry, nothing else."""
             
             self.history.append({"role": "assistant", "content": response})
             
+            # #region agent log H2,H4: Track AI response and action parsing
+            import json
+            from datetime import datetime
+            log_path = "/Users/jkh/Src/ai-code-reviewer/.cursor/debug.log"
+            try:
+                with open(log_path, "a") as f:
+                    # Calculate context size
+                    context_chars = sum(len(msg['content']) for msg in self.history)
+                    log_entry = {
+                        "sessionId": "debug-session",
+                        "hypothesisId": "H2_H4",
+                        "location": "reviewer.py:1534",
+                        "message": "AI response received, about to parse action",
+                        "data": {
+                            "step": step,
+                            "response_length": len(response),
+                            "response_full": response,
+                            "context_size_chars": context_chars,
+                            "history_messages": len(self.history),
+                            "mentions_recovery": "RECOVERY" in response or "recovery" in response,
+                            "mentions_build_failed": "BUILD_FAILED" in response or "build" in response.lower(),
+                            "mentions_edit_file": "EDIT_FILE" in response
+                        },
+                        "timestamp": int(datetime.now().timestamp() * 1000)
+                    }
+                    f.write(json.dumps(log_entry) + "\n")
+            except: pass
+            # #endregion
+            
             action = self.parser.parse(response)
+            
+            # #region agent log H3,H4: Track parsed action
+            import json
+            from datetime import datetime
+            log_path = "/Users/jkh/Src/ai-code-reviewer/.cursor/debug.log"
+            try:
+                with open(log_path, "a") as f:
+                    log_entry = {
+                        "sessionId": "debug-session",
+                        "hypothesisId": "H3_H4",
+                        "location": "reviewer.py:1556",
+                        "message": "Action parsed from AI response",
+                        "data": {
+                            "step": step,
+                            "action_parsed": action is not None,
+                            "action_type": action.get('action', '') if action else None,
+                            "action_full": str(action) if action else None,
+                            "last_build_failed": self.session.last_build_failed,
+                            "build_failures_count": self.session.build_failures
+                        },
+                        "timestamp": int(datetime.now().timestamp() * 1000)
+                    }
+                    f.write(json.dumps(log_entry) + "\n")
+            except: pass
+            # #endregion
             
             if not action:
                 # Check for common mistakes
@@ -1532,6 +1610,32 @@ Output ONLY the lesson entry, nothing else."""
             
             result = self._execute_action(action)
             logger.info(f"Action result: {result[:100]}...")
+            
+            # #region agent log H1,H5: Track message sent to AI after action
+            import json
+            from datetime import datetime
+            log_path = "/Users/jkh/Src/ai-code-reviewer/.cursor/debug.log"
+            try:
+                with open(log_path, "a") as f:
+                    log_entry = {
+                        "sessionId": "debug-session",
+                        "hypothesisId": "H1_H5",
+                        "location": "reviewer.py:1560",
+                        "message": "Appending action result to history (will be sent to AI)",
+                        "data": {
+                            "step": step,
+                            "action_type": action.get('action', ''),
+                            "result_length": len(result),
+                            "result_preview": result[:300],
+                            "result_has_recovery": "RECOVERY ACTIONS" in result,
+                            "result_has_critical": "CRITICAL RULES" in result,
+                            "result_has_example": "EXAMPLE" in result
+                        },
+                        "timestamp": int(datetime.now().timestamp() * 1000)
+                    }
+                    f.write(json.dumps(log_entry) + "\n")
+            except: pass
+            # #endregion
             
             self.history.append({"role": "user", "content": result})
             
