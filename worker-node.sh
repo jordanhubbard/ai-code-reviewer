@@ -17,6 +17,8 @@ MAX_TASKS=0  # 0 = unlimited
 TASKS_COMPLETED=0
 TASKS_FAILED=0
 START_TIME=$(date +%s)
+SOURCE_ROOT=""  # Will be read from config.yaml
+REVIEWER_DIR=$(pwd)  # Remember where ai-code-reviewer is
 
 # Parse arguments
 while [[ $# -gt 0 ]]; do
@@ -56,13 +58,49 @@ done
 # Allow environment variable override
 WORKER_ID="${WORKER_ID:-${HOSTNAME:-worker-$$}}"
 
+# Read source_root from config.yaml
+if [ ! -f "$CONFIG_FILE" ]; then
+    echo "ERROR: Config file not found: $CONFIG_FILE"
+    exit 1
+fi
+
+SOURCE_ROOT=$(python3 -c "
+import sys
+try:
+    import yaml
+    with open('$CONFIG_FILE', 'r') as f:
+        config = yaml.safe_load(f)
+        print(config.get('source', {}).get('root', ''))
+except Exception as e:
+    print('', file=sys.stderr)
+    sys.exit(1)
+" 2>/dev/null)
+
+if [ -z "$SOURCE_ROOT" ]; then
+    echo "ERROR: source.root not found in $CONFIG_FILE"
+    exit 1
+fi
+
+# Convert to absolute path
+cd "$REVIEWER_DIR"
+SOURCE_ROOT=$(cd "$SOURCE_ROOT" && pwd)
+if [ ! -d "$SOURCE_ROOT" ]; then
+    echo "ERROR: Source root directory does not exist: $SOURCE_ROOT"
+    exit 1
+fi
+
 echo "=========================================="
 echo "AI Code Review - Worker Node"
 echo "=========================================="
 echo "Worker ID: $WORKER_ID"
+echo "Reviewer Dir: $REVIEWER_DIR"
+echo "Source Root: $SOURCE_ROOT"
 echo "Config: $CONFIG_FILE"
 echo "Max Tasks: $([ $MAX_TASKS -eq 0 ] && echo 'unlimited' || echo $MAX_TASKS)"
 echo "Started: $(date)"
+echo ""
+echo "IMPORTANT: Working in source repository:"
+echo "  $SOURCE_ROOT/.beads/"
 echo ""
 
 # Trap for clean shutdown
@@ -97,8 +135,9 @@ while true; do
         break
     fi
     
-    # Sync with remote before claiming work
-    echo "[$(date '+%H:%M:%S')] Syncing with remote..."
+    # Sync source repository with remote before claiming work
+    echo "[$(date '+%H:%M:%S')] Syncing source repository with remote..."
+    cd "$SOURCE_ROOT"
     if git pull --rebase 2>&1 | grep -q 'Already up to date'; then
         : # Silent success
     else
@@ -107,8 +146,9 @@ while true; do
         bd sync --json >/dev/null 2>&1 || true
     fi
     
-    # Get next available task
+    # Get next available task (from SOURCE_ROOT/.beads/)
     echo "[$(date '+%H:%M:%S')] Checking for available work..."
+    cd "$SOURCE_ROOT"
     TASK_JSON=$(bd ready --json 2>/dev/null | python3 -c "
 import sys, json
 tasks = json.load(sys.stdin)
@@ -156,14 +196,15 @@ else:
     echo "Directory: $TARGET_DIR"
     echo "=========================================="
     
-    # Claim the task
+    # Claim the task (in SOURCE_ROOT)
     echo "[$(date '+%H:%M:%S')] Claiming task..."
+    cd "$SOURCE_ROOT"
     if ! bd update "$TASK_ID" --status in_progress --json >/dev/null 2>&1; then
         echo "ERROR: Failed to claim task (may have been claimed by another worker)"
         continue
     fi
     
-    # Sync claim to remote
+    # Sync claim to remote (in SOURCE_ROOT)
     sleep 6  # Wait for bd auto-export
     if [ -f .beads/issues.jsonl ]; then
         git add .beads/issues.jsonl
@@ -183,12 +224,13 @@ else:
     
     echo "✓ Task claimed"
     
-    # Run the review
+    # Run the review (from REVIEWER_DIR, targeting SOURCE_ROOT)
     echo ""
     echo "[$(date '+%H:%M:%S')] Starting review of $TARGET_DIR..."
     
     REVIEW_START=$(date +%s)
     
+    cd "$REVIEWER_DIR"
     if python3 reviewer.py --config "$CONFIG_FILE" --directory "$TARGET_DIR" --task-id "$TASK_ID"; then
         REVIEW_END=$(date +%s)
         REVIEW_TIME=$((REVIEW_END - REVIEW_START))
@@ -196,7 +238,8 @@ else:
         echo ""
         echo "✓ Review completed successfully in ${REVIEW_TIME}s"
         
-        # Mark task as completed
+        # Mark task as completed (in SOURCE_ROOT)
+        cd "$SOURCE_ROOT"
         bd close "$TASK_ID" --reason "Review completed successfully by worker $WORKER_ID (${REVIEW_TIME}s)" 2>/dev/null || true
         TASKS_COMPLETED=$((TASKS_COMPLETED + 1))
         
@@ -207,14 +250,16 @@ else:
         echo ""
         echo "✗ Review failed after ${REVIEW_TIME}s"
         
-        # Mark task as failed
+        # Mark task as failed (in SOURCE_ROOT)
+        cd "$SOURCE_ROOT"
         bd update "$TASK_ID" --status failed --json 2>/dev/null || true
         # Add comment with failure details
         bd comment "$TASK_ID" "Review failed on worker $WORKER_ID after ${REVIEW_TIME}s. Check logs for details." 2>/dev/null || true
         TASKS_FAILED=$((TASKS_FAILED + 1))
     fi
     
-    # Sync result to remote
+    # Sync result to remote (in SOURCE_ROOT)
+    cd "$SOURCE_ROOT"
     sleep 6  # Wait for bd auto-export
     if [ -f .beads/issues.jsonl ]; then
         git add .beads/issues.jsonl

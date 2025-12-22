@@ -11,6 +11,8 @@ set -e
 
 WATCH_MODE=false
 INTERVAL=10
+CONFIG_FILE="config.yaml"
+SOURCE_ROOT=""
 
 # Parse arguments
 while [[ $# -gt 0 ]]; do
@@ -23,12 +25,17 @@ while [[ $# -gt 0 ]]; do
             INTERVAL="$2"
             shift 2
             ;;
+        --config)
+            CONFIG_FILE="$2"
+            shift 2
+            ;;
         --help)
             echo "Usage: $0 [OPTIONS]"
             echo ""
             echo "Options:"
             echo "  --watch               Continuous monitoring mode (refresh every N seconds)"
             echo "  --interval SECONDS    Update interval for watch mode (default: 10)"
+            echo "  --config FILE         Configuration file (default: config.yaml)"
             echo "  --help                Show this help message"
             echo ""
             echo "Commands:"
@@ -44,11 +51,43 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
+# Read source_root from config.yaml
+if [ ! -f "$CONFIG_FILE" ]; then
+    echo "ERROR: Config file not found: $CONFIG_FILE"
+    exit 1
+fi
+
+SOURCE_ROOT=$(python3 -c "
+import sys
+try:
+    import yaml
+    with open('$CONFIG_FILE', 'r') as f:
+        config = yaml.safe_load(f)
+        print(config.get('source', {}).get('root', ''))
+except Exception as e:
+    print('', file=sys.stderr)
+    sys.exit(1)
+" 2>/dev/null)
+
+if [ -z "$SOURCE_ROOT" ]; then
+    echo "ERROR: source.root not found in $CONFIG_FILE"
+    exit 1
+fi
+
+# Convert to absolute path
+SOURCE_ROOT=$(cd "$SOURCE_ROOT" && pwd)
+if [ ! -d "$SOURCE_ROOT" ]; then
+    echo "ERROR: Source root directory does not exist: $SOURCE_ROOT"
+    exit 1
+fi
+
 show_status() {
     clear
     echo "=========================================="
     echo "AI Code Review - Distributed Status"
     echo "=========================================="
+    echo "Source Root: $SOURCE_ROOT"
+    echo "Beads DB: $SOURCE_ROOT/.beads/"
     echo "Updated: $(date)"
     echo ""
     
@@ -57,6 +96,9 @@ show_status() {
         echo "ERROR: bd command not found"
         return 1
     fi
+    
+    # Change to source root for bd operations
+    cd "$SOURCE_ROOT"
     
     # Get all tasks
     ALL_TASKS=$(bd list --json 2>/dev/null || echo "[]")
@@ -172,8 +214,9 @@ for task in failed:
         echo ""
     fi
     
-    # Show worker activity (from git log)
+    # Show worker activity (from git log in SOURCE_ROOT)
     echo "Recent Worker Activity:"
+    cd "$SOURCE_ROOT"
     git log --oneline --grep="Worker" -10 2>/dev/null | head -5 || echo "  No recent activity"
     echo ""
     

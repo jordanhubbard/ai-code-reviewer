@@ -32,6 +32,20 @@
 
 **Any project with a build/test command works!**
 
+## Architecture Note
+
+**IMPORTANT:** The `ai-code-reviewer` is a **generic tool** (like a compiler). The beads task database lives in the **source code repository being reviewed**, NOT in the ai-code-reviewer directory.
+
+```
+ai-code-reviewer/          ← Tool (no .beads/ here)
+└── config.yaml → points to
+    ↓
+freebsd-src/               ← Your code
+└── .beads/                ← Task queue lives HERE
+```
+
+See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for details.
+
 ## Modes of Operation
 
 ### Single-Node Mode
