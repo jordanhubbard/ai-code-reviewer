@@ -153,9 +153,14 @@ echo "✓ Ollama connection validated"
 # Phase 3: Initialize bd (beads) in SOURCE_ROOT (not current directory!)
 echo ""
 echo "[3/5] Checking bd (beads) setup in source repository..."
+
+# Add common bd installation paths to PATH
+export PATH="$HOME/gocode/bin:$HOME/go/bin:$PATH"
+
 if ! command -v bd >/dev/null 2>&1; then
     echo "ERROR: bd command not found."
     echo "Install from: https://github.com/steveyegge/beads"
+    echo "Checked PATH: $PATH"
     exit 1
 fi
 

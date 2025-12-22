@@ -9,6 +9,9 @@
 
 set -e
 
+# Add common bd installation paths to PATH
+export PATH="$HOME/gocode/bin:$HOME/go/bin:$PATH"
+
 WATCH_MODE=false
 INTERVAL=10
 CONFIG_FILE="config.yaml"

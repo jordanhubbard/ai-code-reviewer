@@ -10,6 +10,9 @@
 
 set -e
 
+# Add common bd installation paths to PATH
+export PATH="$HOME/gocode/bin:$HOME/go/bin:$PATH"
+
 # Default values
 WORKER_ID="${HOSTNAME:-worker-$$}"
 CONFIG_FILE="config.yaml"
