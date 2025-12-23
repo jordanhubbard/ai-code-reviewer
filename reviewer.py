@@ -1240,7 +1240,32 @@ Output ONLY the lesson entry, nothing else."""
                     changed_files, commit_msg, self.session.current_directory
                 )
                 
-                # Commit and push (includes the REVIEW-SUMMARY.md update)
+                # Close bead task if we're in distributed mode (BEFORE commit/push)
+                if self.task_id:
+                    logger.info(f"Closing bead task: {self.task_id}")
+                    try:
+                        # Run bd close in the source repository
+                        close_result = subprocess.run(
+                            ['bd', 'close', self.task_id, '--reason', 
+                             f'Review completed successfully by session {self.session.session_id}'],
+                            cwd=self.source_root,
+                            capture_output=True,
+                            text=True,
+                            timeout=30
+                        )
+                        if close_result.returncode == 0:
+                            logger.info(f"✓ Task {self.task_id} closed")
+                            # Wait for bd auto-export to write .beads/issues.jsonl
+                            import time
+                            logger.info("Waiting for bd auto-export (6 seconds)...")
+                            time.sleep(6)
+                            logger.info("✓ Task closure should be exported to .beads/issues.jsonl")
+                        else:
+                            logger.warning(f"Failed to close task {self.task_id}: {close_result.stderr}")
+                    except Exception as e:
+                        logger.warning(f"Error closing task {self.task_id}: {e}")
+                
+                # Commit and push (includes REVIEW-SUMMARY.md AND .beads/issues.jsonl if task closed)
                 success, output = self._commit_and_push(commit_msg)
                 if success:
                     # Mark directory as completed in session

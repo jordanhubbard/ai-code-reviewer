@@ -298,10 +298,13 @@ else:
         
         echo ""
         echo "✓ Review completed successfully in ${REVIEW_TIME}s"
+        echo "  (Task closure and push handled by reviewer.py)"
         
-        # Mark task as completed (in SOURCE_ROOT)
+        # Pull to sync any changes pushed by reviewer.py
         cd "$SOURCE_ROOT"
-        bd close "$TASK_ID" --reason "Review completed successfully by worker $WORKER_ID (${REVIEW_TIME}s)" 2>/dev/null || true
+        echo "  Syncing with remote..."
+        git pull --rebase 2>/dev/null || echo "  Warning: Could not pull (may need manual sync)"
+        
         TASKS_COMPLETED=$((TASKS_COMPLETED + 1))
         
     else
@@ -311,36 +314,31 @@ else:
         echo ""
         echo "✗ Review failed after ${REVIEW_TIME}s"
         
-        # Mark task as failed (in SOURCE_ROOT)
+        # Mark task as failed (in SOURCE_ROOT) - reviewer.py doesn't close on failure
         cd "$SOURCE_ROOT"
         bd update "$TASK_ID" --status failed --json 2>/dev/null || true
         # Add comment with failure details
         bd comment "$TASK_ID" "Review failed on worker $WORKER_ID after ${REVIEW_TIME}s. Check logs for details." 2>/dev/null || true
+        
+        # Sync the failure status to remote
+        sleep 6  # Wait for bd auto-export
+        if [ -f .beads/issues.jsonl ]; then
+            git add .beads/issues.jsonl
+            git commit -m "Worker $WORKER_ID: Task $TASK_ID failed" 2>/dev/null || true
+            
+            # Push with retry
+            for i in {1..3}; do
+                if git push 2>/dev/null; then
+                    echo "✓ Failure status synced to remote"
+                    break
+                else
+                    git pull --rebase 2>/dev/null || true
+                    sleep 2
+                fi
+            done
+        fi
+        
         TASKS_FAILED=$((TASKS_FAILED + 1))
-    fi
-    
-    # Sync result to remote (in SOURCE_ROOT)
-    cd "$SOURCE_ROOT"
-    sleep 6  # Wait for bd auto-export
-    if [ -f .beads/issues.jsonl ]; then
-        git add .beads/issues.jsonl
-        
-        # Also add any changes made during review
-        git add -A 2>/dev/null || true
-        
-        git commit -m "Worker $WORKER_ID: Completed task $TASK_ID ($([ $? -eq 0 ] && echo 'success' || echo 'failed'))" 2>/dev/null || true
-        
-        # Push with retry
-        for i in {1..5}; do
-            if git push 2>/dev/null; then
-                echo "✓ Results synced to remote"
-                break
-            else
-                echo "Push failed, pulling and retrying..."
-                git pull --rebase 2>/dev/null || true
-                sleep $((i * 2))
-            fi
-        done
     fi
     
     TASK_COUNT=$((TASK_COUNT + 1))
