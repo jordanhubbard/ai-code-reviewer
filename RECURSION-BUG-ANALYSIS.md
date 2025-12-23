@@ -42,24 +42,31 @@ When ai-code-reviewer is checked out as a submodule (or subdirectory) of another
 
 ## Fixes Applied
 
-### 1. Makefile (GNU Make Compatibility)
+### 1. Makefile (Cross-Platform Make Compatibility)
 
 **Before:**
 ```makefile
-SRCDIR=		${.CURDIR}  # BSD make syntax
+SRCDIR=		${.CURDIR}  # BSD make only - doesn't work with GNU Make
 CONFIG?=	${SRCDIR}/config.yaml
 ```
 
-**After:**
+**First attempt (FAILED on BSD make):**
 ```makefile
 SRCDIR?=	$(CURDIR)   # GNU Make syntax
-ifeq ($(SRCDIR),)
-SRCDIR=		$(shell pwd)  # Fallback
+ifeq ($(SRCDIR),)      # This breaks BSD make!
+SRCDIR=		$(shell pwd)
 endif
-CONFIG?=	$(SRCDIR)/config.yaml
 ```
 
-Changed all `${VAR}` to `$(VAR)` throughout the Makefile.
+**Final fix (works on both):**
+```makefile
+SRCDIR:=	$(shell pwd)  # Universal - works with GNU Make and BSD make
+CONFIG:=	$(SRCDIR)/config.yaml
+```
+
+Changed all `${VAR}` to `$(VAR)` throughout the Makefile for consistency.
+
+**Key lesson:** Avoid conditionals like `ifeq` - not portable. Use `$(shell pwd)` instead.
 
 ### 2. Config Files (Skip Patterns)
 
@@ -130,4 +137,22 @@ python3 index_generator.py ../
 ## Status
 
 ✅ **FIXED** - All issues resolved, multiple guards in place to prevent future recursion
+
+## Update: Second Fix (2025-12-23)
+
+**Problem:** First fix worked on GNU Make (macOS/Linux) but broke on BSD make (FreeBSD):
+```
+make: Invalid line "ifeq $(SRCDIR),)", expanded to "ifeq "
+```
+
+**Root cause:** Used GNU Make conditional syntax `ifeq` which BSD make doesn't support.
+
+**Solution:** Replaced conditionals with simple `$(shell pwd)` which works universally:
+```makefile
+SRCDIR:=	$(shell pwd)
+```
+
+**Commits:**
+- b4c210d - Initial fix (worked on GNU Make only)
+- 30a3ca4 - Cross-platform fix (works on both GNU Make and BSD make)
 
