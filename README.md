@@ -1,4 +1,4 @@
-# Your Brain on AI - Universal Code Reviewer
+# Angry AI - Universal Code Reviewer
 
 **AI-powered code reviewer with build validation for ANY codebase**
 
@@ -32,72 +32,18 @@
 
 **Any project with a build/test command works!**
 
-## Architecture Note
-
-**IMPORTANT:** The `ai-code-reviewer` is a **generic tool** (like a compiler). The beads task database lives in the **source code repository being reviewed**, NOT in the ai-code-reviewer directory.
-
-```
-ai-code-reviewer/          ← Tool (no .beads/ here)
-└── config.yaml → points to
-    ↓
-freebsd-src/               ← Your code
-└── .beads/                ← Task queue lives HERE
-```
-
-See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for details.
-
-## Modes of Operation
-
-### Single-Node Mode
-One machine reviews the entire codebase sequentially. Simple setup, good for small to medium projects.
-
-### Distributed Mode (NEW!)
-Multiple machines with GPUs review code in parallel. Dramatically faster for large codebases.
-
-**Features:**
-- ✅ **Nx speedup** (N = number of workers)
-- ✅ **No central server** - workers coordinate via git
-- ✅ **Fault tolerant** - workers can crash/restart
-- ✅ **Easy scaling** - add more workers anytime
-
-See [docs/DISTRIBUTED-MODE.md](docs/DISTRIBUTED-MODE.md) for details.
-
----
-
-## Quick Start (Single-Node Mode)
+## Quick Start
 
 ### 1. Install Dependencies
 
-The Makefile automatically detects your OS (FreeBSD, macOS, Linux) and uses the appropriate package manager:
-
 ```bash
-make check-deps
-```
-
-This will:
-- **FreeBSD**: Use `pkg install` for python3 and pip
-- **macOS**: Use Homebrew (`brew install`) for python3, then install pip
-- **Linux**: Use `apt-get` (Debian/Ubuntu), `yum` (RHEL/CentOS), or `dnf` (Fedora)
-- Install PyYAML via pip (cross-platform)
-
-Or install manually if you prefer:
-
-```bash
-# FreeBSD
+# On FreeBSD
 sudo pkg install python3 py311-pip
-python3 -m pip install --user pyyaml
+sudo pip install pyyaml
 
-# macOS
-brew install python3
-python3 -m pip install --user pyyaml
-
-# Linux (Debian/Ubuntu)
-sudo apt-get install python3 python3-pip
-python3 -m pip install --user pyyaml
-
-# Linux (RHEL/CentOS/Fedora)
-sudo dnf install python3 python3-pip
-python3 -m pip install --user pyyaml
+# On Linux
+sudo apt install python3 python3-pip
+pip3 install pyyaml
 ```
 
 ### 2. Set Up Ollama Server
@@ -140,24 +86,12 @@ source:
 
 ### 4. Run
 
-**Single-Node Mode:**
 ```bash
 make run
 ```
 
-**Distributed Mode (Multiple GPUs):**
-```bash
-# On each machine: Start worker (bootstrap runs automatically)
-make worker
-
-# Monitor progress (any machine)
-make status
-```
-
-**Note:** Both `make run` and `make worker` automatically run bootstrap first (which is idempotent and safe to run multiple times).
-
 The AI will:
-1. Pick a directory from your source tree (or claim from queue in distributed mode)
+1. Pick a directory from your source tree
 2. Review all files in that directory
 3. Make fixes
 4. Run your build command
@@ -348,7 +282,6 @@ make run
 - **Ollama server** (local or remote) with a code model
 - **Your project's build system** (make, cmake, cargo, etc.)
 - **Git repository** (for tracking changes)
-- **bd (beads)** (for distributed mode only) - https://github.com/steveyegge/beads
 
 ## License
 

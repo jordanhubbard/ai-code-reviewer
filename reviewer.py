@@ -102,7 +102,6 @@ class ReviewSession:
     files_fixed: int = 0
     build_failures: int = 0
     total_errors_fixed: int = 0
-    last_build_failed: bool = False  # Track if most recent build failed
     
     # Current location in hierarchy
     current_directory: Optional[str] = None  # e.g., "bin/chio"
@@ -384,17 +383,11 @@ class ReviewLoop:
         
         # Conversation history
         self.history: List[Dict[str, str]] = []
-        self.target_directory: Optional[str] = None  # For distributed mode
-        self.task_id: Optional[str] = None  # For bd task tracking
         
-        # Note: _init_conversation() will be called from run() with target_directory
+        self._init_conversation()
     
-    def _init_conversation(self, target_directory: Optional[str] = None) -> None:
-        """Initialize the conversation with system prompt, bootstrap, and index.
-        
-        Args:
-            target_directory: If specified, directs AI to review only this directory
-        """
+    def _init_conversation(self) -> None:
+        """Initialize the conversation with system prompt, bootstrap, and index."""
         system_prompt = self._build_system_prompt()
         
         # Get current position and next target from index
@@ -412,13 +405,7 @@ class ReviewLoop:
 {index_summary}
 
 """
-        # In distributed mode, override with target directory
-        if target_directory:
-            init_message += f"\n**DISTRIBUTED MODE**: You are assigned to review ONLY this directory:\n"
-            init_message += f"TARGET: `{target_directory}`\n\n"
-            init_message += f"Use: ACTION: SET_SCOPE {target_directory}\n"
-            init_message += f"Complete this directory and then HALT.\n"
-        elif current:
+        if current:
             init_message += f"\nRESUME reviewing: `{current}` (already in progress)\n"
             init_message += f"Use: ACTION: SET_SCOPE {current}\n"
         elif next_target:
@@ -552,18 +539,9 @@ WORKFLOW:
    - If needs fixes: proceed to EDIT
 7. EDIT files to fix issues (security, correctness, style)
 8. When all files in directory are reviewed, run BUILD
-9. If build fails: FIX EVERY ERROR (even in other directories), rebuild
-10. Repeat step 9 until build succeeds (may take multiple iterations)
-11. If build succeeds: directory is done, pick next directory
-12. HALT only when all directories reviewed or stuck
-
-CRITICAL: BUILD FAILURES MUST BE FIXED
-- When BUILD fails, you MUST fix the errors shown
-- Fix errors even if they are in different directories
-- The entire codebase builds together - one error fails everything
-- Do NOT move to next directory with a failing build
-- Do NOT HALT with a failing build
-- Keep fixing and rebuilding until BUILD succeeds
+9. If build fails: fix errors, rebuild
+10. If build succeeds: directory is done, pick next directory
+11. HALT only when all directories reviewed or stuck
 
 SKIP FILES THAT ARE ALREADY FIXED:
 - If you see strtonum() already in use where atoi() would be, it's fixed
@@ -958,25 +936,8 @@ Output ONLY the lesson entry, nothing else."""
             # Normalize path (remove leading ./ or /)
             directory = directory.lstrip('./')
             
-            # IMPORTANT: Prevent changing directories with uncommitted changes OR failed builds
+            # IMPORTANT: Prevent changing directories with uncommitted changes
             if self.session.current_directory and self.session.current_directory != directory:
-                # Check for failed build first (highest priority)
-                if self.session.last_build_failed:
-                    return (
-                        f"SET_SCOPE_ERROR: Cannot change directory - BUILD IS BROKEN\n\n"
-                        f"Current directory: {self.session.current_directory}\n"
-                        f"The last build FAILED. You must fix the build before moving to another directory.\n\n"
-                        f"REQUIRED ACTIONS:\n"
-                        f"1. READ_FILE the files with build errors\n"
-                        f"2. EDIT_FILE to fix each error\n"
-                        f"3. Run BUILD again\n"
-                        f"4. Repeat until build succeeds\n"
-                        f"5. ONLY THEN can you move to: {directory}\n\n"
-                        f"You CANNOT leave a broken build behind.\n"
-                        f"Build failures so far: {self.session.build_failures}\n"
-                    )
-                
-                # Check for uncommitted changes
                 if self.session.pending_changes or self.git.has_changes():
                     return (
                         f"SET_SCOPE_ERROR: Cannot change directory with uncommitted changes\n\n"
@@ -1065,12 +1026,8 @@ Output ONLY the lesson entry, nothing else."""
             rel_path = str(path.relative_to(self.source_root))
             self.session.current_file = rel_path
             
-            # CRITICAL: If last build failed, bypass chunking to allow immediate fixes
-            # Chunked mode's "use NEXT_CHUNK" instruction conflicts with BUILD_FAILED's "use EDIT_FILE" instruction
-            bypass_chunking = self.session.last_build_failed
-            
             # Check if file should be chunked
-            if not bypass_chunking and self.chunker.should_chunk(path):
+            if self.chunker.should_chunk(path):
                 # Start chunked review
                 self.current_chunks = self.chunker.chunk_file(path)
                 self.current_chunk_index = 0
@@ -1099,7 +1056,7 @@ Output ONLY the lesson entry, nothing else."""
                 chunk_content = format_chunk_for_review(chunk, total_chunks, 1)
                 return f"READ_FILE_RESULT for {path}:\n{header}```\n{chunk_content}\n```"
             
-            # Small files (or bypassed chunking): return full file
+            # Small files: original behavior
             self.session.current_file_chunks_total = 1
             self.session.current_file_chunks_reviewed = 1
             
@@ -1109,15 +1066,7 @@ Output ONLY the lesson entry, nothing else."""
             progress = self.session.get_progress_summary()
             
             warning = ""
-            if bypass_chunking:
-                warning = (
-                    f"\n🔧 BUILD FIX MODE: Chunking bypassed to enable immediate fixes\n"
-                    f"   The build is BROKEN. After reading this file:\n"
-                    f"   1. Identify the specific lines causing errors\n"
-                    f"   2. Use EDIT_FILE to fix each error\n"
-                    f"   3. Then BUILD again\n\n"
-                )
-            elif line_count > 500 or file_size > 20000:
+            if line_count > 500 or file_size > 20000:
                 warning = (
                     f"\n⚠️  NOTE: Medium-sized file ({line_count} lines, {file_size} bytes)\n"
                     f"   Analysis may take 5-10 minutes.\n\n"
@@ -1227,7 +1176,6 @@ Output ONLY the lesson entry, nothing else."""
             
             if result.success:
                 # Build succeeded!
-                self.session.last_build_failed = False
                 self.session.files_fixed += len(changed_files)
                 
                 # Generate commit message using AI (include directory context)
@@ -1240,32 +1188,7 @@ Output ONLY the lesson entry, nothing else."""
                     changed_files, commit_msg, self.session.current_directory
                 )
                 
-                # Close bead task if we're in distributed mode (BEFORE commit/push)
-                if self.task_id:
-                    logger.info(f"Closing bead task: {self.task_id}")
-                    try:
-                        # Run bd close in the source repository
-                        close_result = subprocess.run(
-                            ['bd', 'close', self.task_id, '--reason', 
-                             f'Review completed successfully by session {self.session.session_id}'],
-                            cwd=self.source_root,
-                            capture_output=True,
-                            text=True,
-                            timeout=30
-                        )
-                        if close_result.returncode == 0:
-                            logger.info(f"✓ Task {self.task_id} closed")
-                            # Wait for bd auto-export to write .beads/issues.jsonl
-                            import time
-                            logger.info("Waiting for bd auto-export (6 seconds)...")
-                            time.sleep(6)
-                            logger.info("✓ Task closure should be exported to .beads/issues.jsonl")
-                        else:
-                            logger.warning(f"Failed to close task {self.task_id}: {close_result.stderr}")
-                    except Exception as e:
-                        logger.warning(f"Error closing task {self.task_id}: {e}")
-                
-                # Commit and push (includes REVIEW-SUMMARY.md AND .beads/issues.jsonl if task closed)
+                # Commit and push (includes the REVIEW-SUMMARY.md update)
                 success, output = self._commit_and_push(commit_msg)
                 if success:
                     # Mark directory as completed in session
@@ -1298,7 +1221,6 @@ Output ONLY the lesson entry, nothing else."""
             else:
                 # Build failed - STAY IN CURRENT DIRECTORY
                 self.session.build_failures += 1
-                self.session.last_build_failed = True
                 
                 # DO NOT mark directory complete
                 # DO NOT clear pending_changes
@@ -1315,55 +1237,14 @@ Output ONLY the lesson entry, nothing else."""
                 error_response = f"BUILD_FAILED: Build errors detected\n\n"
                 error_response += f"CURRENT STATE:\n{progress}\n\n"
                 error_response += f"BUILD ERROR REPORT:\n{error_report}\n\n"
-                error_response += f"RECOVERY ACTIONS (REQUIRED - NOT OPTIONAL):\n"
-                error_response += f"1. Analyze EVERY build error above\n"
-                error_response += f"2. For EACH error:\n"
-                error_response += f"   a. Note the file path and line number\n"
-                error_response += f"   b. READ_FILE that file to see the code\n"
-                error_response += f"   c. EDIT_FILE to fix the specific error\n"
-                error_response += f"3. After fixing ALL errors, BUILD again\n"
-                error_response += f"4. Repeat until build succeeds\n\n"
-                error_response += f"CRITICAL RULES:\n"
-                error_response += f"- Fix errors EVEN IF they are in other directories\n"
-                error_response += f"- The entire codebase builds together - all errors block progress\n"
-                error_response += f"- Do NOT assume errors are 'unrelated' or 'separate'\n"
-                error_response += f"- Do NOT HALT while build is failing\n"
-                error_response += f"- Do NOT skip to next directory while build is failing\n"
-                error_response += f"- MUST fix ALL errors before proceeding\n\n"
-                error_response += f"EXAMPLE from your current build:\n"
-                if "bin/chio/chio.c" in error_report:
-                    error_response += f"  Error: conflicting types for 'parse_element_type' in bin/chio/chio.c\n"
-                    error_response += f"  Action: READ_FILE bin/chio/chio.c\n"
-                    error_response += f"  Then: EDIT_FILE to change 'char *' to 'const char *' in declarations\n"
-                    error_response += f"  Then: BUILD again\n\n"
-                else:
-                    error_response += f"  See errors above - each one must be fixed\n\n"
-                error_response += f"Current directory: {self.session.current_directory}\n"
-                error_response += f"But you must fix errors in ANY directory to make build succeed.\n"
-                
-                # #region agent log H1: Track BUILD_FAILED message sent to AI
-                import json
-                import time
-                log_path = "/Users/jkh/Src/ai-code-reviewer/.cursor/debug.log"
-                try:
-                    with open(log_path, "a") as f:
-                        log_entry = {
-                            "sessionId": "debug-session",
-                            "hypothesisId": "H1",
-                            "location": "reviewer.py:1291",
-                            "message": "BUILD_FAILED error_response generated",
-                            "data": {
-                                "response_length": len(error_response),
-                                "response_preview": error_response[:500],
-                                "has_recovery_actions": "RECOVERY ACTIONS" in error_response,
-                                "has_critical_rules": "CRITICAL RULES" in error_response,
-                                "has_example": "EXAMPLE" in error_response
-                            },
-                            "timestamp": int(time.time() * 1000)
-                        }
-                        f.write(json.dumps(log_entry) + "\n")
-                except: pass
-                # #endregion
+                error_response += f"RECOVERY ACTIONS:\n"
+                error_response += f"1. Analyze the build errors above\n"
+                error_response += f"2. Re-read affected files if needed (READ_FILE)\n"
+                error_response += f"3. Make additional fixes (EDIT_FILE)\n"
+                error_response += f"4. Try building again (BUILD)\n"
+                error_response += f"5. Repeat until build succeeds\n\n"
+                error_response += f"IMPORTANT: You are still in {self.session.current_directory}\n"
+                error_response += f"Do NOT move to next directory until build succeeds!\n"
                 
                 # Return error report for AI to analyze
                 return error_response
@@ -1377,26 +1258,7 @@ Output ONLY the lesson entry, nothing else."""
                        f"Changed files: {', '.join(self.session.changed_files)}\n" \
                        f"Run BUILD to validate and commit these changes first."
             
-            # 2. Check if last build failed
-            if self.session.last_build_failed:
-                return f"HALT_REJECTED: The last build FAILED.\n" \
-                       f"You must fix the build errors before halting.\n" \
-                       f"The build is currently BROKEN - you cannot leave it in this state.\n\n" \
-                       f"Build failures so far: {self.session.build_failures}\n\n" \
-                       f"Required actions:\n" \
-                       f"1. Run BUILD to see current errors (or recall previous errors)\n" \
-                       f"2. For each error:\n" \
-                       f"   - READ_FILE the file with the error\n" \
-                       f"   - EDIT_FILE to fix the error\n" \
-                       f"3. BUILD again\n" \
-                       f"4. Repeat until build succeeds\n" \
-                       f"5. Only then may you HALT or move to next directory\n\n" \
-                       f"Example: If bin/chio/chio.c has 'conflicting types', you must:\n" \
-                       f"  READ_FILE bin/chio/chio.c\n" \
-                       f"  EDIT_FILE bin/chio/chio.c (fix the const qualifiers)\n" \
-                       f"  BUILD (check if fixed)"
-            
-            # 3. Check if no directories have been completed
+            # 2. Check if no directories have been completed
             if self.session.directories_completed == 0:
                 # Find directories that could be reviewed
                 suggestions = self._find_reviewable_directories()
@@ -1514,35 +1376,15 @@ Output ONLY the lesson entry, nothing else."""
         
         return reviewable
     
-    def run(self, target_directory: Optional[str] = None, task_id: Optional[str] = None) -> None:
-        """Run the main review loop.
-        
-        Args:
-            target_directory: If specified, review only this directory (for distributed mode)
-            task_id: bd task ID for tracking (optional)
-        """
-        self.target_directory = target_directory
-        self.task_id = task_id
-        
-        if target_directory:
-            logger.info(f"Starting targeted review of: {target_directory}")
-            if task_id:
-                logger.info(f"Task ID: {task_id}")
-        else:
-            logger.info("Starting review loop...")
-        
-        # Initialize conversation with target directory
-        self._init_conversation(target_directory)
+    def run(self) -> None:
+        """Run the main review loop."""
+        logger.info("Starting review loop...")
         
         # Show initial git status
         status = self.git.show_status()
         if status:
             print("\n*** Git status at start:")
             print(status)
-        
-        # In targeted mode, we only do one directory
-        if target_directory:
-            self.max_iterations = min(self.max_iterations, 20)  # Limit iterations for single directory
         
         for step in range(1, self.max_iterations + 1):
             # Show hierarchical progress
@@ -1585,61 +1427,7 @@ Output ONLY the lesson entry, nothing else."""
             
             self.history.append({"role": "assistant", "content": response})
             
-            # #region agent log H2,H4: Track AI response and action parsing
-            import json
-            import time
-            log_path = "/Users/jkh/Src/ai-code-reviewer/.cursor/debug.log"
-            try:
-                with open(log_path, "a") as f:
-                    # Calculate context size
-                    context_chars = sum(len(msg['content']) for msg in self.history)
-                    log_entry = {
-                        "sessionId": "debug-session",
-                        "hypothesisId": "H2_H4",
-                        "location": "reviewer.py:1534",
-                        "message": "AI response received, about to parse action",
-                        "data": {
-                            "step": step,
-                            "response_length": len(response),
-                            "response_full": response,
-                            "context_size_chars": context_chars,
-                            "history_messages": len(self.history),
-                            "mentions_recovery": "RECOVERY" in response or "recovery" in response,
-                            "mentions_build_failed": "BUILD_FAILED" in response or "build" in response.lower(),
-                            "mentions_edit_file": "EDIT_FILE" in response
-                        },
-                        "timestamp": int(time.time() * 1000)
-                    }
-                    f.write(json.dumps(log_entry) + "\n")
-            except: pass
-            # #endregion
-            
             action = self.parser.parse(response)
-            
-            # #region agent log H3,H4: Track parsed action
-            import json
-            import time
-            log_path = "/Users/jkh/Src/ai-code-reviewer/.cursor/debug.log"
-            try:
-                with open(log_path, "a") as f:
-                    log_entry = {
-                        "sessionId": "debug-session",
-                        "hypothesisId": "H3_H4",
-                        "location": "reviewer.py:1556",
-                        "message": "Action parsed from AI response",
-                        "data": {
-                            "step": step,
-                            "action_parsed": action is not None,
-                            "action_type": action.get('action', '') if action else None,
-                            "action_full": str(action) if action else None,
-                            "last_build_failed": self.session.last_build_failed,
-                            "build_failures_count": self.session.build_failures
-                        },
-                        "timestamp": int(time.time() * 1000)
-                    }
-                    f.write(json.dumps(log_entry) + "\n")
-            except: pass
-            # #endregion
             
             if not action:
                 # Check for common mistakes
@@ -1664,32 +1452,6 @@ Output ONLY the lesson entry, nothing else."""
             
             result = self._execute_action(action)
             logger.info(f"Action result: {result[:100]}...")
-            
-            # #region agent log H1,H5: Track message sent to AI after action
-            import json
-            import time
-            log_path = "/Users/jkh/Src/ai-code-reviewer/.cursor/debug.log"
-            try:
-                with open(log_path, "a") as f:
-                    log_entry = {
-                        "sessionId": "debug-session",
-                        "hypothesisId": "H1_H5",
-                        "location": "reviewer.py:1560",
-                        "message": "Appending action result to history (will be sent to AI)",
-                        "data": {
-                            "step": step,
-                            "action_type": action.get('action', ''),
-                            "result_length": len(result),
-                            "result_preview": result[:300],
-                            "result_has_recovery": "RECOVERY ACTIONS" in result,
-                            "result_has_critical": "CRITICAL RULES" in result,
-                            "result_has_example": "EXAMPLE" in result
-                        },
-                        "timestamp": int(time.time() * 1000)
-                    }
-                    f.write(json.dumps(log_entry) + "\n")
-            except: pass
-            # #endregion
             
             self.history.append({"role": "user", "content": result})
             
@@ -1744,18 +1506,6 @@ Examples:
         '--verbose', '-v',
         action='store_true',
         help='Enable verbose logging'
-    )
-    
-    parser.add_argument(
-        '--directory',
-        default=None,
-        help='Target specific directory for review (for distributed mode)'
-    )
-    
-    parser.add_argument(
-        '--task-id',
-        default=None,
-        help='bd task ID associated with this review (for distributed mode)'
     )
     
     args = parser.parse_args()
@@ -1851,7 +1601,7 @@ Examples:
     )
     
     try:
-        loop.run(target_directory=args.directory, task_id=args.task_id)
+        loop.run()
     except KeyboardInterrupt:
         logger.info("Interrupted by user")
         sys.exit(130)
