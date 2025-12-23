@@ -248,3 +248,5 @@ All workers share same freebsd-src/.beads/ → Harmony!
 
 **Rule:** Beads database lives in the **source repository being reviewed**, not in the **tool repository**.
 
+
+
