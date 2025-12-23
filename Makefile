@@ -167,8 +167,9 @@ bootstrap: check-deps
 	cd ${SRCDIR} && ./bootstrap.sh --config ${CONFIG}
 
 # Start a worker node (bootstrap runs first to ensure tasks exist)
-worker: bootstrap
+worker:
 	@echo "Starting worker node..."
+	@echo "NOTE: Assumes tasks already created by 'make bootstrap'"
 	cd ${SRCDIR} && ./worker-node.sh --config ${CONFIG}
 
 # Show coordinator status
