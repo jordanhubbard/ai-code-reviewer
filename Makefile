@@ -12,12 +12,8 @@
 # Python interpreter (FreeBSD typically has python3)
 PYTHON?=	python3
 
-# Source directory - use shell pwd for cross-platform compatibility
-# Works with both GNU Make and BSD make
-SRCDIR:=	$(shell pwd)
-
-# Configuration file (relative to source directory)
-CONFIG:=	$(SRCDIR)/config.yaml
+# No directory variables needed - make runs from Makefile location
+# All paths are relative to the Makefile
 
 # Phony targets
 .PHONY: all deps check-deps validate run run-verbose test clean clean-all help
@@ -59,7 +55,7 @@ check-deps:
 # Legacy target - use check-deps instead
 deps:
 	@echo "Installing Python dependencies..."
-	$(PYTHON) -m pip install --user -r $(SRCDIR)/requirements.txt
+	$(PYTHON) -m pip install --user -r requirements.txt
 	@echo "Done. Dependencies installed."
 
 #
@@ -69,15 +65,15 @@ deps:
 # Validate Ollama connection and model availability
 validate: check-deps
 	@echo "Validating Ollama connection..."
-	cd $(SRCDIR) && $(PYTHON) reviewer.py --config $(CONFIG) --validate-only
+	$(PYTHON) reviewer.py --config config.yaml --validate-only
 
 # Run component self-tests
 test:
 	@echo "=== Testing Ollama Client ==="
-	cd $(SRCDIR) && $(PYTHON) ollama_client.py
+	$(PYTHON) ollama_client.py
 	@echo ""
 	@echo "=== Testing Build Executor ==="
-	cd $(SRCDIR) && $(PYTHON) build_executor.py
+	$(PYTHON) build_executor.py
 	@echo ""
 	@echo "All component tests passed!"
 
@@ -87,11 +83,11 @@ test:
 
 # Run the review loop (checks dependencies first)
 run: check-deps
-	cd $(SRCDIR) && $(PYTHON) reviewer.py --config $(CONFIG)
+	$(PYTHON) reviewer.py --config config.yaml
 
 # Run with verbose logging
 run-verbose:
-	cd $(SRCDIR) && $(PYTHON) reviewer.py --config $(CONFIG) -v
+	$(PYTHON) reviewer.py --config config.yaml -v
 
 #
 # Cleanup targets
@@ -99,15 +95,15 @@ run-verbose:
 
 # Clean logs and Python cache
 clean:
-	rm -rf $(SRCDIR)/../.angry-ai/logs/*.txt
-	rm -rf $(SRCDIR)/__pycache__
-	rm -rf $(SRCDIR)/*.pyc
+	rm -rf ../.angry-ai/logs/*.txt
+	rm -rf __pycache__
+	rm -rf *.pyc
 
 # Deep clean - also remove any leftover model weights (they belong on Ollama server)
 clean-all: clean
-	@if [ -d "$(SRCDIR)/Qwen2.5-Coder-32B-Instruct" ]; then \
+	@if [ -d "Qwen2.5-Coder-32B-Instruct" ]; then \
 		echo "Removing local model weights (these should be on Ollama server)..."; \
-		rm -rf $(SRCDIR)/Qwen2.5-Coder-32B-Instruct; \
+		rm -rf Qwen2.5-Coder-32B-Instruct; \
 		echo "Done."; \
 	fi
 
