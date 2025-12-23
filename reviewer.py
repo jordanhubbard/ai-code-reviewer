@@ -1477,6 +1477,124 @@ Output ONLY the lesson entry, nothing else."""
         print("=" * 60)
 
 
+def preflight_sanity_check(builder: Any, source_root: Path, git: GitHelper, max_reverts: int = 10) -> bool:
+    """
+    Pre-flight sanity check: Verify source builds before starting review.
+    
+    If the build fails, this indicates previous AI review runs may have
+    introduced breaking changes. We revert commits one by one until the
+    source builds again, then continue from that point.
+    
+    Args:
+        builder: BuildExecutor instance
+        source_root: Path to source root
+        git: GitHelper instance
+        max_reverts: Maximum number of commits to revert before giving up
+        
+    Returns:
+        True if source builds (or was fixed by reverting), False if unfixable
+    """
+    print("\n" + "=" * 70)
+    print("PRE-FLIGHT SANITY CHECK")
+    print("=" * 70)
+    print("Testing if source builds with configured build command...")
+    print(f"Command: {builder.config.build_command}")
+    print("=" * 70 + "\n")
+    
+    # Check for uncommitted changes
+    if git.has_changes():
+        print("WARNING: Uncommitted changes detected:")
+        print(git.show_status())
+        print("\nCannot run pre-flight check with uncommitted changes.")
+        print("Please commit or stash changes first.")
+        return False
+    
+    # Get current commit for reference
+    code, current_commit = git._run(['rev-parse', 'HEAD'])
+    current_commit = current_commit.strip()
+    
+    # Attempt initial build
+    from build_executor import BuildResult
+    
+    try:
+        result = builder.run_build(capture_output=True)
+        
+        if result.success:
+            print("\n" + "=" * 70)
+            print("✓ PRE-FLIGHT CHECK PASSED")
+            print("=" * 70)
+            print(f"Source builds successfully in {result.duration_seconds:.1f}s")
+            print(f"Warnings: {result.warning_count}")
+            print("Proceeding with review workflow...")
+            print("=" * 70 + "\n")
+            return True
+        
+        # Build failed - start reverting
+        print("\n" + "=" * 70)
+        print("✗ PRE-FLIGHT CHECK FAILED")
+        print("=" * 70)
+        print(f"Build failed with {result.error_count} errors")
+        print("\nThis suggests previous AI review runs introduced breaking changes.")
+        print("Attempting to recover by reverting recent commits...\n")
+        
+        reverted_commits = []
+        
+        for attempt in range(1, max_reverts + 1):
+            print(f"\n--- Revert Attempt {attempt}/{max_reverts} ---")
+            
+            # Get commit info before reverting
+            code, commit_info = git._run(['log', '-1', '--oneline', 'HEAD'])
+            commit_info = commit_info.strip()
+            
+            print(f"Reverting: {commit_info}")
+            
+            # Revert the last commit
+            code, output = git._run(['revert', '--no-edit', 'HEAD'])
+            if code != 0:
+                print(f"ERROR: Git revert failed: {output}")
+                print("Manual intervention required.")
+                return False
+            
+            reverted_commits.append(commit_info)
+            
+            # Try building again
+            print("Testing build after revert...")
+            result = builder.run_build(capture_output=True)
+            
+            if result.success:
+                print("\n" + "=" * 70)
+                print("✓ BUILD RECOVERED")
+                print("=" * 70)
+                print(f"Reverted {len(reverted_commits)} commit(s):")
+                for i, commit in enumerate(reverted_commits, 1):
+                    print(f"  {i}. {commit}")
+                print(f"\nSource now builds successfully in {result.duration_seconds:.1f}s")
+                print("Proceeding with review workflow from this point...")
+                print("=" * 70 + "\n")
+                return True
+            else:
+                print(f"Build still fails ({result.error_count} errors). Trying another revert...")
+        
+        # Max reverts reached without success
+        print("\n" + "=" * 70)
+        print("✗ RECOVERY FAILED")
+        print("=" * 70)
+        print(f"Reverted {max_reverts} commits but source still doesn't build.")
+        print("Manual intervention required.")
+        print("\nReverted commits:")
+        for i, commit in enumerate(reverted_commits, 1):
+            print(f"  {i}. {commit}")
+        print("\nTo restore original state:")
+        print(f"  git reset --hard {current_commit}")
+        print("=" * 70 + "\n")
+        return False
+        
+    except Exception as e:
+        print(f"\n✗ PRE-FLIGHT CHECK ERROR: {e}")
+        print("Cannot verify build status. Proceeding with caution...\n")
+        return False
+
+
 def main():
     """Main entry point."""
     parser = argparse.ArgumentParser(
@@ -1487,6 +1605,7 @@ Examples:
     python reviewer.py                     # Use default config.yaml
     python reviewer.py --config my.yaml    # Use custom config
     python reviewer.py --validate-only     # Just validate Ollama connection
+    python reviewer.py --skip-preflight    # Skip pre-flight build check
         """
     )
     
@@ -1506,6 +1625,12 @@ Examples:
         '--verbose', '-v',
         action='store_true',
         help='Enable verbose logging'
+    )
+    
+    parser.add_argument(
+        '--skip-preflight',
+        action='store_true',
+        help='Skip pre-flight build sanity check (use with caution)'
     )
     
     args = parser.parse_args()
@@ -1591,6 +1716,20 @@ Examples:
         sys.exit(1)
     
     logger.info(f"Using persona: {persona_name}")
+    
+    # PRE-FLIGHT SANITY CHECK: Verify source builds before starting review
+    # If build fails, revert commits until it builds again
+    if not args.skip_preflight:
+        git_helper = GitHelper(source_root)
+        
+        if not preflight_sanity_check(builder, source_root, git_helper, max_reverts=10):
+            logger.error("Pre-flight check failed. Cannot proceed safely.")
+            logger.error("Use --skip-preflight to bypass this check (not recommended)")
+            sys.exit(1)
+    else:
+        logger.warning("Skipping pre-flight build check (--skip-preflight)")
+        print("\n⚠️  WARNING: Pre-flight check skipped!")
+        print("   If source doesn't build, AI may make things worse.\n")
     
     loop = ReviewLoop(
         ollama_client=ollama,
