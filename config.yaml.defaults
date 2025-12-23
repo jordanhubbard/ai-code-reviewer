@@ -90,6 +90,7 @@ review:
     - "*.so"
     - ".git/*"
     - "angry-ai/*"
+    - "ai-code-reviewer/*"  # Prevent self-review!
     - "*.pyc"
     - "__pycache__/*"
 

@@ -88,6 +88,10 @@ class ReviewIndex:
                 if item.name.startswith('.'):
                     continue
                 
+                # CRITICAL: Prevent self-review if ai-code-reviewer is in the source tree
+                if item.name in ['ai-code-reviewer', 'angry-ai']:
+                    continue
+                
                 rel_path = f"{prefix}/{item.name}"
                 
                 # Check for C files
