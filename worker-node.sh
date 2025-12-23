@@ -159,23 +159,52 @@ while true; do
     echo "[$(date '+%H:%M:%S')] Syncing source repository with remote..."
     cd "$SOURCE_ROOT"
     
-    # Fetch first to see what's changed
-    git fetch origin 2>/dev/null || echo "  Warning: Could not fetch from remote"
-    
-    # Pull and check if task queue changed
-    PULL_OUTPUT=$(git pull --rebase 2>&1)
-    if echo "$PULL_OUTPUT" | grep -q 'Already up to date'; then
-        echo "  Already up to date"
-    elif echo "$PULL_OUTPUT" | grep -q 'Fast-forward\|Applying'; then
-        echo "  ✓ Updated from remote"
-        # Check if .beads/issues.jsonl changed
-        if echo "$PULL_OUTPUT" | grep -q '.beads/issues.jsonl'; then
-            echo "  ✓ Task queue updated - re-importing..."
-            bd sync --json >/dev/null 2>&1 || true
+    # Check for uncommitted changes first
+    if ! git diff-index --quiet HEAD -- 2>/dev/null; then
+        echo "  ⚠ WARNING: Uncommitted changes detected in source repository"
+        echo "  Repository state may diverge from remote. Consider cleaning up:"
+        echo "    cd $SOURCE_ROOT"
+        echo "    git status"
+        echo "    git stash  # or commit/discard changes"
+        echo ""
+        echo "  Continuing with local state (task queue sync only)..."
+        
+        # Still sync task queue from remote
+        if [ -f .beads/issues.jsonl ]; then
+            git fetch origin 2>/dev/null || true
+            # Try to update just the task queue
+            if git diff origin/main -- .beads/issues.jsonl >/dev/null 2>&1; then
+                echo "  Attempting to pull task queue updates only..."
+                git checkout origin/main -- .beads/issues.jsonl 2>/dev/null && {
+                    bd sync --json >/dev/null 2>&1 || true
+                    echo "  ✓ Task queue synced from remote"
+                } || echo "  Could not sync task queue (continuing with local)"
+            fi
         fi
     else
-        echo "  Warning: Pull had issues (may need manual intervention)"
-        echo "  Output: $PULL_OUTPUT"
+        # No uncommitted changes - safe to pull
+        git fetch origin 2>/dev/null || echo "  Warning: Could not fetch from remote"
+        
+        # Pull and check if task queue changed
+        PULL_OUTPUT=$(git pull --rebase 2>&1)
+        PULL_EXIT=$?
+        
+        if [ $PULL_EXIT -eq 0 ]; then
+            if echo "$PULL_OUTPUT" | grep -q 'Already up to date'; then
+                echo "  Already up to date"
+            elif echo "$PULL_OUTPUT" | grep -q 'Fast-forward\|Applying'; then
+                echo "  ✓ Updated from remote"
+                # Check if .beads/issues.jsonl changed
+                if echo "$PULL_OUTPUT" | grep -q '.beads/issues.jsonl'; then
+                    echo "  ✓ Task queue updated - re-importing..."
+                    bd sync --json >/dev/null 2>&1 || true
+                fi
+            fi
+        else
+            echo "  ⚠ WARNING: Pull failed (exit code $PULL_EXIT)"
+            echo "  Output: $PULL_OUTPUT"
+            echo "  Continuing with local state..."
+        fi
     fi
     
     # Get next available task (from SOURCE_ROOT/.beads/)
