@@ -12,16 +12,12 @@
 # Python interpreter (FreeBSD typically has python3)
 PYTHON?=	python3
 
-# Source directory
-# Note: $(CURDIR) is GNU Make, ${.CURDIR} is BSD make
-# Use CURDIR if set, otherwise use current directory
-SRCDIR?=	$(CURDIR)
-ifeq ($(SRCDIR),)
-SRCDIR=		$(shell pwd)
-endif
+# Source directory - use shell pwd for cross-platform compatibility
+# Works with both GNU Make and BSD make
+SRCDIR:=	$(shell pwd)
 
 # Configuration file (relative to source directory)
-CONFIG?=	$(SRCDIR)/config.yaml
+CONFIG:=	$(SRCDIR)/config.yaml
 
 # Phony targets
 .PHONY: all deps check-deps validate run run-verbose test clean clean-all help
