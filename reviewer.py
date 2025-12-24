@@ -1501,13 +1501,22 @@ def preflight_sanity_check(builder: Any, source_root: Path, git: GitHelper, max_
     print(f"Command: {builder.config.build_command}")
     print("=" * 70 + "\n")
     
-    # Check for uncommitted changes
-    if git.has_changes():
-        print("WARNING: Uncommitted changes detected:")
-        print(git.show_status())
-        print("\nCannot run pre-flight check with uncommitted changes.")
-        print("Please commit or stash changes first.")
-        return False
+    # Check for uncommitted changes (excluding .beads/ which we'll auto-stash)
+    changes = git.show_status()
+    if changes:
+        # Check if only .beads/ files are modified
+        non_beads_changes = [line for line in changes.split('\n') 
+                            if line.strip() and not '.beads/' in line]
+        
+        if non_beads_changes:
+            print("WARNING: Uncommitted changes detected (excluding .beads/):")
+            print('\n'.join(non_beads_changes))
+            print("\nCannot run pre-flight check with uncommitted changes.")
+            print("Please commit or stash changes first.")
+            print("Note: .beads/ changes are auto-stashed during recovery if needed.")
+            return False
+        
+        print("Note: .beads/ changes detected - will be auto-stashed if recovery needed")
     
     # Get current commit for reference
     code, current_commit = git._run(['rev-parse', 'HEAD'])
@@ -1529,13 +1538,39 @@ def preflight_sanity_check(builder: Any, source_root: Path, git: GitHelper, max_
             print("=" * 70 + "\n")
             return True
         
-        # Build failed - start reverting
+        # Build failed - determine if it's a code issue or build system issue
         print("\n" + "=" * 70)
         print("✗ PRE-FLIGHT CHECK FAILED")
         print("=" * 70)
-        print(f"Build failed with {result.error_count} errors")
+        print(f"Build failed with {result.error_count} errors, {result.warning_count} warnings")
+        print(f"Build return code: {result.return_code}")
+        
+        # If 0 errors, this is likely a build system issue, not code errors
+        if result.error_count == 0:
+            print("\n⚠️  Build failed but no compilation errors detected.")
+            print("This suggests a build system issue, not code problems:")
+            print("  - Missing dependencies")
+            print("  - Insufficient disk space")
+            print("  - Build configuration issue")
+            print("  - Build was interrupted")
+            print("\nNot attempting to revert commits (no code errors to fix).")
+            print("Please investigate build system issues manually.")
+            print("Use --skip-preflight to bypass this check.\n")
+            return False
+        
         print("\nThis suggests previous AI review runs introduced breaking changes.")
         print("Attempting to recover by reverting recent commits...\n")
+        
+        # Stash any .beads/ changes before reverting
+        beads_stashed = False
+        if git.has_changes():
+            print("Stashing .beads/ changes before reverting...")
+            code, output = git._run(['stash', 'push', '-m', 'preflight-beads-backup', '.beads/'])
+            if code == 0:
+                beads_stashed = True
+                print("✓ .beads/ changes stashed")
+            else:
+                print(f"WARNING: Could not stash .beads/ changes: {output}")
         
         reverted_commits = []
         
@@ -1569,6 +1604,17 @@ def preflight_sanity_check(builder: Any, source_root: Path, git: GitHelper, max_
                 for i, commit in enumerate(reverted_commits, 1):
                     print(f"  {i}. {commit}")
                 print(f"\nSource now builds successfully in {result.duration_seconds:.1f}s")
+                
+                # Restore beads changes if we stashed them
+                if beads_stashed:
+                    print("\nRestoring .beads/ changes...")
+                    code, output = git._run(['stash', 'pop'])
+                    if code == 0:
+                        print("✓ .beads/ changes restored")
+                    else:
+                        print(f"WARNING: Could not restore .beads/ changes: {output}")
+                        print("You may need to manually restore: git stash list")
+                
                 print("Proceeding with review workflow from this point...")
                 print("=" * 70 + "\n")
                 return True
@@ -1586,6 +1632,16 @@ def preflight_sanity_check(builder: Any, source_root: Path, git: GitHelper, max_
             print(f"  {i}. {commit}")
         print("\nTo restore original state:")
         print(f"  git reset --hard {current_commit}")
+        
+        # Restore beads changes if we stashed them
+        if beads_stashed:
+            print("\nRestoring .beads/ changes...")
+            code, output = git._run(['stash', 'pop'])
+            if code == 0:
+                print("✓ .beads/ changes restored")
+            else:
+                print(f"WARNING: Could not restore .beads/ changes: {output}")
+        
         print("=" * 70 + "\n")
         return False
         
