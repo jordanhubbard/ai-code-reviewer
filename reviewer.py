@@ -1477,7 +1477,7 @@ Output ONLY the lesson entry, nothing else."""
         print("=" * 60)
 
 
-def preflight_sanity_check(builder: Any, source_root: Path, git: GitHelper, max_reverts: int = 10) -> bool:
+def preflight_sanity_check(builder: Any, source_root: Path, git: GitHelper, max_reverts: int = 100) -> bool:
     """
     Pre-flight sanity check: Verify source builds before starting review.
     
@@ -1489,7 +1489,7 @@ def preflight_sanity_check(builder: Any, source_root: Path, git: GitHelper, max_
         builder: BuildExecutor instance
         source_root: Path to source root
         git: GitHelper instance
-        max_reverts: Maximum number of commits to revert before giving up
+        max_reverts: Maximum number of commits to revert before giving up (default: 100)
         
     Returns:
         True if source builds (or was fixed by reverting), False if unfixable
@@ -1554,7 +1554,7 @@ def preflight_sanity_check(builder: Any, source_root: Path, git: GitHelper, max_
             print("  - Shell script errors")
         
         print("\nAttempting to recover by reverting recent commits...")
-        print("(Will revert up to 10 commits to find a working state)\n")
+        print(f"(Will revert up to {max_reverts} commits to find a working state)\n")
         
         # Stash any .beads/ changes before reverting
         beads_stashed = False
@@ -1773,7 +1773,10 @@ Examples:
     if not args.skip_preflight:
         git_helper = GitHelper(source_root)
         
-        if not preflight_sanity_check(builder, source_root, git_helper, max_reverts=10):
+        # Get max_reverts from config, default to 100
+        max_reverts = review_config.get('max_reverts', 100)
+        
+        if not preflight_sanity_check(builder, source_root, git_helper, max_reverts=max_reverts):
             logger.error("Pre-flight check failed. Cannot proceed safely.")
             logger.error("Use --skip-preflight to bypass this check (not recommended)")
             sys.exit(1)

@@ -83,6 +83,12 @@ review:
   # Example: 52-chunk file needs ~60-80 iterations (read all + make edits + build)
   max_iterations: 200
   
+  # Maximum commits to revert during pre-flight sanity check recovery
+  # If source doesn't build at startup, pre-flight reverts commits until it does
+  # Higher values allow recovery from longer periods of broken commits
+  # Default: 100 (can handle ~100 bad commits before giving up)
+  max_reverts: 100
+  
   # Files/patterns to skip during review
   skip_patterns:
     - "*.o"
