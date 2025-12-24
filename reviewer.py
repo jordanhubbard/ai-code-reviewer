@@ -1538,28 +1538,23 @@ def preflight_sanity_check(builder: Any, source_root: Path, git: GitHelper, max_
             print("=" * 70 + "\n")
             return True
         
-        # Build failed - determine if it's a code issue or build system issue
+        # Build failed - attempt recovery
         print("\n" + "=" * 70)
         print("✗ PRE-FLIGHT CHECK FAILED")
         print("=" * 70)
         print(f"Build failed with {result.error_count} errors, {result.warning_count} warnings")
         print(f"Build return code: {result.return_code}")
         
-        # If 0 errors, this is likely a build system issue, not code errors
         if result.error_count == 0:
-            print("\n⚠️  Build failed but no compilation errors detected.")
-            print("This suggests a build system issue, not code problems:")
-            print("  - Missing dependencies")
-            print("  - Insufficient disk space")
-            print("  - Build configuration issue")
-            print("  - Build was interrupted")
-            print("\nNot attempting to revert commits (no code errors to fix).")
-            print("Please investigate build system issues manually.")
-            print("Use --skip-preflight to bypass this check.\n")
-            return False
+            print("\nNote: No C/C++ compilation errors detected by parser.")
+            print("This could be:")
+            print("  - Makefile syntax errors (unclosed conditionals, etc.)")
+            print("  - Linker errors")
+            print("  - Build system configuration errors")
+            print("  - Shell script errors")
         
-        print("\nThis suggests previous AI review runs introduced breaking changes.")
-        print("Attempting to recover by reverting recent commits...\n")
+        print("\nAttempting to recover by reverting recent commits...")
+        print("(Will revert up to 10 commits to find a working state)\n")
         
         # Stash any .beads/ changes before reverting
         beads_stashed = False

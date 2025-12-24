@@ -112,11 +112,12 @@ class BuildResult:
 
 class ErrorParser:
     """
-    Parses compiler output to extract structured error information.
+    Parses build output to extract structured error information.
     
     Handles output from:
     - GCC/Clang (standard FreeBSD compilers)
-    - Make error messages
+    - Makefile syntax errors (unclosed conditionals, missing separators, etc.)
+    - Make build failures
     - Linker errors
     """
     
@@ -130,6 +131,11 @@ class ErrorParser:
     # Make errors: make[N]: *** [target] Error N
     MAKE_ERROR_RE = re.compile(
         r'^make\[\d+\]:\s*\*\*\*\s*\[(?P<target>[^\]]+)\]\s*Error\s*(?P<code>\d+)'
+    )
+    
+    # Makefile syntax errors: make[N]: path/to/Makefile:line: message
+    MAKEFILE_SYNTAX_RE = re.compile(
+        r'^make\[\d+\]:\s*(?P<file>[^:]+):(?P<line>\d+):\s*(?P<message>.+)$'
     )
     
     # Linker errors: ld: error: undefined symbol: xxx
@@ -184,6 +190,19 @@ class ErrorParser:
                     errors.append(error)
                 elif error.severity == 'warning':
                     warnings.append(error)
+                continue
+            
+            # Try Makefile syntax errors
+            match = cls.MAKEFILE_SYNTAX_RE.match(line)
+            if match:
+                error = CompilerError(
+                    file_path=match.group('file'),
+                    line_number=int(match.group('line')),
+                    column=None,
+                    severity='error',  # Makefile errors are always fatal
+                    message=match.group('message'),
+                )
+                errors.append(error)
                 continue
             
             # Try linker errors
