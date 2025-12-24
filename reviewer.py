@@ -1569,36 +1569,50 @@ def preflight_sanity_check(builder: Any, source_root: Path, git: GitHelper, max_
         
         reverted_commits = []
         
+        # Use reset strategy instead of revert to actually go back in history
+        # We'll test going back N commits and reset to the first working one
         for attempt in range(1, max_reverts + 1):
-            print(f"\n--- Revert Attempt {attempt}/{max_reverts} ---")
+            print(f"\n--- Recovery Attempt {attempt}/{max_reverts} ---")
             
-            # Get commit info before reverting
-            code, commit_info = git._run(['log', '-1', '--oneline', 'HEAD'])
+            # Get commit info at HEAD~(attempt-1)
+            code, commit_info = git._run(['log', '-1', '--oneline', f'HEAD~{attempt-1}'])
+            if code != 0:
+                print(f"ERROR: Cannot access HEAD~{attempt-1}: {commit_info}")
+                print("Reached beginning of git history.")
+                break
             commit_info = commit_info.strip()
             
-            print(f"Reverting: {commit_info}")
+            print(f"Testing state at: {commit_info}")
             
-            # Revert the last commit
-            code, output = git._run(['revert', '--no-edit', 'HEAD'])
+            # Reset to this commit (destructive, but we're in recovery mode)
+            code, output = git._run(['reset', '--hard', f'HEAD~{attempt-1}'])
             if code != 0:
-                print(f"ERROR: Git revert failed: {output}")
+                print(f"ERROR: Git reset failed: {output}")
                 print("Manual intervention required.")
+                # Try to restore to original state
+                git._run(['reset', '--hard', current_commit])
                 return False
             
             reverted_commits.append(commit_info)
             
             # Try building again
-            print("Testing build after revert...")
+            print("Testing build...")
             result = builder.run_build(capture_output=True)
             
             if result.success:
                 print("\n" + "=" * 70)
                 print("✓ BUILD RECOVERED")
                 print("=" * 70)
-                print(f"Reverted {len(reverted_commits)} commit(s):")
-                for i, commit in enumerate(reverted_commits, 1):
-                    print(f"  {i}. {commit}")
+                print(f"Reset back {attempt} commit(s) to find working state:")
+                print(f"  Now at: {commit_info}")
                 print(f"\nSource now builds successfully in {result.duration_seconds:.1f}s")
+                
+                # Show what commits were skipped
+                if attempt > 1:
+                    print(f"\nSkipped {attempt} broken commit(s) (use 'git log' to see them)")
+                    code, skipped = git._run(['log', '--oneline', f'{current_commit}..HEAD'])
+                    if code == 0 and skipped.strip():
+                        print("Note: These commits still exist but are not on your current branch")
                 
                 # Restore beads changes if we stashed them
                 if beads_stashed:
@@ -1610,23 +1624,26 @@ def preflight_sanity_check(builder: Any, source_root: Path, git: GitHelper, max_
                         print(f"WARNING: Could not restore .beads/ changes: {output}")
                         print("You may need to manually restore: git stash list")
                 
-                print("Proceeding with review workflow from this point...")
+                print("\nProceeding with review workflow from this point...")
                 print("=" * 70 + "\n")
                 return True
             else:
                 print(f"Build still fails ({result.error_count} errors). Trying another revert...")
         
-        # Max reverts reached without success
+        # Max reverts reached without success - restore original state
         print("\n" + "=" * 70)
         print("✗ RECOVERY FAILED")
         print("=" * 70)
-        print(f"Reverted {max_reverts} commits but source still doesn't build.")
-        print("Manual intervention required.")
-        print("\nReverted commits:")
-        for i, commit in enumerate(reverted_commits, 1):
-            print(f"  {i}. {commit}")
-        print("\nTo restore original state:")
-        print(f"  git reset --hard {current_commit}")
+        print(f"Tested {max_reverts} commits back but source still doesn't build.")
+        print("Restoring original state...")
+        
+        # Reset back to where we started
+        code, output = git._run(['reset', '--hard', current_commit])
+        if code == 0:
+            print(f"✓ Restored to original commit: {current_commit[:12]}")
+        else:
+            print(f"ERROR: Could not restore original state: {output}")
+            print(f"Manually reset with: git reset --hard {current_commit}")
         
         # Restore beads changes if we stashed them
         if beads_stashed:
@@ -1637,6 +1654,8 @@ def preflight_sanity_check(builder: Any, source_root: Path, git: GitHelper, max_
             else:
                 print(f"WARNING: Could not restore .beads/ changes: {output}")
         
+        print("\nManual intervention required.")
+        print("The build has been broken for more than the last 100 commits.")
         print("=" * 70 + "\n")
         return False
         

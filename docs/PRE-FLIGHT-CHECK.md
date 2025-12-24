@@ -40,21 +40,21 @@ If the initial build fails:
    This suggests previous AI review runs introduced breaking changes.
    ```
 
-2. **Revert commits one by one:**
-   - Gets commit info: `git log -1 --oneline HEAD`
-   - Reverts it: `git revert --no-edit HEAD`
-   - Tests build again
-   - Repeats until build succeeds (up to 10 commits)
+2. **Reset back through commit history:**
+   - Tests commit at HEAD~1, HEAD~2, HEAD~3, etc.
+   - Uses `git reset --hard HEAD~N` to actually go back
+   - Tests build at each point
+   - Repeats until build succeeds (up to 100 commits)
 
 3. **Report recovery:**
    ```
    ✓ BUILD RECOVERED
-   Reverted 3 commit(s):
-     1. abc1234 bin/chmod: Fix integer parsing
-     2. def5678 bin/cat: Add error checking
-     3. ghi9012 bin/ls: Security improvements
+   Reset back 3 commit(s) to find working state:
+     Now at: xyz7890 lib/libc: Memory allocation fixes
    
    Source now builds successfully in 450.2s
+   
+   Skipped 3 broken commit(s) (use 'git log' to see them)
    Proceeding with review workflow from this point...
    ```
 
@@ -62,15 +62,16 @@ If the initial build fails:
 
 ### Phase 3: Failure Handling
 
-If 10 commits are reverted and the source still doesn't build:
+If 100 commits are tested and the source still doesn't build:
 
 ```
 ✗ RECOVERY FAILED
-Reverted 10 commits but source still doesn't build.
-Manual intervention required.
+Tested 100 commits back but source still doesn't build.
+Restoring original state...
+✓ Restored to original commit: abc1234
 
-To restore original state:
-  git reset --hard abc1234
+Manual intervention required.
+The build has been broken for more than the last 100 commits.
 ```
 
 The program exits with error code 1, requiring human intervention.
