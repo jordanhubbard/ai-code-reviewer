@@ -81,7 +81,7 @@ review:
   # Each iteration = one AI action (SET_SCOPE, READ_FILE, NEXT_CHUNK, EDIT_FILE, etc.)
   # For chunked files, need enough iterations to review all functions
   # Example: 52-chunk file needs ~60-80 iterations (read all + make edits + build)
-  max_iterations: 200
+  max_iterations: 500
   
   # Maximum commits to revert during pre-flight sanity check recovery
   # If source doesn't build at startup, pre-flight reverts commits until it does
