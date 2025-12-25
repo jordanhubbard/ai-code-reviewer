@@ -1253,7 +1253,7 @@ Output ONLY the lesson entry, nothing else."""
                     return f"BUILD_SUCCESS but commit/push failed: {output}\n" \
                            "Please commit manually."
             else:
-                # Build failed - STAY IN CURRENT DIRECTORY
+                # Build failed - REVERT changes and record lesson learned
                 self.session.build_failures += 1
                 
                 # Log build failure
@@ -1264,31 +1264,51 @@ Output ONLY the lesson entry, nothing else."""
                     error_summary=result.errors[0].message if result.errors else None,
                 )
                 
-                # DO NOT mark directory complete
-                # DO NOT clear pending_changes
-                # DO NOT move to next directory
-                # AI will re-review files, make more fixes, and BUILD again
-                
-                # Record lesson learned
+                # Get error report before reverting
                 error_report = result.get_error_report()
-                self._record_lesson(error_report)
+                reverted_files = list(self.session.changed_files)
                 
-                # Show current progress and instructions
-                progress = self.session.get_progress_summary()
+                # REVERT all changes - this is cheaper than trying to fix
+                print("\n*** BUILD FAILED - Reverting changes...")
+                for file_path in self.session.changed_files:
+                    full_path = self.source_root / file_path
+                    if full_path.exists():
+                        code, output = self.git._run(['checkout', str(full_path)])
+                        if code == 0:
+                            print(f"    Reverted: {file_path}")
+                        else:
+                            print(f"    WARNING: Could not revert {file_path}: {output}")
                 
+                # Clear pending changes state
+                self.session.pending_changes = False
+                self.session.changed_files = []
+                
+                # Record lesson learned from the failure
+                print("*** Recording lesson learned...")
+                self._record_lesson(error_report, failed_fix_attempt=", ".join(reverted_files))
+                
+                # Commit and push LESSONS.md so the AI has it in context
+                self.git.add(str(self.lessons_file))
+                success, output = self.git.commit(f"LESSON: Build failure in {current_dir} - reverted changes")
+                if success:
+                    self.git.push()
+                    print("*** LESSONS.md committed and pushed")
+                
+                # Build response for AI
                 error_response = f"BUILD_FAILED: Build errors detected\n\n"
-                error_response += f"CURRENT STATE:\n{progress}\n\n"
-                error_response += f"BUILD ERROR REPORT:\n{error_report}\n\n"
-                error_response += f"RECOVERY ACTIONS:\n"
-                error_response += f"1. Analyze the build errors above\n"
-                error_response += f"2. Re-read affected files if needed (READ_FILE)\n"
-                error_response += f"3. Make additional fixes (EDIT_FILE)\n"
-                error_response += f"4. Try building again (BUILD)\n"
-                error_response += f"5. Repeat until build succeeds\n\n"
-                error_response += f"IMPORTANT: You are still in {self.session.current_directory}\n"
-                error_response += f"Do NOT move to next directory until build succeeds!\n"
+                error_response += f"REVERTED FILES:\n"
+                for f in reverted_files:
+                    error_response += f"  - {f}\n"
+                error_response += f"\nBUILD ERROR REPORT:\n{error_report}\n\n"
+                error_response += f"LESSON RECORDED: The failed approach has been documented in LESSONS.md.\n\n"
+                error_response += f"NEXT STEPS:\n"
+                error_response += f"1. The broken changes have been reverted automatically\n"
+                error_response += f"2. Re-read the file(s) you were trying to fix\n"
+                error_response += f"3. Try a DIFFERENT approach based on the error\n"
+                error_response += f"4. Make smaller, more targeted changes\n"
+                error_response += f"5. BUILD again when ready\n\n"
+                error_response += f"You are still in: {self.session.current_directory}\n"
                 
-                # Return error report for AI to analyze
                 return error_response
         
         elif action_type == 'HALT':
