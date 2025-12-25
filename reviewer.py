@@ -33,6 +33,7 @@ from index_generator import generate_index
 from build_executor import BuildResult
 from chunker import CFileChunker, format_chunk_for_review
 from dataclasses import dataclass, field
+from ops_logger import OpsLogger, create_logger_from_config
 from pathlib import Path
 from typing import Dict, List, Optional, Any, Tuple
 
@@ -342,6 +343,7 @@ class ReviewLoop:
         persona_dir: Path,
         max_iterations: int = 50,
         log_dir: Optional[Path] = None,
+        ops_logger: Optional[OpsLogger] = None,
     ):
         self.ollama = ollama_client
         self.builder = build_executor
@@ -367,6 +369,9 @@ class ReviewLoop:
             session_id=datetime.datetime.now().strftime("%Y%m%d_%H%M%S"),
             start_time=datetime.datetime.now(),
         )
+        
+        # Operations logger for internal metrics
+        self.ops = ops_logger or OpsLogger(session_id=self.session.session_id)
         
         # Chunk tracking for large files
         self.current_chunks: List[Any] = []  # Chunks for current file
@@ -986,6 +991,9 @@ Output ONLY the lesson entry, nothing else."""
             self.index.set_current(directory)
             self.index.save()
             
+            # Log directory start
+            self.ops.directory_start(directory)
+            
             progress = self.session.get_progress_summary()
             
             result = f"SET_SCOPE_OK: Now reviewing {directory}\n\n"
@@ -1113,6 +1121,9 @@ Output ONLY the lesson entry, nothing else."""
                 if rel_path not in self.session.changed_files:
                     self.session.changed_files.append(rel_path)
                 
+                # Log edit success
+                self.ops.edit_success(rel_path, message)
+                
                 result = f"EDIT_FILE_OK: {message}\n\n"
                 if self.session.current_directory:
                     result += f"Scope: {self.session.current_directory}\n"
@@ -1127,6 +1138,8 @@ Output ONLY the lesson entry, nothing else."""
                 
                 return result
             else:
+                # Log edit failure
+                self.ops.edit_failure(rel_path, message)
                 hint = "\n\nHINT: The OLD block must be EXACTLY copied from the file.\n" \
                        "Re-read the file and copy the exact text you want to replace,\n" \
                        "including all whitespace and indentation. Do not paraphrase."
@@ -1178,6 +1191,9 @@ Output ONLY the lesson entry, nothing else."""
                 # Build succeeded!
                 self.session.files_fixed += len(changed_files)
                 
+                # Log build success
+                self.ops.build_success(result.duration_seconds, result.warning_count)
+                
                 # Generate commit message using AI (include directory context)
                 commit_msg = self._generate_commit_message(
                     full_diff, changed_files, self.session.current_directory
@@ -1191,6 +1207,13 @@ Output ONLY the lesson entry, nothing else."""
                 # Commit and push (includes the REVIEW-SUMMARY.md update)
                 success, output = self._commit_and_push(commit_msg)
                 if success:
+                    # Get commit hash for logging
+                    _, commit_hash = self.git._run(['rev-parse', 'HEAD'])
+                    commit_hash = commit_hash.strip()[:12]
+                    
+                    # Log commit success
+                    self.ops.commit_success(commit_hash, changed_files)
+                    
                     # Mark directory as completed in session
                     if self.session.current_directory:
                         if self.session.current_directory not in self.session.completed_directories:
@@ -1201,6 +1224,13 @@ Output ONLY the lesson entry, nothing else."""
                         self.index.mark_done(self.session.current_directory, 
                                            f"Fixed by session {self.session.session_id}")
                         self.index.save()
+                        
+                        # Log directory complete
+                        self.ops.directory_complete(
+                            self.session.current_directory,
+                            files_changed=changed_files,
+                            commit_hash=commit_hash,
+                        )
                     
                     self.session.pending_changes = False
                     self.session.changed_files = []
@@ -1216,11 +1246,21 @@ Output ONLY the lesson entry, nothing else."""
                            f"Completed directories so far: {self.session.directories_completed}" \
                            f"{next_msg}"
                 else:
+                    # Log commit failure
+                    self.ops.commit_failure(output)
                     return f"BUILD_SUCCESS but commit/push failed: {output}\n" \
                            "Please commit manually."
             else:
                 # Build failed - STAY IN CURRENT DIRECTORY
                 self.session.build_failures += 1
+                
+                # Log build failure
+                self.ops.build_failure(
+                    result.duration_seconds,
+                    error_count=result.error_count,
+                    warning_count=result.warning_count,
+                    error_summary=result.errors[0].message if result.errors else None,
+                )
                 
                 # DO NOT mark directory complete
                 # DO NOT clear pending_changes
@@ -1380,6 +1420,13 @@ Output ONLY the lesson entry, nothing else."""
         """Run the main review loop."""
         logger.info("Starting review loop...")
         
+        # Log session start
+        self.ops.session_start({
+            "source_root": str(self.source_root),
+            "persona": str(self.persona_dir.name),
+            "max_iterations": self.max_iterations,
+        })
+        
         # Show initial git status
         status = self.git.show_status()
         if status:
@@ -1402,6 +1449,7 @@ Output ONLY the lesson entry, nothing else."""
                 error_msg = str(e)
                 if "timed out" in error_msg.lower() or "timeout" in error_msg.lower():
                     logger.error(f"Ollama timeout after {self.ollama.config.timeout}s")
+                    self.ops.ai_timeout(self.ollama.config.timeout, f"Step {step}")
                     print(f"\n{'='*60}")
                     print("ERROR: Request timed out")
                     print('='*60)
@@ -1414,6 +1462,7 @@ Output ONLY the lesson entry, nothing else."""
                     print('='*60)
                 else:
                     logger.error(f"Ollama error: {e}")
+                    self.ops.ai_error(error_msg)
                 break
             
             last_user_msg = self.history[-1]['content'] if self.history else ""
@@ -1459,6 +1508,13 @@ Output ONLY the lesson entry, nothing else."""
             if len(self.history) > 42:
                 self.history = self.history[:2] + self.history[-40:]
         
+        # Log session end
+        self.ops.session_end(
+            directories_completed=self.session.directories_completed,
+            files_fixed=self.session.files_fixed,
+            build_failures=self.session.build_failures,
+        )
+        
         # Final status
         print("\n" + "=" * 60)
         print("REVIEW SESSION COMPLETE")
@@ -1477,7 +1533,13 @@ Output ONLY the lesson entry, nothing else."""
         print("=" * 60)
 
 
-def preflight_sanity_check(builder: Any, source_root: Path, git: GitHelper, max_reverts: int = 100) -> bool:
+def preflight_sanity_check(
+    builder: Any,
+    source_root: Path,
+    git: GitHelper,
+    max_reverts: int = 100,
+    ops_logger: Optional[OpsLogger] = None,
+) -> bool:
     """
     Pre-flight sanity check: Verify source builds before starting review.
     
@@ -1490,6 +1552,7 @@ def preflight_sanity_check(builder: Any, source_root: Path, git: GitHelper, max_
         source_root: Path to source root
         git: GitHelper instance
         max_reverts: Maximum number of commits to revert before giving up (default: 100)
+        ops_logger: Optional OpsLogger for metrics
         
     Returns:
         True if source builds (or was fixed by reverting), False if unfixable
@@ -1536,6 +1599,8 @@ def preflight_sanity_check(builder: Any, source_root: Path, git: GitHelper, max_
             print(f"Warnings: {result.warning_count}")
             print("Proceeding with review workflow...")
             print("=" * 70 + "\n")
+            if ops_logger:
+                ops_logger.preflight_pass(result.duration_seconds, result.warning_count)
             return True
         
         # Build failed - attempt recovery
@@ -1543,6 +1608,8 @@ def preflight_sanity_check(builder: Any, source_root: Path, git: GitHelper, max_
         print("✗ PRE-FLIGHT CHECK FAILED")
         print("=" * 70)
         print(f"Build failed with {result.error_count} errors, {result.warning_count} warnings")
+        if ops_logger:
+            ops_logger.preflight_fail(result.error_count, result.warning_count)
         print(f"Build return code: {result.return_code}")
         
         if result.error_count == 0:
@@ -1626,6 +1693,8 @@ def preflight_sanity_check(builder: Any, source_root: Path, git: GitHelper, max_
                 
                 print("\nProceeding with review workflow from this point...")
                 print("=" * 70 + "\n")
+                if ops_logger:
+                    ops_logger.preflight_recovery(attempt, commit_info.split()[0])
                 return True
             else:
                 print(f"Build still fails ({result.error_count} errors). Trying another revert...")
@@ -1787,6 +1856,9 @@ Examples:
     
     logger.info(f"Using persona: {persona_name}")
     
+    # Create operations logger for internal metrics
+    ops_logger = create_logger_from_config(config, source_root=source_root)
+    
     # PRE-FLIGHT SANITY CHECK: Verify source builds before starting review
     # If build fails, revert commits until it builds again
     if not args.skip_preflight:
@@ -1795,7 +1867,7 @@ Examples:
         # Get max_reverts from config, default to 100
         max_reverts = review_config.get('max_reverts', 100)
         
-        if not preflight_sanity_check(builder, source_root, git_helper, max_reverts=max_reverts):
+        if not preflight_sanity_check(builder, source_root, git_helper, max_reverts=max_reverts, ops_logger=ops_logger):
             logger.error("Pre-flight check failed. Cannot proceed safely.")
             logger.error("Use --skip-preflight to bypass this check (not recommended)")
             sys.exit(1)
@@ -1809,6 +1881,7 @@ Examples:
         build_executor=builder,
         source_root=source_root,
         persona_dir=persona_dir,
+        ops_logger=ops_logger,
         max_iterations=review_config.get('max_iterations', 50),
     )
     
