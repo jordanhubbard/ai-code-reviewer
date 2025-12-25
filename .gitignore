@@ -18,3 +18,11 @@ build/
 config.yaml
 personas/*/logs/
 
+# Beads issue tracker database (syncs to separate branch via bd sync)
+# The beads data is synced to a dedicated branch (e.g., beads-sync) to avoid
+# conflicts with the main branch of projects being reviewed.
+.beads/
+
+# Internal operations log for debugging and improving the tool
+.reviewer-log/
+

@@ -111,3 +111,13 @@ logging:
   # Keep last N log files per session
   max_log_files: 100
 
+# Internal operations logging (for debugging and improving the tool)
+ops_logging:
+  # Directory for operations log (relative to cwd, gitignored)
+  log_dir: ".reviewer-log"
+  
+  # Optional: sync logs to a dedicated branch in the audited project
+  # This makes logs available for analysis without polluting main branch
+  # Set to null/empty to disable branch sync
+  # sync_to_branch: "reviewer-logs"
+
