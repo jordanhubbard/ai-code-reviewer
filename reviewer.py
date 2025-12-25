@@ -1204,7 +1204,14 @@ Output ONLY the lesson entry, nothing else."""
                     changed_files, commit_msg, self.session.current_directory
                 )
                 
-                # Commit and push (includes the REVIEW-SUMMARY.md update)
+                # Mark directory as done in the persistent index BEFORE commit
+                # so REVIEW-INDEX.md is included in the commit
+                if self.session.current_directory:
+                    self.index.mark_done(self.session.current_directory, 
+                                       f"Fixed by session {self.session.session_id}")
+                    self.index.save()
+                
+                # Commit and push (includes REVIEW-SUMMARY.md and REVIEW-INDEX.md)
                 success, output = self._commit_and_push(commit_msg)
                 if success:
                     # Get commit hash for logging
@@ -1219,11 +1226,6 @@ Output ONLY the lesson entry, nothing else."""
                         if self.session.current_directory not in self.session.completed_directories:
                             self.session.completed_directories.append(self.session.current_directory)
                         self.session.directories_completed += 1
-                        
-                        # Mark directory as done in the persistent index
-                        self.index.mark_done(self.session.current_directory, 
-                                           f"Fixed by session {self.session.session_id}")
-                        self.index.save()
                         
                         # Log directory complete
                         self.ops.directory_complete(
