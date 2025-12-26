@@ -118,6 +118,11 @@ class ReviewSession:
     changed_files: List[str] = field(default_factory=list)
     completed_directories: List[str] = field(default_factory=list)
     
+    # Loop detection
+    action_history: List[Tuple[str, str]] = field(default_factory=list)  # (action_type, key_info)
+    last_action_hash: Optional[str] = None
+    consecutive_identical_actions: int = 0
+    
     def get_progress_summary(self) -> str:
         """Get hierarchical progress summary."""
         lines = []
@@ -870,9 +875,117 @@ Output ONLY the lesson entry, nothing else."""
         print("*** Pushed successfully!")
         return True, output
     
+    def _get_action_hash(self, action: Dict[str, Any]) -> str:
+        """Generate a hash representing the action for loop detection."""
+        action_type = action.get('action', '')
+        # Include relevant details that make this action unique
+        if action_type == 'READ_FILE':
+            return f"READ_FILE:{action.get('file_path', '')}"
+        elif action_type == 'EDIT_FILE':
+            return f"EDIT_FILE:{action.get('file_path', '')}"
+        elif action_type == 'SET_SCOPE':
+            return f"SET_SCOPE:{action.get('directory', '')}"
+        elif action_type == 'NEXT_CHUNK':
+            return f"NEXT_CHUNK:{self.current_chunk_index}"
+        else:
+            return f"{action_type}"
+    
+    def _check_for_loop(self, action: Dict[str, Any]) -> Optional[str]:
+        """
+        Check if we're stuck in a loop (same action repeated too many times).
+        
+        Returns:
+            None if OK, warning message if loop detected (warns first),
+            triggers automatic recovery after MAX_BEFORE_RECOVERY warnings
+        """
+        action_hash = self._get_action_hash(action)
+        
+        # Track consecutive identical actions
+        if action_hash == self.session.last_action_hash:
+            self.session.consecutive_identical_actions += 1
+        else:
+            self.session.consecutive_identical_actions = 1
+            self.session.last_action_hash = action_hash
+        
+        # Add to history (keep last 20)
+        self.session.action_history.append((action.get('action', ''), action_hash))
+        if len(self.session.action_history) > 20:
+            self.session.action_history = self.session.action_history[-20:]
+        
+        # Check for infinite loop pattern
+        MAX_CONSECUTIVE_WARNING = 5  # Warn at 5 repetitions
+        MAX_CONSECUTIVE_RECOVERY = 10  # Force recovery at 10 repetitions
+        
+        if self.session.consecutive_identical_actions >= MAX_CONSECUTIVE_RECOVERY:
+            # Automatic recovery - things are seriously stuck
+            logger.error(f"Action {action_hash} repeated {self.session.consecutive_identical_actions} times - forcing recovery")
+            return self._recover_from_loop(action)
+        
+        elif self.session.consecutive_identical_actions >= MAX_CONSECUTIVE_WARNING:
+            action_type = action.get('action', '')
+            
+            # Special case: if stuck on READ_FILE, it's likely trying to verify a fix that never happened
+            if action_type == 'READ_FILE':
+                file_path = action.get('file_path', '')
+                return (
+                    f"\n{'='*70}\n"
+                    f"⚠️  INFINITE LOOP WARNING (attempt {self.session.consecutive_identical_actions}/{MAX_CONSECUTIVE_RECOVERY}) ⚠️\n"
+                    f"{'='*70}\n\n"
+                    f"You have READ the same file {self.session.consecutive_identical_actions} times in a row:\n"
+                    f"  {file_path}\n\n"
+                    f"This suggests you are:\n"
+                    f"1. Detecting a problem in the file\n"
+                    f"2. Saying you'll fix it\n"
+                    f"3. But then just reading it again instead of fixing it\n\n"
+                    f"BREAKING THE LOOP:\n\n"
+                    f"If there's a merge conflict or error in the file:\n"
+                    f"  ACTION: EDIT_FILE {file_path}\n"
+                    f"  OLD:\n"
+                    f"  <<<\n"
+                    f"  [copy the EXACT problematic section including context]\n"
+                    f"  >>>\n"
+                    f"  NEW:\n"
+                    f"  <<<\n"
+                    f"  [corrected version]\n"
+                    f"  >>>\n\n"
+                    f"If the file is beyond repair:\n"
+                    f"  ACTION: SKIP_FILE\n\n"
+                    f"If the directory is problematic:\n"
+                    f"  ACTION: SET_SCOPE <different-directory>\n\n"
+                    f"WARNING: If you repeat this action {MAX_CONSECUTIVE_RECOVERY - self.session.consecutive_identical_actions} more times,\n"
+                    f"automatic recovery will be triggered and progress will be lost.\n"
+                    f"{'='*70}\n"
+                )
+            
+            # Generic loop warning
+            return (
+                f"\n{'='*70}\n"
+                f"⚠️  INFINITE LOOP WARNING (attempt {self.session.consecutive_identical_actions}/{MAX_CONSECUTIVE_RECOVERY}) ⚠️\n"
+                f"{'='*70}\n\n"
+                f"Action {action_type} has been repeated {self.session.consecutive_identical_actions} times.\n"
+                f"Details: {action_hash}\n\n"
+                f"You must take a DIFFERENT action to break the loop.\n"
+                f"Consider:\n"
+                f"- Moving to a different file (READ_FILE <different-file>)\n"
+                f"- Skipping the current file (SKIP_FILE)\n"
+                f"- Changing directory (SET_SCOPE <different-directory>)\n"
+                f"- Running a build if you have changes (BUILD)\n\n"
+                f"WARNING: If you repeat this action {MAX_CONSECUTIVE_RECOVERY - self.session.consecutive_identical_actions} more times,\n"
+                f"automatic recovery will be triggered.\n"
+                f"{'='*70}\n"
+            )
+        
+        return None
+    
     def _execute_action(self, action: Dict[str, Any]) -> str:
         """Execute an action and return the result."""
         action_type = action.get('action', '')
+        
+        # Check for infinite loop before executing
+        loop_warning = self._check_for_loop(action)
+        if loop_warning:
+            logger.warning(f"Loop detected: {action_type} repeated {self.session.consecutive_identical_actions} times")
+            return loop_warning
         
         if action_type == 'FIND_FILE':
             pattern = action.get('pattern', '')
@@ -1440,6 +1553,126 @@ Output ONLY the lesson entry, nothing else."""
         
         return reviewable
     
+    def _recover_from_loop(self, action: Dict[str, Any]) -> str:
+        """
+        Automatically recover when stuck in an infinite loop.
+        
+        Actions taken:
+        1. Revert any uncommitted changes
+        2. Skip the current file if one is active
+        3. Force the AI to move on
+        
+        Returns:
+            Recovery message for the AI
+        """
+        logger.error("Infinite loop detected - initiating automatic recovery")
+        print("\n" + "="*70)
+        print("⚠️  AUTOMATIC LOOP RECOVERY INITIATED")
+        print("="*70)
+        
+        action_type = action.get('action', '')
+        recovery_actions = []
+        
+        # 1. Revert uncommitted changes if any
+        if self.session.pending_changes or self.git.has_changes():
+            print("Step 1: Reverting uncommitted changes...")
+            self._cleanup_dirty_state()
+            recovery_actions.append("Reverted all uncommitted changes")
+        
+        # 2. Clear chunked file state if stuck on chunks
+        if self.chunked_file_path:
+            stuck_file = str(self.chunked_file_path)
+            print(f"Step 2: Abandoning chunked file: {stuck_file}")
+            self.current_chunks = []
+            self.current_chunk_index = 0
+            self.chunked_file_path = None
+            recovery_actions.append(f"Abandoned chunked file: {stuck_file}")
+        
+        # 3. Force skip current file if stuck on READ_FILE
+        if action_type == 'READ_FILE' and self.session.current_file:
+            stuck_file = self.session.current_file
+            print(f"Step 3: Force-skipping stuck file: {stuck_file}")
+            self.session.current_file = None
+            recovery_actions.append(f"Force-skipped file: {stuck_file}")
+        
+        # 4. Reset loop detection
+        print("Step 4: Resetting loop detection counters")
+        self.session.consecutive_identical_actions = 0
+        self.session.last_action_hash = None
+        
+        print("="*70)
+        print("✓ RECOVERY COMPLETE - You must now take a different approach")
+        print("="*70 + "\n")
+        
+        # Build recovery message for AI
+        recovery_msg = (
+            f"\n{'='*70}\n"
+            f"🔄 AUTOMATIC RECOVERY COMPLETED\n"
+            f"{'='*70}\n\n"
+            f"You were stuck in an infinite loop. The system has automatically:\n"
+        )
+        for action in recovery_actions:
+            recovery_msg += f"  - {action}\n"
+        
+        recovery_msg += (
+            f"\n{'='*70}\n"
+            f"MANDATORY NEXT STEPS:\n"
+            f"{'='*70}\n\n"
+            f"You MUST choose ONE of these actions (no other action will be accepted):\n\n"
+            f"1. Move to a DIFFERENT file in the same directory:\n"
+            f"   ACTION: READ_FILE <different-file-path>\n\n"
+            f"2. Skip to the next directory:\n"
+            f"   ACTION: SET_SCOPE <different-directory>\n\n"
+            f"3. If you have files to review in current directory, list them:\n"
+            f"   ACTION: LIST_DIR {self.session.current_directory or '.'}\n\n"
+            f"4. If completely stuck, halt:\n"
+            f"   ACTION: HALT\n\n"
+            f"DO NOT attempt to read the same file again.\n"
+            f"DO NOT repeat the action that caused the loop.\n"
+            f"{'='*70}\n"
+        )
+        
+        return recovery_msg
+    
+    def _validate_response(self, response: str) -> Optional[str]:
+        """
+        Validate that AI response is complete and not truncated.
+        
+        Returns:
+            None if response is OK, warning message if problematic
+        """
+        # Check for signs of truncation
+        truncation_indicators = [
+            (lambda r: len(r) < 50, "Response is suspiciously short (< 50 chars)"),
+            (lambda r: r.endswith("Here'") or r.endswith("Let'"), "Response ends mid-word (truncated)"),
+            (lambda r: r.count("<<<") != r.count(">>>") and ("<<<" in r or ">>>" in r), 
+             "Mismatched <<< >>> delimiters (incomplete EDIT_FILE)"),
+            (lambda r: "ACTION: EDIT_FILE" in r and "OLD:" not in r, 
+             "EDIT_FILE action without OLD block"),
+            (lambda r: "OLD:" in r and "NEW:" not in r and "<<<" in r, 
+             "OLD block started but no NEW block"),
+        ]
+        
+        for check_fn, message in truncation_indicators:
+            if check_fn(response):
+                return (
+                    f"\n⚠️  INCOMPLETE RESPONSE DETECTED\n\n"
+                    f"Problem: {message}\n"
+                    f"Response length: {len(response)} chars\n"
+                    f"Last 100 chars: ...{response[-100:]}\n\n"
+                    f"Your response appears to have been cut off before completion.\n"
+                    f"Please provide a COMPLETE response including:\n"
+                    f"1. Your analysis\n"
+                    f"2. A SINGLE, COMPLETE ACTION directive\n"
+                    f"3. For EDIT_FILE: both complete OLD and NEW blocks\n\n"
+                    f"If you're working with a large file causing timeouts:\n"
+                    f"- Focus on ONE specific issue at a time\n"
+                    f"- Use smaller OLD/NEW blocks\n"
+                    f"- Consider SKIP_FILE if the file is too complex\n"
+                )
+        
+        return None
+    
     def _cleanup_dirty_state(self) -> None:
         """Clean up any uncommitted changes before ending session."""
         if self.session.pending_changes or self.git.has_changes():
@@ -1549,6 +1782,16 @@ Output ONLY the lesson entry, nothing else."""
             print('='*60)
             
             self.history.append({"role": "assistant", "content": response})
+            
+            # Validate response completeness
+            response_warning = self._validate_response(response)
+            if response_warning:
+                logger.warning("Response appears truncated or incomplete")
+                self.history.append({
+                    "role": "user",
+                    "content": response_warning
+                })
+                continue
             
             action = self.parser.parse(response)
             
