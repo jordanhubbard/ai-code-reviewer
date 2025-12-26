@@ -71,22 +71,7 @@ config-update:
 		echo ""; \
 	else \
 		echo "Updating config.yaml with new defaults..."; \
-		$(PYTHON) -c " \
-import yaml; \
-with open('config.yaml.defaults') as f: defaults = yaml.safe_load(f); \
-with open('config.yaml') as f: config = yaml.safe_load(f); \
-def merge(d, c): \
-    for k, v in d.items(): \
-        if k not in c: \
-            print(f'  Adding new key: {k}'); \
-            c[k] = v; \
-        elif isinstance(v, dict) and isinstance(c.get(k), dict): \
-            merge(v, c[k]); \
-    return c; \
-merged = merge(defaults, config); \
-with open('config.yaml', 'w') as f: yaml.dump(merged, f, default_flow_style=False, sort_keys=False); \
-print('Done.'); \
-"; \
+		$(PYTHON) scripts/config_update.py; \
 	fi
 
 #
