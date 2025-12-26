@@ -341,7 +341,8 @@ class ReviewLoop:
         build_executor: Any,
         source_root: Path,
         persona_dir: Path,
-        max_iterations: int = 50,
+        target_directories: int = 10,
+        max_iterations_per_directory: int = 200,
         log_dir: Optional[Path] = None,
         ops_logger: Optional[OpsLogger] = None,
     ):
@@ -349,7 +350,8 @@ class ReviewLoop:
         self.builder = build_executor
         self.source_root = source_root
         self.persona_dir = persona_dir
-        self.max_iterations = max_iterations
+        self.target_directories = target_directories
+        self.max_iterations_per_directory = max_iterations_per_directory
         
         # All persona files live in persona_dir (keeps source tree clean!)
         self.bootstrap_file = persona_dir / "AI_START_HERE.md"
@@ -1438,15 +1440,37 @@ Output ONLY the lesson entry, nothing else."""
         
         return reviewable
     
+    def _cleanup_dirty_state(self) -> None:
+        """Clean up any uncommitted changes before ending session."""
+        if self.session.pending_changes or self.git.has_changes():
+            print("\n*** Cleaning up uncommitted changes...")
+            # Revert any modified source files
+            for file_path in self.session.changed_files:
+                full_path = self.source_root / file_path
+                if full_path.exists():
+                    code, output = self.git._run(['checkout', str(full_path)])
+                    if code == 0:
+                        print(f"    Reverted: {file_path}")
+            
+            # Also revert REVIEW-INDEX.md if modified
+            code, output = self.git._run(['checkout', 'REVIEW-INDEX.md'])
+            if code == 0:
+                print("    Reverted: REVIEW-INDEX.md")
+            
+            self.session.pending_changes = False
+            self.session.changed_files = []
+            print("*** Working tree cleaned")
+    
     def run(self) -> None:
-        """Run the main review loop."""
+        """Run the main review loop until target directories completed."""
         logger.info("Starting review loop...")
         
         # Log session start
         self.ops.session_start({
             "source_root": str(self.source_root),
             "persona": str(self.persona_dir.name),
-            "max_iterations": self.max_iterations,
+            "target_directories": self.target_directories,
+            "max_iterations_per_directory": self.max_iterations_per_directory,
         })
         
         # Show initial git status
@@ -1455,12 +1479,40 @@ Output ONLY the lesson entry, nothing else."""
             print("\n*** Git status at start:")
             print(status)
         
-        for step in range(1, self.max_iterations + 1):
+        step = 0
+        directory_iterations = 0  # Iterations spent on current directory
+        last_directory = None
+        
+        # Continue until we've completed target directories (or 0 = unlimited)
+        while self.target_directories == 0 or self.session.directories_completed < self.target_directories:
+            step += 1
+            
+            # Track iterations per directory
+            if self.session.current_directory != last_directory:
+                directory_iterations = 0
+                last_directory = self.session.current_directory
+            directory_iterations += 1
+            
+            # Check if stuck on current directory too long
+            if directory_iterations > self.max_iterations_per_directory:
+                print(f"\n*** WARNING: Exceeded {self.max_iterations_per_directory} iterations on {self.session.current_directory}")
+                print("*** Cleaning up and moving to next directory...")
+                self._cleanup_dirty_state()
+                # Force AI to move on
+                self.history.append({
+                    "role": "user", 
+                    "content": f"TIMEOUT: You have spent too many iterations on {self.session.current_directory}. "
+                              f"This directory is being skipped. Use SET_SCOPE to move to the next directory."
+                })
+                directory_iterations = 0
+                continue
+            
             # Show hierarchical progress
             progress_summary = self.session.get_progress_summary()
-            logger.info(f"Step {step}/{self.max_iterations} | {self.session.current_directory or 'No scope'}")
+            dir_progress = f"{self.session.directories_completed}/{self.target_directories}" if self.target_directories > 0 else f"{self.session.directories_completed}"
+            logger.info(f"Step {step} | Dir {dir_progress} | {self.session.current_directory or 'No scope'} ({directory_iterations}/{self.max_iterations_per_directory})")
             print(f"\n{'='*70}")
-            print(f"STEP {step}/{self.max_iterations}")
+            print(f"STEP {step} | Directories: {dir_progress} | Current: {self.session.current_directory or 'None'} ({directory_iterations}/{self.max_iterations_per_directory})")
             if progress_summary:
                 print(f"\n{progress_summary}")
             print('='*70)
@@ -1530,6 +1582,9 @@ Output ONLY the lesson entry, nothing else."""
             if len(self.history) > 42:
                 self.history = self.history[:2] + self.history[-40:]
         
+        # ALWAYS clean up dirty state before ending
+        self._cleanup_dirty_state()
+        
         # Log session end
         self.ops.session_end(
             directories_completed=self.session.directories_completed,
@@ -1549,9 +1604,6 @@ Output ONLY the lesson entry, nothing else."""
                 print(f"  ✓ {d}")
         print(f"Files fixed: {self.session.files_fixed}")
         print(f"Build failures: {self.session.build_failures}")
-        if self.session.pending_changes:
-            print(f"\n*** WARNING: Uncommitted changes in {self.session.current_directory or 'unknown'}!")
-            print(self.git.show_status())
         print("=" * 60)
 
 
@@ -1904,7 +1956,8 @@ Examples:
         source_root=source_root,
         persona_dir=persona_dir,
         ops_logger=ops_logger,
-        max_iterations=review_config.get('max_iterations', 50),
+        target_directories=review_config.get('target_directories', 10),
+        max_iterations_per_directory=review_config.get('max_iterations_per_directory', 200),
     )
     
     try:
