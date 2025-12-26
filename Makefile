@@ -16,7 +16,7 @@ PYTHON?=	python3
 # All paths are relative to the Makefile
 
 # Phony targets
-.PHONY: all deps check-deps validate run run-verbose test clean clean-all help
+.PHONY: all deps check-deps config-update validate run run-verbose test clean clean-all help
 
 # Default target
 all: help
@@ -57,6 +57,37 @@ deps:
 	@echo "Installing Python dependencies..."
 	$(PYTHON) -m pip install --user -r requirements.txt
 	@echo "Done. Dependencies installed."
+
+# Update config.yaml with new defaults from config.yaml.defaults
+# If config.yaml doesn't exist, creates it from defaults
+config-update:
+	@if [ ! -f config.yaml ]; then \
+		echo "Creating config.yaml from defaults..."; \
+		cp config.yaml.defaults config.yaml; \
+		echo ""; \
+		echo "*** config.yaml created - do not forget to customize it! ***"; \
+		echo "    At minimum, set your Ollama server URL:"; \
+		echo "      ollama.url: \"http://your-ollama-server:11434\""; \
+		echo ""; \
+	else \
+		echo "Updating config.yaml with new defaults..."; \
+		$(PYTHON) -c " \
+import yaml; \
+with open('config.yaml.defaults') as f: defaults = yaml.safe_load(f); \
+with open('config.yaml') as f: config = yaml.safe_load(f); \
+def merge(d, c): \
+    for k, v in d.items(): \
+        if k not in c: \
+            print(f'  Adding new key: {k}'); \
+            c[k] = v; \
+        elif isinstance(v, dict) and isinstance(c.get(k), dict): \
+            merge(v, c[k]); \
+    return c; \
+merged = merge(defaults, config); \
+with open('config.yaml', 'w') as f: yaml.dump(merged, f, default_flow_style=False, sort_keys=False); \
+print('Done.'); \
+"; \
+	fi
 
 #
 # Validation targets
@@ -119,9 +150,10 @@ help:
 	@echo "Uses remote Ollama server for AI, validates with YOUR build command."
 	@echo ""
 	@echo "Setup:"
-	@echo "  make check-deps   Check/install Python3, pip, and PyYAML (auto-runs on 'make run')"
-	@echo "  vim config.yaml   Configure Ollama server URL and model"
-	@echo "  make validate     Test connection to Ollama server"
+	@echo "  make check-deps     Check/install Python3, pip, and PyYAML (auto-runs on 'make run')"
+	@echo "  make config-update  Create or update config.yaml with new defaults"
+	@echo "  vim config.yaml     Configure Ollama server URL and model"
+	@echo "  make validate       Test connection to Ollama server"
 	@echo ""
 	@echo "Usage:"
 	@echo "  make run          Start the review loop (auto-checks dependencies)"
