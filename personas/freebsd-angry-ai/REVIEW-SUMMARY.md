@@ -18,39 +18,6 @@
 
 ---
 
-## 2025-12-27 22:05 - bin/rmdir ✓
-
-**Directory:** `bin/rmdir`
-
-**Summary:** rmdir: Update review status to in-progress
-
-**Files fixed:**
-  - REVIEW-INDEX.md
-
----
-
-## 2025-12-27 22:03 - bin/rm ✓
-
-**Directory:** `bin/rm`
-
-**Summary:** rm: Update review status to in-progress
-
-**Files fixed:**
-  - REVIEW-INDEX.md
-
----
-
-## 2025-12-27 21:24 - bin/realpath ✓
-
-**Directory:** `bin/realpath`
-
-**Summary:** realpath: Update review status to in-progress
-
-**Files fixed:**
-  - REVIEW-INDEX.md
-
----
-
 ## 2025-12-27 21:20 - bin/pwd ✓
 
 **Directory:** `bin/pwd`
@@ -75,61 +42,6 @@
 
 ---
 
-## 2025-12-27 21:06 - bin/cpuset ✓
-
-**Directory:** `bin/cpuset`
-
-**Summary:** cpuset: Update review status in REVIEW-INDEX.md
-
-**Files fixed:**
-  - REVIEW-INDEX.md
-
----
-
-## 2025-12-27 18:07 - bin/ps ✓
-
-**Directory:** `bin/ps`
-
-**Summary:** ps: Update review status to in-progress
-
-**Files fixed:**
-  - REVIEW-INDEX.md
-
----
-
-## 2025-12-27 17:49 - bin/cpuset ✓
-
-**Directory:** `bin/cpuset`
-
-**Summary:** cpuset: Update review status and position
-
-**Files fixed:**
-  - REVIEW-INDEX.md
-
----
-
-## 2025-12-27 15:43 - bin/pkill/tests ✓
-
-**Directory:** `bin/pkill/tests`
-
-**Summary:** tests: Update review status for bin/pkill/tests
-
-**Files fixed:**
-  - REVIEW-INDEX.md
-
----
-
-## 2025-12-27 15:40 - bin/cpuset ✓
-
-**Directory:** `bin/cpuset`
-
-**Summary:** cpuset: Update review status and position
-
-**Files fixed:**
-  - REVIEW-INDEX.md
-
----
-
 ## 2025-12-27 14:13 - bin/cpuset ✓
 
 **Directory:** `bin/cpuset`
@@ -138,39 +50,6 @@
 
 **Files fixed:**
   - bin/pkill/tests/spin_helper.c
-
----
-
-## 2025-12-27 14:09 - bin/cpuset ✓
-
-**Directory:** `bin/cpuset`
-
-**Summary:** cpuset: Update review status in REVIEW-INDEX.md
-
-**Files fixed:**
-  - REVIEW-INDEX.md
-
----
-
-## 2025-12-27 10:28 - sbin/mount ✓
-
-**Directory:** `sbin/mount`
-
-**Summary:** mount: Update review status and mark as in progress
-
-**Files fixed:**
-  - REVIEW-INDEX.md
-
----
-
-## 2025-12-27 10:25 - bin/cpuset ✓
-
-**Directory:** `bin/cpuset`
-
-**Summary:** cpuset: Update review status in REVIEW-INDEX.md
-
-**Files fixed:**
-  - REVIEW-INDEX.md
 
 ---
 
@@ -220,28 +99,6 @@
 
 ---
 
-## 2025-12-27 08:24 - bin/cpuset ✓
-
-**Directory:** `bin/cpuset`
-
-**Summary:** cpuset: Update REVIEW-INDEX.md generation timestamp
-
-**Files fixed:**
-  - REVIEW-INDEX.md
-
----
-
-## 2025-12-27 06:35 - bin/cpuset ✓
-
-**Directory:** `bin/cpuset`
-
-**Summary:** cpuset: Update review status in REVIEW-INDEX.md
-
-**Files fixed:**
-  - REVIEW-INDEX.md
-
----
-
 ## 2025-12-27 04:57 - bin/pax ✓
 
 **Directory:** `bin/pax`
@@ -250,50 +107,6 @@
 
 **Files fixed:**
 
-
----
-
-## 2025-12-27 03:29 - bin/nproc ✓
-
-**Directory:** `bin/nproc`
-
-**Summary:** nproc: Update review status to in-progress
-
-**Files fixed:**
-  - REVIEW-INDEX.md
-
----
-
-## 2025-12-27 03:24 - bin/cpuset ✓
-
-**Directory:** `bin/cpuset`
-
-**Summary:** cpuset: Update REVIEW-INDEX.md to reflect current status
-
-**Files fixed:**
-  - REVIEW-INDEX.md
-
----
-
-## 2025-12-27 02:13 - bin/mv ✓
-
-**Directory:** `bin/mv`
-
-**Summary:** mv: Update review status to in-progress
-
-**Files fixed:**
-  - REVIEW-INDEX.md
-
----
-
-## 2025-12-27 02:09 - bin/mkdir ✓
-
-**Directory:** `bin/mkdir`
-
-**Summary:** mkdir: Update REVIEW-INDEX.md with correct line counts
-
-**Files fixed:**
-  - REVIEW-INDEX.md
 
 ---
 
@@ -306,28 +119,6 @@
 **Files fixed:**
   - REVIEW-INDEX.md
   - bin/cpuset/cpuset.c
-
----
-
-## 2025-12-26 16:04 - bin/ln ✓
-
-**Directory:** `bin/ln`
-
-**Summary:** ln: Update review status to in-progress
-
-**Files fixed:**
-  - REVIEW-INDEX.md
-
----
-
-## 2025-12-26 15:40 - bin/kill ✓
-
-**Directory:** `bin/kill`
-
-**Summary:** kill: Update review status to in-progress
-
-**Files fixed:**
-  - REVIEW-INDEX.md
 
 ---
 
@@ -355,17 +146,6 @@
 
 ---
 
-## 2025-12-26 03:08 - bin/getfacl ✓
-
-**Directory:** `bin/getfacl`
-
-**Summary:** getfacl: Update review status to in-progress
-
-**Files fixed:**
-  - REVIEW-INDEX.md
-
----
-
 ## 2025-12-26 03:05 - bin/ed ✓
 
 **Directory:** `bin/ed`
@@ -378,94 +158,6 @@
 
 ---
 
-## 2025-12-26 02:54 - bin/echo ✓
-
-**Directory:** `bin/echo`
-
-**Summary:** echo: Update review status to in-progress
-
-**Files fixed:**
-  - REVIEW-INDEX.md
-
----
-
-## 2025-12-26 02:51 - bin/domainname ✓
-
-**Directory:** `bin/domainname`
-
-**Summary:** domainname: Update review status to in-progress
-
-**Files fixed:**
-  - REVIEW-INDEX.md
-
----
-
-## 2025-12-26 02:49 - bin/df ✓
-
-**Directory:** `bin/df`
-
-**Summary:** df: Update review status to in-progress
-
-**Files fixed:**
-  - REVIEW-INDEX.md
-
----
-
-## 2025-12-26 02:46 - bin/cpuset ✓
-
-**Directory:** `bin/cpuset`
-
-**Summary:** cpuset: Update review status in REVIEW-INDEX.md
-
-**Files fixed:**
-  - REVIEW-INDEX.md
-
----
-
-## 2025-12-26 01:11 - bin/cpuset ✓
-
-**Directory:** `bin/cpuset`
-
-**Summary:** cpuset: Update review status in REVIEW-INDEX.md
-
-**Files fixed:**
-  - REVIEW-INDEX.md
-
----
-
-## 2025-12-26 00:03 - bin/cpuset ✓
-
-**Directory:** `bin/cpuset`
-
-**Summary:** cpuset: Update review status in REVIEW-INDEX.md
-
-**Files fixed:**
-  - REVIEW-INDEX.md
-
----
-
-## 2025-12-25 22:54 - bin/cpuset ✓
-
-**Directory:** `bin/cpuset`
-
-**Summary:** cpuset: Update review status in REVIEW-INDEX.md
-
-**Files fixed:**
-  - REVIEW-INDEX.md
-
----
-
-## 2025-12-25 21:46 - bin/cpuset ✓
-
-**Directory:** `bin/cpuset`
-
-**Summary:** cpuset: Update review status in REVIEW-INDEX.md
-
-**Files fixed:**
-  - REVIEW-INDEX.md
-
----
-
 ## 2025-12-25 20:16 - bin/cpuset ✓
 
 **Directory:** `bin/cpuset`
@@ -475,17 +167,6 @@
 **Files fixed:**
   - REVIEW-INDEX.md
   - bin/cpuset/cpuset.c
-
----
-
-## 2025-12-25 18:58 - bin/cpuset ✓
-
-**Directory:** `bin/cpuset`
-
-**Summary:** cpuset: Update review status in REVIEW-INDEX.md
-
-**Files fixed:**
-  - REVIEW-INDEX.md
 
 ---
 
@@ -513,61 +194,6 @@
 
 ---
 
-## 2025-12-25 15:52 - bin/date ✓
-
-**Directory:** `bin/date`
-
-**Summary:** date: Update review status to in-progress
-
-**Files fixed:**
-  - REVIEW-INDEX.md
-
----
-
-## 2025-12-25 15:43 - bin/csh ✓
-
-**Directory:** `bin/csh`
-
-**Summary:** csh: Update review status to in-progress
-
-**Files fixed:**
-  - REVIEW-INDEX.md
-
----
-
-## 2025-12-25 15:30 - bin/cpuset ✓
-
-**Directory:** `bin/cpuset`
-
-**Summary:** cpuset: Update REVIEW-INDEX.md to reflect current status
-
-**Files fixed:**
-  - REVIEW-INDEX.md
-
----
-
-## 2025-12-25 15:24 - bin/cp ✓
-
-**Directory:** `bin/cp`
-
-**Summary:** cp: Update review status for cp directory
-
-**Files fixed:**
-  - REVIEW-INDEX.md
-
----
-
-## 2025-12-25 15:18 - bin/cpuset ✓
-
-**Directory:** `bin/cpuset`
-
-**Summary:** cpuset: Update review status for cpuset directory
-
-**Files fixed:**
-  - REVIEW-INDEX.md
-
----
-
 ## 2025-12-25 15:12 - bin/chmod ✓
 
 **Directory:** `bin/chmod`
@@ -580,28 +206,6 @@
 
 ---
 
-## 2025-12-25 14:59 - bin/chio ✓
-
-**Directory:** `bin/chio`
-
-**Summary:** chio: Update review status and line count
-
-**Files fixed:**
-  - REVIEW-INDEX.md
-
----
-
-## 2025-12-25 11:06 - bin/chflags ✓
-
-**Directory:** `bin/chflags`
-
-**Summary:** chflags: Update REVIEW-INDEX.md generation timestamp
-
-**Files fixed:**
-  - REVIEW-INDEX.md
-
----
-
 ## 2025-12-25 10:57 - bin/chflags ✓
 
 **Directory:** `bin/chflags`
@@ -611,17 +215,6 @@
 **Files fixed:**
   - REVIEW-INDEX.md
   - bin/chio/chio.c
-
----
-
-## 2025-12-25 10:37 - bin/chflags ✓
-
-**Directory:** `bin/chflags`
-
-**Summary:** chflags: Update REVIEW-INDEX.md generation timestamp
-
-**Files fixed:**
-  - REVIEW-INDEX.md
 
 ---
 

@@ -10,6 +10,7 @@ This module is designed to be cross-platform and run on FreeBSD.
 
 import json
 import logging
+import os
 import sys
 import time
 from dataclasses import dataclass
@@ -431,10 +432,14 @@ def create_client_from_config(config_dict: Dict[str, Any]) -> OllamaClient:
         Configured OllamaClient
     """
     ollama_config = config_dict.get('ollama', {})
-    
+
+    # Allow environment variables to override config values for deployments
+    env_url = os.environ.get('ANGRY_AI_OLLAMA_URL') or os.environ.get('OLLAMA_URL')
+    env_model = os.environ.get('ANGRY_AI_OLLAMA_MODEL') or os.environ.get('OLLAMA_MODEL')
+
     config = OllamaConfig(
-        url=ollama_config.get('url', 'http://localhost:11434'),
-        model=ollama_config.get('model', 'qwen2.5-coder:32b'),
+        url=env_url or ollama_config.get('url', 'http://localhost:11434'),
+        model=env_model or ollama_config.get('model', 'qwen2.5-coder:32b'),
         timeout=ollama_config.get('timeout', 300),
         max_tokens=ollama_config.get('max_tokens', 4096),
         temperature=ollama_config.get('temperature', 0.1),
@@ -448,13 +453,15 @@ if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
     
     print("Testing Ollama client...")
-    print(f"Default URL: http://localhost:11434")
+    default_url = os.environ.get('ANGRY_AI_OLLAMA_URL') or os.environ.get('OLLAMA_URL') or "http://localhost:11434"
+    default_model = os.environ.get('ANGRY_AI_OLLAMA_MODEL') or os.environ.get('OLLAMA_MODEL') or "qwen2.5-coder:32b"
+    print(f"Default URL: {default_url}")
     print()
     
     try:
         config = OllamaConfig(
-            url="http://localhost:11434",
-            model="qwen2.5-coder:32b",
+            url=default_url,
+            model=default_model,
         )
         client = OllamaClient(config)
         

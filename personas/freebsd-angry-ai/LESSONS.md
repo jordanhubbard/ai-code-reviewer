@@ -249,64 +249,34 @@ When converting atoi()/atol() to strtol() with validation:
 - How to avoid it next time: Ensure all output streams are properly managed and that no processes prematurely terminate.
 
 
-## 2025-12-20 11:54
-### COMPILER: Broken Pipe Error
-- What went wrong: The build system encountered a broken pipe error.
-- How to avoid it next time: Ensure all output streams are properly handled and that no processes prematurely terminate.
-
-
-## 2025-12-20 11:58
-### COMPILER: Broken Pipe Error
-- What went wrong: The build system encountered a broken pipe error.
-- How to avoid it next time: Ensure all output streams are properly handled and check for any issues with the build environment or configuration.
-
-
-## 2025-12-20 12:02
-### COMPILER: Broken Pipe Error
-- What went wrong: The build system encountered a broken pipe error.
-- How to avoid it next time: Ensure all output streams are properly handled and check for any issues with resource limits or process termination.
-
-
-## 2025-12-20 12:08
-### COMPILER: Broken Pipe Error
-- What went wrong: The build system encountered a broken pipe error.
-- How to avoid it next time: Ensure all output streams are properly managed and check for any issues with resource limits or process termination.
-
-
 ## 2025-12-21 16:03
 ### COMPILER: Function Type Conflicts and Pointer Qualifiers
 - Conflicting function types and passing `const char *` to a non-const parameter caused build errors.
 - Ensure consistent function declarations and use `const char *` for functions that do not modify the string.
 
 
+## 2025-12-22 19:30
+### COMPILER: Const Qualifier Warning
+- Passing a `const EVP_MD *` to a parameter expecting `EVP_MD *` discards qualifiers.
+- Ensure function parameters match the constness of the arguments passed.
+
+
+## 2025-12-22 19:46
+### COMPILER: Empty Error Reports
+- Multiple builds failed between 2025-12-22 19:46 and 2025-12-23 10:13 without emitting diagnostics.
+- Capture verbose build logs, verify toolchain installation, and increase logging to surface the underlying faults instead of rerunning blindly.
+
+
+## 2025-12-23 10:51
+### COMPILER: Build System Configuration Issue
+- The build system reported a failure without specific errors or warnings.
+- Verify build configuration and environment setup to ensure all dependencies are correctly installed and paths are properly configured.
+
+
 ## 2025-12-25 11:48
 ### COMPILER: Stale .depend Files and Type Mismatch Errors
 - Stale `.depend` files caused build failures; type mismatch errors occurred due to comparing a negative constant with an unsigned short.
 - Clean build directories using `make clean` before building; ensure proper type comparisons in code.
-
-
-## 2025-12-25 11:50
-### COMPILER: Stale .depend Files and Comparison Error
-- Stale `.depend` files caused build failures; a comparison error occurred due to type mismatch.
-- Clean build directory with `make clean` before building; ensure correct types in comparisons.
-
-
-## 2025-12-25 11:51
-### COMPILER: Stale .depend Files and Comparison Error
-- Stale `.depend` files caused build failures; a comparison error occurred due to type mismatch.
-- Clean build directory with `make clean` before building; ensure types match in comparisons.
-
-
-## 2025-12-25 11:53
-### COMPILER: Stale .depend Files and Comparison Error
-- Stale `.depend` files caused build failures; a comparison error occurred due to type mismatch.
-- Clean build directory with `make clean` before building again; ensure correct types in comparisons.
-
-
-## 2025-12-25 12:29
-### COMPILER: Stale .depend Files and Comparison Error
-- Stale `.depend` files caused build failures; a comparison error occurred due to type mismatch.
-- Clean build directory with `make clean` before building; ensure types match in comparisons.
 
 
 ## 2025-12-25 14:42
@@ -323,400 +293,23 @@ When converting atoi()/atol() to strtol() with validation:
 
 ## 2025-12-26 05:14
 ### COMPILER: Stale .depend Files and Syntax Errors
-- Stale `.depend` files caused build failures; syntax errors in `hostname.c` were not addressed.
-- Clean build directories with `make clean` before building to remove stale dependencies; review and correct all compiler-reported syntax issues.
-
-
-## 2025-12-26 05:16
-### COMPILER: Stale .depend Files and Syntax Error
-- Stale `.depend` files caused build failures; syntax error in `hostname.c`.
-- Clean build directory with `make clean` and check for syntax errors in source code.
-
-
-## 2025-12-26 05:17
-### COMPILER: Stale .depend Files and Syntax Error
-- Stale `.depend` files caused build failures; syntax error in `hostname.c`.
-- Clean build directory with `make clean` and check for syntax errors before building.
-
-
-## 2025-12-26 05:19
-### COMPILER: Stale .depend Files and Syntax Error
-- Stale `.depend` files caused build failures; syntax error in `hostname.c`.
-- Clean build directory with `make clean` and check for syntax errors in source code.
-
-
-## 2025-12-26 05:21
-### COMPILER: Stale .depend Files and Syntax Error
-- Stale `.depend` files caused build issues; syntax error in `hostname.c`.
-- Clean build directory with `make clean` and check for syntax errors before building.
-
-
-## 2025-12-26 05:22
-### COMPILER: Stale .depend Files and Syntax Error
-- Stale `.depend` files caused build failures; syntax error in `hostname.c`.
-- Clean build directory with `make clean` before building; review code for syntax errors.
-
-
-## 2025-12-26 05:24
-### COMPILER: Stale .depend Files and Syntax Error
-- Stale `.depend` files caused build failures; syntax error in `hostname.c`.
-- Clean build directory with `make clean` and fix syntax errors in source code.
-
-
-## 2025-12-26 05:26
-### COMPILER: Stale .depend Files and Syntax Error
-- Stale `.depend` files caused build failures; syntax error in `hostname.c`.
-- Clean build directory with `make clean` and check for syntax errors in source code.
-
-
-## 2025-12-26 05:28
-### COMPILER: Stale .depend Files and Syntax Error
-- Stale `.depend` files caused build failures; syntax error in `hostname.c`.
-- Clean build directory with `make clean` and fix syntax errors in source code.
-
-
-## 2025-12-26 05:30
-### COMPILER: Stale .depend Files and Syntax Error
-- Stale `.depend` files caused build failures; syntax error in `hostname.c`.
-- Clean build directory with `make clean` and check for syntax errors in source code.
-
-
-## 2025-12-26 05:32
-### COMPILER: Stale .depend Files and Syntax Error
-- Stale `.depend` files caused build failures; syntax error in `hostname.c`.
-- Clean build directory with `make clean` before building; review code for syntax errors.
-
-
-## 2025-12-26 05:33
-### COMPILER: Stale .depend Files and Syntax Error
-- Stale `.depend` files caused build failures; syntax error in `hostname.c`.
-- Clean build directory with `make clean` before building; review code for syntax errors.
-
-
-## 2025-12-26 05:35
-### COMPILER: Stale .depend Files and Syntax Error
-- Stale `.depend` files caused build failures; syntax error in `hostname.c`.
-- Clean build directory with `make clean` and fix syntax errors in source code.
-
-
-## 2025-12-26 05:37
-### COMPILER: Stale .depend Files and Syntax Error
-- Stale `.depend` files caused build failures; syntax error in `hostname.c`.
-- Clean build directory with `make clean` and check for syntax errors in source code.
-
-
-## 2025-12-26 05:39
-### COMPILER: Stale .depend Files and Syntax Error
-- Stale `.depend` files caused build failures; syntax error in `hostname.c`.
-- Clean build directory with `make clean` and fix syntax errors in source code.
-
-
-## 2025-12-26 05:40
-### COMPILER: Stale .depend files and syntax error in hostname.c
-- Stale .depend files were ignored; a syntax error was present in hostname.c.
-- Clean build directories with `make clean` and verify code for syntax errors before building.
-
-
-## 2025-12-26 05:42
-### COMPILER: Stale .depend Files and Syntax Error
-- Stale `.depend` files caused build failures; syntax error in `hostname.c`.
-- Clean build directory with `make clean` before building; review code for syntax errors.
-
-
-## 2025-12-26 05:44
-### COMPILER: Stale .depend Files and Syntax Error
-- Stale `.depend` files caused build failures; syntax error in `hostname.c`.
-- Clean build directory with `make clean` before building; review code for syntax errors.
-
-
-## 2025-12-26 05:47
-### COMPILER: Stale .depend Files and Syntax Error
-- Stale `.depend` files caused build failures; syntax error in `hostname.c`.
-- Clean build directory with `make clean` and check for syntax errors in source code.
-
-
-## 2025-12-26 05:50
-### COMPILER: Stale .depend Files and Syntax Error
-- Stale `.depend` files caused build failures; syntax error in `hostname.c`.
-- Clean build directory with `make clean` before building; review code for syntax errors.
-
-
-## 2025-12-26 05:52
-### COMPILER: Stale .depend Files and Syntax Error
-- Stale `.depend` files caused build failures; syntax error in `hostname.c`.
-- Clean build directory with `make clean` and check for syntax errors in source code.
+- A wave of builds failed because stale `.depend` files masked persistent syntax errors in `hostname.c`.
+- Always `make clean` before large refactors and fix every compiler-reported syntax issue before retrying the build.
 
 
 ## 2025-12-27 02:07
 ### COMPILER: Stale .depend Files and Undefined Identifiers
-- Stale `.depend` files caused build errors; undeclared identifier 'mode' in `mkdir.c`.
-- Clean build environment using `make clean` before building to remove stale dependencies; review code for undefined identifiers.
+- Stale `.depend` files caused build errors; undeclared identifier `mode` in `mkdir.c` slipped through.
+- Clean build environments and ensure every new symbol is declared in the right header before use.
 
 
 ## 2025-12-27 04:39
 ### COMPILER: Uninitialized Variable Usage
-- What went wrong: The variable 'mpos' was used uninitialized in `ar_io.c`.
-- How to avoid it next time: Initialize all variables before use and enable compiler warnings for uninitialized variables.
+- The variable `mpos` was used uninitialized in `ar_io.c`.
+- Initialize all variables before use and keep `-Wuninitialized` warnings enabled in CI.
 
 
 ## 2025-12-27 18:05
 ### COMPILER: Stale .depend Files and Integer Conversion Errors
 - Stale `.depend` files caused build issues; integer conversion errors in `fmt.c` led to further failures.
-- Clean build directories with `make clean` before rebuilding; ensure type consistency in C code.
-
-## 2025-12-22 19:30
-### COMPILER: Const Qualifier Warning
-- Passing a `const EVP_MD *` to a parameter expecting `EVP_MD *` discards qualifiers.
-- Ensure function parameters match the constness of the arguments passed.
-
-
-## 2025-12-22 19:46
-### COMPILER: Empty Error Report
-- The build failed without specific error messages.
-- Ensure all dependencies are correctly installed and check for silent failures in logs.
-
-
-## 2025-12-22 20:04
-### COMPILER: Empty Error Report
-- The build failed without specific error messages.
-- Ensure all dependencies and configurations are correctly set up before building.
-
-
-## 2025-12-22 20:11
-### COMPILER: Empty Error Report
-- The build failed without specific error messages.
-- Ensure all dependencies and configurations are correctly set up before building.
-
-
-## 2025-12-22 20:17
-### COMPILER: Empty Error Report
-- The build failed without specific error messages.
-- Ensure all dependencies and configurations are correctly set up before building.
-
-
-## 2025-12-22 20:25
-### COMPILER: Empty Error Report
-- The build failed without specific error messages.
-- Ensure all dependencies and configurations are correctly set up before building.
-
-
-## 2025-12-22 20:33
-### COMPILER: Empty Error Report
-- The build failed without specific error messages.
-- Ensure all dependencies and configurations are correct; check logs for hidden errors.
-
-
-## 2025-12-22 21:56
-### COMPILER: Empty Error Log
-- The build failed without any specific error messages.
-- Ensure all dependencies are correctly installed and check for silent failures in logs or environment issues.
-
-
-## 2025-12-22 22:03
-### COMPILER: Empty Error Report
-- The build failed without specific error messages.
-- Ensure all dependencies and environment configurations are correct; check logs for hidden errors or warnings.
-
-
-## 2025-12-22 22:10
-### COMPILER: Empty Error Report
-- The build failed without specific error messages.
-- Ensure all dependencies and configurations are correctly set up before building.
-
-
-## 2025-12-22 22:18
-### COMPILER: Empty Error Report
-- The build failed without specific error messages.
-- Ensure all dependencies and configurations are correctly set up before building.
-
-
-## 2025-12-22 22:26
-### COMPILER: Empty Error Report
-- The build failed without specific error messages.
-- Ensure all dependencies and configurations are correctly set up before building.
-
-
-## 2025-12-22 22:54
-### COMPILER: Empty Error Report
-- The build failed without specific error messages.
-- Ensure all dependencies and configurations are correctly set up before building.
-
-
-## 2025-12-22 23:35
-### COMPILER: Empty Error Log
-- The build failed without any specific error messages.
-- Ensure all dependencies are correctly installed and check for silent failures in logs or environment issues.
-
-
-## 2025-12-22 23:43
-### COMPILER: Empty Error Log
-- The build failed without any specific error messages.
-- Ensure all dependencies and environment configurations are correct; check logs for hidden errors or warnings.
-
-
-## 2025-12-22 23:52
-### COMPILER: Empty Error Report
-- The build failed without specific error messages.
-- Ensure all dependencies and configurations are correctly set up before building.
-
-
-## 2025-12-23 00:12
-### COMPILER: Empty Error Report
-- The build failed despite no errors or warnings being reported.
-- Ensure all logs and outputs are checked for hidden issues; consider increasing verbosity or checking system logs.
-
-
-## 2025-12-23 00:31
-### COMPILER: Empty Error Log
-- The build failed without any specific error messages.
-- Ensure all dependencies and environment configurations are correct; check logs for hidden errors or warnings.
-
-
-## 2025-12-23 01:15
-### COMPILER: Empty Error Log
-- The build failed without any specific error messages.
-- Ensure all dependencies are correctly installed and check for silent failures in logs or environment issues.
-
-
-## 2025-12-23 01:24
-### COMPILER: Empty Error Log
-- The build failed without any specific error messages.
-- Ensure all dependencies and environment settings are correctly configured before building.
-
-
-## 2025-12-23 03:39
-### COMPILER: Empty Error Report
-- The build failed without specific error messages.
-- Ensure all dependencies and configurations are correctly set up before building.
-
-
-## 2025-12-23 03:55
-### COMPILER: Empty Error Report
-- The build failed without specific error messages.
-- Ensure all dependencies and configurations are correctly set up before building.
-
-
-## 2025-12-23 04:10
-### COMPILER: Empty Error Report
-- The build failed without specific error messages.
-- Ensure all dependencies and configurations are correctly set up before building.
-
-
-## 2025-12-23 04:30
-### COMPILER: Empty Error Report
-- The build failed without specific error messages.
-- Ensure all logs are captured and check for hidden errors or warnings.
-
-
-## 2025-12-23 04:36
-### COMPILER: Empty Error Report
-- The build failed without specific error messages.
-- Ensure all dependencies and configurations are correct; check logs for hidden errors.
-
-
-## 2025-12-23 04:44
-### COMPILER: Empty Error Log
-- The build failed without any specific error messages.
-- Ensure all dependencies and configurations are correctly set up before building.
-
-
-## 2025-12-23 04:52
-### COMPILER: Empty Error Report
-- The build failed without specific error messages.
-- Ensure all dependencies and environment settings are correctly configured before building.
-
-
-## 2025-12-23 05:03
-### COMPILER: Empty Error Report
-- The build failed without specific error messages.
-- Ensure all dependencies and environment configurations are correct; check logs for hidden errors or warnings.
-
-
-## 2025-12-23 05:10
-### COMPILER: Empty Error Report
-- The build failed without specific error messages.
-- Ensure all dependencies and configurations are correctly set up before building.
-
-
-## 2025-12-23 05:17
-### COMPILER: Build Failure with No Errors or Warnings
-- The build failed despite no errors or warnings being reported.
-- Ensure all dependencies are correctly installed and check for hidden configuration issues.
-
-
-## 2025-12-23 05:50
-### COMPILER: Empty Error Log
-- The build failed without any specific error messages.
-- Ensure all dependencies and environment configurations are correct; check logs for hidden errors or warnings.
-
-
-## 2025-12-23 05:57
-### COMPILER: Empty Error Report
-- The build failed without specific error messages.
-- Ensure all dependencies and environment configurations are correct; check logs for hidden errors or warnings.
-
-
-## 2025-12-23 06:06
-### COMPILER: Empty Error Report
-- The build failed without specific error messages.
-- Ensure all dependencies and configurations are correctly set up before building.
-
-
-## 2025-12-23 07:04
-### COMPILER: Empty Error Report
-- The build failed without specific error messages.
-- Ensure all dependencies and environment configurations are correct; check logs for hidden errors or warnings.
-
-
-## 2025-12-23 08:03
-### COMPILER: Empty Error Report
-- The build failed without specific error messages.
-- Ensure all dependencies and environment settings are correctly configured before building.
-
-
-## 2025-12-23 08:15
-### COMPILER: Empty Error Log
-- The build failed without any specific error messages.
-- Ensure all dependencies are correctly installed and check for silent failures in logs or environment issues.
-
-
-## 2025-12-23 08:23
-### COMPILER: Empty Error Report
-- The build failed without specific error messages.
-- Ensure all dependencies and environment settings are correctly configured before building.
-
-
-## 2025-12-23 08:32
-### COMPILER: Empty Error Report
-- The build failed without specific error messages.
-- Ensure all dependencies and configurations are correctly set up before building.
-
-
-## 2025-12-23 09:37
-### COMPILER: Empty Error Report
-- The build failed without specific error messages.
-- Ensure all dependencies and environment settings are correctly configured before building.
-
-
-## 2025-12-23 09:57
-### COMPILER: Empty Error Report
-- The build failed without specific error messages.
-- Ensure all dependencies and environment settings are correctly configured before building.
-
-
-## 2025-12-23 10:05
-### COMPILER: Empty Error Report
-- The build failed without specific error messages.
-- Ensure all dependencies and configurations are correctly set up before building.
-
-
-## 2025-12-23 10:13
-### COMPILER: Empty Error Report
-- The build failed without specific error messages.
-- Ensure all dependencies and configurations are correctly set up before building.
-
-
-## 2025-12-23 10:51
-### COMPILER: Build System Configuration Issue
-- The build system reported a failure without specific errors or warnings.
-- Verify build configuration and environment setup to ensure all dependencies are correctly installed and paths are properly configured.
+- Clean build directories with `make clean` before rebuilding and audit integer casts where widths differ.
