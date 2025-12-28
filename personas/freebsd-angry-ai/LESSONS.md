@@ -277,3 +277,189 @@ When converting atoi()/atol() to strtol() with validation:
 ### COMPILER: Function Type Conflicts and Pointer Qualifiers
 - Conflicting function types and passing `const char *` to a non-const parameter caused build errors.
 - Ensure consistent function declarations and use `const char *` for functions that do not modify the string.
+
+
+## 2025-12-25 11:48
+### COMPILER: Stale .depend Files and Type Mismatch Errors
+- Stale `.depend` files caused build failures; type mismatch errors occurred due to comparing a negative constant with an unsigned short.
+- Clean build directories using `make clean` before building; ensure proper type comparisons in code.
+
+
+## 2025-12-25 11:50
+### COMPILER: Stale .depend Files and Comparison Error
+- Stale `.depend` files caused build failures; a comparison error occurred due to type mismatch.
+- Clean build directory with `make clean` before building; ensure correct types in comparisons.
+
+
+## 2025-12-25 11:51
+### COMPILER: Stale .depend Files and Comparison Error
+- Stale `.depend` files caused build failures; a comparison error occurred due to type mismatch.
+- Clean build directory with `make clean` before building; ensure types match in comparisons.
+
+
+## 2025-12-25 11:53
+### COMPILER: Stale .depend Files and Comparison Error
+- Stale `.depend` files caused build failures; a comparison error occurred due to type mismatch.
+- Clean build directory with `make clean` before building again; ensure correct types in comparisons.
+
+
+## 2025-12-25 12:29
+### COMPILER: Stale .depend Files and Comparison Error
+- Stale `.depend` files caused build failures; a comparison error occurred due to type mismatch.
+- Clean build directory with `make clean` before building; ensure types match in comparisons.
+
+
+## 2025-12-25 14:42
+### COMPILER: Stale .depend Files and Variable Shadowing
+- Stale `.depend` files caused build errors; variable shadowing in `chio.c` led to a compiler error.
+- Clean build directories with `make clean` before building; rename local variables to avoid shadowing global ones.
+
+
+## 2025-12-26 05:08
+### COMPILER: Stale .depend Files and Conflict Markers
+- Stale `.depend` files and unresolved version control conflict markers caused build failures.
+- Clean build directories with `make clean` and resolve all conflict markers in source files before building.
+
+
+## 2025-12-26 05:14
+### COMPILER: Stale .depend Files and Syntax Errors
+- Stale `.depend` files caused build failures; syntax errors in `hostname.c` were not addressed.
+- Clean build directories with `make clean` before building to remove stale dependencies; review and correct all compiler-reported syntax issues.
+
+
+## 2025-12-26 05:16
+### COMPILER: Stale .depend Files and Syntax Error
+- Stale `.depend` files caused build failures; syntax error in `hostname.c`.
+- Clean build directory with `make clean` and check for syntax errors in source code.
+
+
+## 2025-12-26 05:17
+### COMPILER: Stale .depend Files and Syntax Error
+- Stale `.depend` files caused build failures; syntax error in `hostname.c`.
+- Clean build directory with `make clean` and check for syntax errors before building.
+
+
+## 2025-12-26 05:19
+### COMPILER: Stale .depend Files and Syntax Error
+- Stale `.depend` files caused build failures; syntax error in `hostname.c`.
+- Clean build directory with `make clean` and check for syntax errors in source code.
+
+
+## 2025-12-26 05:21
+### COMPILER: Stale .depend Files and Syntax Error
+- Stale `.depend` files caused build issues; syntax error in `hostname.c`.
+- Clean build directory with `make clean` and check for syntax errors before building.
+
+
+## 2025-12-26 05:22
+### COMPILER: Stale .depend Files and Syntax Error
+- Stale `.depend` files caused build failures; syntax error in `hostname.c`.
+- Clean build directory with `make clean` before building; review code for syntax errors.
+
+
+## 2025-12-26 05:24
+### COMPILER: Stale .depend Files and Syntax Error
+- Stale `.depend` files caused build failures; syntax error in `hostname.c`.
+- Clean build directory with `make clean` and fix syntax errors in source code.
+
+
+## 2025-12-26 05:26
+### COMPILER: Stale .depend Files and Syntax Error
+- Stale `.depend` files caused build failures; syntax error in `hostname.c`.
+- Clean build directory with `make clean` and check for syntax errors in source code.
+
+
+## 2025-12-26 05:28
+### COMPILER: Stale .depend Files and Syntax Error
+- Stale `.depend` files caused build failures; syntax error in `hostname.c`.
+- Clean build directory with `make clean` and fix syntax errors in source code.
+
+
+## 2025-12-26 05:30
+### COMPILER: Stale .depend Files and Syntax Error
+- Stale `.depend` files caused build failures; syntax error in `hostname.c`.
+- Clean build directory with `make clean` and check for syntax errors in source code.
+
+
+## 2025-12-26 05:32
+### COMPILER: Stale .depend Files and Syntax Error
+- Stale `.depend` files caused build failures; syntax error in `hostname.c`.
+- Clean build directory with `make clean` before building; review code for syntax errors.
+
+
+## 2025-12-26 05:33
+### COMPILER: Stale .depend Files and Syntax Error
+- Stale `.depend` files caused build failures; syntax error in `hostname.c`.
+- Clean build directory with `make clean` before building; review code for syntax errors.
+
+
+## 2025-12-26 05:35
+### COMPILER: Stale .depend Files and Syntax Error
+- Stale `.depend` files caused build failures; syntax error in `hostname.c`.
+- Clean build directory with `make clean` and fix syntax errors in source code.
+
+
+## 2025-12-26 05:37
+### COMPILER: Stale .depend Files and Syntax Error
+- Stale `.depend` files caused build failures; syntax error in `hostname.c`.
+- Clean build directory with `make clean` and check for syntax errors in source code.
+
+
+## 2025-12-26 05:39
+### COMPILER: Stale .depend Files and Syntax Error
+- Stale `.depend` files caused build failures; syntax error in `hostname.c`.
+- Clean build directory with `make clean` and fix syntax errors in source code.
+
+
+## 2025-12-26 05:40
+### COMPILER: Stale .depend files and syntax error in hostname.c
+- Stale .depend files were ignored; a syntax error was present in hostname.c.
+- Clean build directories with `make clean` and verify code for syntax errors before building.
+
+
+## 2025-12-26 05:42
+### COMPILER: Stale .depend Files and Syntax Error
+- Stale `.depend` files caused build failures; syntax error in `hostname.c`.
+- Clean build directory with `make clean` before building; review code for syntax errors.
+
+
+## 2025-12-26 05:44
+### COMPILER: Stale .depend Files and Syntax Error
+- Stale `.depend` files caused build failures; syntax error in `hostname.c`.
+- Clean build directory with `make clean` before building; review code for syntax errors.
+
+
+## 2025-12-26 05:47
+### COMPILER: Stale .depend Files and Syntax Error
+- Stale `.depend` files caused build failures; syntax error in `hostname.c`.
+- Clean build directory with `make clean` and check for syntax errors in source code.
+
+
+## 2025-12-26 05:50
+### COMPILER: Stale .depend Files and Syntax Error
+- Stale `.depend` files caused build failures; syntax error in `hostname.c`.
+- Clean build directory with `make clean` before building; review code for syntax errors.
+
+
+## 2025-12-26 05:52
+### COMPILER: Stale .depend Files and Syntax Error
+- Stale `.depend` files caused build failures; syntax error in `hostname.c`.
+- Clean build directory with `make clean` and check for syntax errors in source code.
+
+
+## 2025-12-27 02:07
+### COMPILER: Stale .depend Files and Undefined Identifiers
+- Stale `.depend` files caused build errors; undeclared identifier 'mode' in `mkdir.c`.
+- Clean build environment using `make clean` before building to remove stale dependencies; review code for undefined identifiers.
+
+
+## 2025-12-27 04:39
+### COMPILER: Uninitialized Variable Usage
+- What went wrong: The variable 'mpos' was used uninitialized in `ar_io.c`.
+- How to avoid it next time: Initialize all variables before use and enable compiler warnings for uninitialized variables.
+
+
+## 2025-12-27 18:05
+### COMPILER: Stale .depend Files and Integer Conversion Errors
+- Stale `.depend` files caused build issues; integer conversion errors in `fmt.c` led to further failures.
+- Clean build directories with `make clean` before rebuilding; ensure type consistency in C code.

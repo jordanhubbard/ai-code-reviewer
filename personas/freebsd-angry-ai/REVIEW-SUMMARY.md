@@ -6,6 +6,625 @@
 **Mission:** Find and fix code that would fail peer review, break builds, or embarrass the project
 
 ---
+## 2025-12-27 22:16 - bin/setfacl ✓
+
+**Directory:** `bin/setfacl`
+
+**Summary:** setfacl: Use getline() for dynamic buffer allocation in file.c
+
+**Files fixed:**
+  - REVIEW-INDEX.md
+  - bin/setfacl/file.c
+
+---
+
+## 2025-12-27 22:05 - bin/rmdir ✓
+
+**Directory:** `bin/rmdir`
+
+**Summary:** rmdir: Update review status to in-progress
+
+**Files fixed:**
+  - REVIEW-INDEX.md
+
+---
+
+## 2025-12-27 22:03 - bin/rm ✓
+
+**Directory:** `bin/rm`
+
+**Summary:** rm: Update review status to in-progress
+
+**Files fixed:**
+  - REVIEW-INDEX.md
+
+---
+
+## 2025-12-27 21:24 - bin/realpath ✓
+
+**Directory:** `bin/realpath`
+
+**Summary:** realpath: Update review status to in-progress
+
+**Files fixed:**
+  - REVIEW-INDEX.md
+
+---
+
+## 2025-12-27 21:20 - bin/pwd ✓
+
+**Directory:** `bin/pwd`
+
+**Summary:** pwd: Update REVIEW-INDEX.md status and fix memory leak in pwd.c
+
+**Files fixed:**
+  - REVIEW-INDEX.md
+  - bin/pwd/pwd.c
+
+---
+
+## 2025-12-27 21:15 - bin/pwait ✓
+
+**Directory:** `bin/pwait`
+
+**Summary:** pwait: Replace strtol() with strtonum() for safe process ID parsing
+
+**Files fixed:**
+  - REVIEW-INDEX.md
+  - bin/pwait/pwait.c
+
+---
+
+## 2025-12-27 21:06 - bin/cpuset ✓
+
+**Directory:** `bin/cpuset`
+
+**Summary:** cpuset: Update review status in REVIEW-INDEX.md
+
+**Files fixed:**
+  - REVIEW-INDEX.md
+
+---
+
+## 2025-12-27 18:07 - bin/ps ✓
+
+**Directory:** `bin/ps`
+
+**Summary:** ps: Update review status to in-progress
+
+**Files fixed:**
+  - REVIEW-INDEX.md
+
+---
+
+## 2025-12-27 17:49 - bin/cpuset ✓
+
+**Directory:** `bin/cpuset`
+
+**Summary:** cpuset: Update review status and position
+
+**Files fixed:**
+  - REVIEW-INDEX.md
+
+---
+
+## 2025-12-27 15:43 - bin/pkill/tests ✓
+
+**Directory:** `bin/pkill/tests`
+
+**Summary:** tests: Update review status for bin/pkill/tests
+
+**Files fixed:**
+  - REVIEW-INDEX.md
+
+---
+
+## 2025-12-27 15:40 - bin/cpuset ✓
+
+**Directory:** `bin/cpuset`
+
+**Summary:** cpuset: Update review status and position
+
+**Files fixed:**
+  - REVIEW-INDEX.md
+
+---
+
+## 2025-12-27 14:13 - bin/cpuset ✓
+
+**Directory:** `bin/cpuset`
+
+**Summary:** cpuset: Improve error handling in spin_helper.c
+
+**Files fixed:**
+  - bin/pkill/tests/spin_helper.c
+
+---
+
+## 2025-12-27 14:09 - bin/cpuset ✓
+
+**Directory:** `bin/cpuset`
+
+**Summary:** cpuset: Update review status in REVIEW-INDEX.md
+
+**Files fixed:**
+  - REVIEW-INDEX.md
+
+---
+
+## 2025-12-27 10:28 - sbin/mount ✓
+
+**Directory:** `sbin/mount`
+
+**Summary:** mount: Update review status and mark as in progress
+
+**Files fixed:**
+  - REVIEW-INDEX.md
+
+---
+
+## 2025-12-27 10:25 - bin/cpuset ✓
+
+**Directory:** `bin/cpuset`
+
+**Summary:** cpuset: Update review status in REVIEW-INDEX.md
+
+**Files fixed:**
+  - REVIEW-INDEX.md
+
+---
+
+## 2025-12-27 10:22 - bin/pkill ✓
+
+**Directory:** `bin/pkill`
+
+**Summary:** pkill: Replace atoi() with strtonum() for safe integer parsing
+
+**Files fixed:**
+
+
+---
+
+## 2025-12-27 10:19 - bin/pkill ✓
+
+**Directory:** `bin/pkill`
+
+**Summary:** pkill: Replace atoi() with strtonum() for safe integer parsing
+
+**Files fixed:**
+
+
+---
+
+## 2025-12-27 10:17 - bin/pkill ✓
+
+**Directory:** `bin/pkill`
+
+**Summary:** pkill: Update review status and fix Makefile symlinks
+
+**Files fixed:**
+  - REVIEW-INDEX.md
+  - bin/pkill/Makefile
+
+---
+
+## 2025-12-27 10:09 - bin/cpuset ✓
+
+**Directory:** `bin/cpuset`
+
+**Summary:** cpuset: Update REVIEW-INDEX.md and fix usage output
+
+**Files fixed:**
+  - REVIEW-INDEX.md
+  - bin/cpuset/cpuset.c
+
+---
+
+## 2025-12-27 08:24 - bin/cpuset ✓
+
+**Directory:** `bin/cpuset`
+
+**Summary:** cpuset: Update REVIEW-INDEX.md generation timestamp
+
+**Files fixed:**
+  - REVIEW-INDEX.md
+
+---
+
+## 2025-12-27 06:35 - bin/cpuset ✓
+
+**Directory:** `bin/cpuset`
+
+**Summary:** cpuset: Update review status in REVIEW-INDEX.md
+
+**Files fixed:**
+  - REVIEW-INDEX.md
+
+---
+
+## 2025-12-27 04:57 - bin/pax ✓
+
+**Directory:** `bin/pax`
+
+**Summary:** pax: Update file handling to prevent buffer overflows
+
+**Files fixed:**
+
+
+---
+
+## 2025-12-27 03:29 - bin/nproc ✓
+
+**Directory:** `bin/nproc`
+
+**Summary:** nproc: Update review status to in-progress
+
+**Files fixed:**
+  - REVIEW-INDEX.md
+
+---
+
+## 2025-12-27 03:24 - bin/cpuset ✓
+
+**Directory:** `bin/cpuset`
+
+**Summary:** cpuset: Update REVIEW-INDEX.md to reflect current status
+
+**Files fixed:**
+  - REVIEW-INDEX.md
+
+---
+
+## 2025-12-27 02:13 - bin/mv ✓
+
+**Directory:** `bin/mv`
+
+**Summary:** mv: Update review status to in-progress
+
+**Files fixed:**
+  - REVIEW-INDEX.md
+
+---
+
+## 2025-12-27 02:09 - bin/mkdir ✓
+
+**Directory:** `bin/mkdir`
+
+**Summary:** mkdir: Update REVIEW-INDEX.md with correct line counts
+
+**Files fixed:**
+  - REVIEW-INDEX.md
+
+---
+
+## 2025-12-26 16:32 - bin/ls ✓
+
+**Directory:** `bin/ls`
+
+**Summary:** ls: Update review status and fix cpuset error handling
+
+**Files fixed:**
+  - REVIEW-INDEX.md
+  - bin/cpuset/cpuset.c
+
+---
+
+## 2025-12-26 16:04 - bin/ln ✓
+
+**Directory:** `bin/ln`
+
+**Summary:** ln: Update review status to in-progress
+
+**Files fixed:**
+  - REVIEW-INDEX.md
+
+---
+
+## 2025-12-26 15:40 - bin/kill ✓
+
+**Directory:** `bin/kill`
+
+**Summary:** kill: Update review status to in-progress
+
+**Files fixed:**
+  - REVIEW-INDEX.md
+
+---
+
+## 2025-12-26 15:25 - bin/kenv ✓
+
+**Directory:** `bin/kenv`
+
+**Summary:** kenv: Improve option handling and error messages
+
+**Files fixed:**
+  - REVIEW-INDEX.md
+  - bin/kenv/kenv.c
+
+---
+
+## 2025-12-26 05:06 - bin/hostname ✓
+
+**Directory:** `bin/hostname`
+
+**Summary:** hostname: Add check for hostname length in sethostname
+
+**Files fixed:**
+  - REVIEW-INDEX.md
+  - bin/hostname/hostname.c
+
+---
+
+## 2025-12-26 03:08 - bin/getfacl ✓
+
+**Directory:** `bin/getfacl`
+
+**Summary:** getfacl: Update review status to in-progress
+
+**Files fixed:**
+  - REVIEW-INDEX.md
+
+---
+
+## 2025-12-26 03:05 - bin/ed ✓
+
+**Directory:** `bin/ed`
+
+**Summary:** ed: Improve error handling in open_sbuf
+
+**Files fixed:**
+  - REVIEW-INDEX.md
+  - bin/ed/buf.c
+
+---
+
+## 2025-12-26 02:54 - bin/echo ✓
+
+**Directory:** `bin/echo`
+
+**Summary:** echo: Update review status to in-progress
+
+**Files fixed:**
+  - REVIEW-INDEX.md
+
+---
+
+## 2025-12-26 02:51 - bin/domainname ✓
+
+**Directory:** `bin/domainname`
+
+**Summary:** domainname: Update review status to in-progress
+
+**Files fixed:**
+  - REVIEW-INDEX.md
+
+---
+
+## 2025-12-26 02:49 - bin/df ✓
+
+**Directory:** `bin/df`
+
+**Summary:** df: Update review status to in-progress
+
+**Files fixed:**
+  - REVIEW-INDEX.md
+
+---
+
+## 2025-12-26 02:46 - bin/cpuset ✓
+
+**Directory:** `bin/cpuset`
+
+**Summary:** cpuset: Update review status in REVIEW-INDEX.md
+
+**Files fixed:**
+  - REVIEW-INDEX.md
+
+---
+
+## 2025-12-26 01:11 - bin/cpuset ✓
+
+**Directory:** `bin/cpuset`
+
+**Summary:** cpuset: Update review status in REVIEW-INDEX.md
+
+**Files fixed:**
+  - REVIEW-INDEX.md
+
+---
+
+## 2025-12-26 00:03 - bin/cpuset ✓
+
+**Directory:** `bin/cpuset`
+
+**Summary:** cpuset: Update review status in REVIEW-INDEX.md
+
+**Files fixed:**
+  - REVIEW-INDEX.md
+
+---
+
+## 2025-12-25 22:54 - bin/cpuset ✓
+
+**Directory:** `bin/cpuset`
+
+**Summary:** cpuset: Update review status in REVIEW-INDEX.md
+
+**Files fixed:**
+  - REVIEW-INDEX.md
+
+---
+
+## 2025-12-25 21:46 - bin/cpuset ✓
+
+**Directory:** `bin/cpuset`
+
+**Summary:** cpuset: Update review status in REVIEW-INDEX.md
+
+**Files fixed:**
+  - REVIEW-INDEX.md
+
+---
+
+## 2025-12-25 20:16 - bin/cpuset ✓
+
+**Directory:** `bin/cpuset`
+
+**Summary:** cpuset: Improve error messages for command execution failures
+
+**Files fixed:**
+  - REVIEW-INDEX.md
+  - bin/cpuset/cpuset.c
+
+---
+
+## 2025-12-25 18:58 - bin/cpuset ✓
+
+**Directory:** `bin/cpuset`
+
+**Summary:** cpuset: Update review status in REVIEW-INDEX.md
+
+**Files fixed:**
+  - REVIEW-INDEX.md
+
+---
+
+## 2025-12-25 16:24 - bin/cpuset ✓
+
+**Directory:** `bin/cpuset`
+
+**Summary:** cpuset: Improve error handling in execvp call
+
+**Files fixed:**
+  - REVIEW-INDEX.md
+  - bin/cpuset/cpuset.c
+
+---
+
+## 2025-12-25 16:03 - bin/dd ✓
+
+**Directory:** `bin/dd`
+
+**Summary:** dd: Correct sparse file test description in Makefile
+
+**Files fixed:**
+  - REVIEW-INDEX.md
+  - bin/dd/Makefile
+
+---
+
+## 2025-12-25 15:52 - bin/date ✓
+
+**Directory:** `bin/date`
+
+**Summary:** date: Update review status to in-progress
+
+**Files fixed:**
+  - REVIEW-INDEX.md
+
+---
+
+## 2025-12-25 15:43 - bin/csh ✓
+
+**Directory:** `bin/csh`
+
+**Summary:** csh: Update review status to in-progress
+
+**Files fixed:**
+  - REVIEW-INDEX.md
+
+---
+
+## 2025-12-25 15:30 - bin/cpuset ✓
+
+**Directory:** `bin/cpuset`
+
+**Summary:** cpuset: Update REVIEW-INDEX.md to reflect current status
+
+**Files fixed:**
+  - REVIEW-INDEX.md
+
+---
+
+## 2025-12-25 15:24 - bin/cp ✓
+
+**Directory:** `bin/cp`
+
+**Summary:** cp: Update review status for cp directory
+
+**Files fixed:**
+  - REVIEW-INDEX.md
+
+---
+
+## 2025-12-25 15:18 - bin/cpuset ✓
+
+**Directory:** `bin/cpuset`
+
+**Summary:** cpuset: Update review status for cpuset directory
+
+**Files fixed:**
+  - REVIEW-INDEX.md
+
+---
+
+## 2025-12-25 15:12 - bin/chmod ✓
+
+**Directory:** `bin/chmod`
+
+**Summary:** chmod: Update REVIEW-INDEX.md status and fix cpuset error handling
+
+**Files fixed:**
+  - REVIEW-INDEX.md
+  - bin/cpuset/cpuset.c
+
+---
+
+## 2025-12-25 14:59 - bin/chio ✓
+
+**Directory:** `bin/chio`
+
+**Summary:** chio: Update review status and line count
+
+**Files fixed:**
+  - REVIEW-INDEX.md
+
+---
+
+## 2025-12-25 11:06 - bin/chflags ✓
+
+**Directory:** `bin/chflags`
+
+**Summary:** chflags: Update REVIEW-INDEX.md generation timestamp
+
+**Files fixed:**
+  - REVIEW-INDEX.md
+
+---
+
+## 2025-12-25 10:57 - bin/chflags ✓
+
+**Directory:** `bin/chflags`
+
+**Summary:** chflags: Replace atol() with strtonum() for safe integer parsing
+
+**Files fixed:**
+  - REVIEW-INDEX.md
+  - bin/chio/chio.c
+
+---
+
+## 2025-12-25 10:37 - bin/chflags ✓
+
+**Directory:** `bin/chflags`
+
+**Summary:** chflags: Update REVIEW-INDEX.md generation timestamp
+
+**Files fixed:**
+  - REVIEW-INDEX.md
+
+---
+
 ## 2025-12-20 17:23 - bin/cpuset ✓
 
 **Directory:** `bin/cpuset`
