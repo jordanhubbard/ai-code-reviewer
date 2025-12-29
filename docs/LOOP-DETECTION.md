@@ -1,5 +1,7 @@
 # Loop Detection and Recovery
 
+**UPDATED**: Added critical pre-parse loop detection (commit a3597a5)
+
 ## Problem
 
 The AI reviewer could get stuck in infinite loops where it:
@@ -24,7 +26,33 @@ ACTION: READ_FILE bin/hostname/hostname.c
 
 ## Solution
 
-Implemented multi-layered protection:
+Implemented multi-layered protection (TWO detection layers):
+
+### Critical Fix (a3597a5): Pre-Parse Loop Detection
+
+**THE PROBLEM**: Original detection only ran AFTER successful parsing. If ActionParser failed, loop detection never triggered.
+
+**THE FIX**: Added detection BEFORE parsing:
+- Tracks consecutive parse failures
+- Detects same unparseable response 5+ times
+- Forces recovery with format guidance
+- Catches wrong format like `### Action:` instead of `ACTION:`
+
+**Example that was missed**:
+```
+AI: "### Action: LIST_DIR bin/cpuset"  (wrong format)
+Parser: [fails to extract] → returns None
+Result: No loop detection, infinite loop
+```
+
+**Now catches it**:
+```
+AI: "### Action: LIST_DIR bin/cpuset"  (5th time)
+Pre-parse: "Same unparseable response 5 times!"
+Result: Recovery message sent, loop broken
+```
+
+### Original Protection Layers:
 
 ### 1. Action History Tracking
 
@@ -205,4 +233,5 @@ Potential enhancements:
 - [ ] Persistent loop tracking across sessions
 - [ ] Metrics/dashboard for loop frequency
 - [ ] Integration with issue tracker (bd) to file bugs about loops
+
 
