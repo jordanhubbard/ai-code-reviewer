@@ -122,6 +122,8 @@ class ReviewSession:
     action_history: List[Tuple[str, str]] = field(default_factory=list)  # (action_type, key_info)
     last_action_hash: Optional[str] = None
     consecutive_identical_actions: int = 0
+    consecutive_parse_failures: int = 0
+    last_failed_response: str = ""
     
     def get_progress_summary(self) -> str:
         """Get hierarchical progress summary."""
@@ -283,7 +285,8 @@ class FileEditor:
 class ActionParser:
     """Parses AI responses for file edit actions."""
     
-    ACTION_RE = re.compile(r'^ACTION:\s*([A-Z_]+)(.*)$', re.MULTILINE)
+    # Match both "ACTION:" and markdown "### Action:" variants
+    ACTION_RE = re.compile(r'^(?:###\s+)?ACTION:\s*([A-Z_]+)(.*)$', re.MULTILINE | re.IGNORECASE)
     
     @classmethod
     def parse(cls, response: str) -> Optional[Dict[str, Any]]:
@@ -1794,6 +1797,48 @@ Output ONLY the lesson entry, nothing else."""
                 continue
             
             action = self.parser.parse(response)
+            
+            # CRITICAL: Check for loops even if action parsing failed
+            # This catches the case where AI keeps saying the same thing but parser can't extract it
+            if not action:
+                # Track failed parse attempts
+                if not hasattr(self.session, 'consecutive_parse_failures'):
+                    self.session.consecutive_parse_failures = 0
+                    self.session.last_failed_response = ""
+                
+                # Check if we're getting the same unparseable response repeatedly
+                if response.strip() == self.session.last_failed_response.strip():
+                    self.session.consecutive_parse_failures += 1
+                else:
+                    self.session.consecutive_parse_failures = 1
+                    self.session.last_failed_response = response.strip()
+                
+                # If same unparseable response repeated too many times, force recovery
+                if self.session.consecutive_parse_failures >= 5:
+                    logger.error(f"Same unparseable response repeated {self.session.consecutive_parse_failures} times")
+                    recovery_msg = (
+                        f"\n{'='*70}\n"
+                        f"⚠️  CRITICAL: UNPARSEABLE LOOP DETECTED ⚠️\n"
+                        f"{'='*70}\n\n"
+                        f"You have provided the same response {self.session.consecutive_parse_failures} times,\n"
+                        f"but the system cannot parse any valid ACTION from it.\n\n"
+                        f"Your response: \"{response[:100]}...\"\n\n"
+                        f"The problem is likely:\n"
+                        f"1. Using wrong format like '### Action:' instead of 'ACTION:'\n"
+                        f"2. Response is truncated mid-action\n"
+                        f"3. Action keyword is misspelled\n\n"
+                        f"CORRECT FORMAT:\n"
+                        f"  ACTION: READ_FILE path/to/file\n"
+                        f"  ACTION: EDIT_FILE path/to/file\n"
+                        f"  ACTION: LIST_DIR path/to/dir\n"
+                        f"  ACTION: SET_SCOPE directory\n"
+                        f"  ACTION: BUILD\n"
+                        f"  ACTION: HALT\n\n"
+                        f"Provide ONE valid action now using the correct format.\n"
+                        f"{'='*70}\n"
+                    )
+                    self.history.append({"role": "user", "content": recovery_msg})
+                    continue
             
             if not action:
                 # Check for common mistakes
