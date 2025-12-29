@@ -125,6 +125,10 @@ class ReviewSession:
     consecutive_parse_failures: int = 0
     last_failed_response: str = ""
     
+    # Edit failure loop detection
+    edit_failure_count: int = 0  # Consecutive EDIT_FILE failures
+    last_failed_edit_file: Optional[str] = None
+    
     def get_progress_summary(self) -> str:
         """Get hierarchical progress summary."""
         lines = []
@@ -1234,6 +1238,10 @@ Output ONLY the lesson entry, nothing else."""
             success, message, diff = self.editor.edit_file(path, old_text, new_text)
             
             if success:
+                # Reset edit failure tracking on success
+                self.session.edit_failure_count = 0
+                self.session.last_failed_edit_file = None
+                
                 self.session.pending_changes = True
                 self.session.last_diff = diff
                 if rel_path not in self.session.changed_files:
@@ -1256,8 +1264,50 @@ Output ONLY the lesson entry, nothing else."""
                 
                 return result
             else:
+                # Track consecutive edit failures on same file
+                if rel_path == self.session.last_failed_edit_file:
+                    self.session.edit_failure_count += 1
+                else:
+                    self.session.edit_failure_count = 1
+                    self.session.last_failed_edit_file = rel_path
+                
                 # Log edit failure
                 self.ops.edit_failure(rel_path, message)
+                
+                # Check if stuck in edit-read-edit loop
+                MAX_EDIT_FAILURES = 3
+                if self.session.edit_failure_count >= MAX_EDIT_FAILURES:
+                    logger.error(f"EDIT_FILE failed {self.session.edit_failure_count} times on {rel_path}")
+                    return (
+                        f"EDIT_FILE_ERROR: {message}\n\n"
+                        f"{'='*70}\n"
+                        f"⚠️  EDIT FAILURE LOOP DETECTED ⚠️\n"
+                        f"{'='*70}\n\n"
+                        f"EDIT_FILE has failed {self.session.edit_failure_count} times on: {rel_path}\n"
+                        f"Error: {message}\n\n"
+                        f"This usually means:\n"
+                        f"1. The file content doesn't match what you expect\n"
+                        f"2. You're trying to edit code that's already been changed\n"
+                        f"3. The OLD block has whitespace/tab mismatches\n"
+                        f"4. The file is too complex to edit reliably\n\n"
+                        f"BREAKING THE LOOP - Choose ONE:\n\n"
+                        f"A) Skip this file and move on:\n"
+                        f"   ACTION: SKIP_FILE\n\n"
+                        f"B) Move to a different file:\n"
+                        f"   ACTION: READ_FILE <different-file-in-directory>\n\n"
+                        f"C) If directory is problematic, move to next:\n"
+                        f"   ACTION: SET_SCOPE <different-directory>\n\n"
+                        f"D) If you have other changes ready, build them:\n"
+                        f"   ACTION: BUILD\n\n"
+                        f"DO NOT:\n"
+                        f"- Read the same file again (you've read it {self.session.edit_failure_count} times)\n"
+                        f"- Try to edit it again without a different approach\n"
+                        f"- Hallucinate code that doesn't exist in the file\n\n"
+                        f"The file may already be correct, or too complex for automated editing.\n"
+                        f"MOVE ON to make progress.\n"
+                        f"{'='*70}\n"
+                    )
+                
                 hint = "\n\nHINT: The OLD block must be EXACTLY copied from the file.\n" \
                        "Re-read the file and copy the exact text you want to replace,\n" \
                        "including all whitespace and indentation. Do not paraphrase."
