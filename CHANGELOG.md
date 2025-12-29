@@ -25,10 +25,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 - **CRITICAL**: AI no longer gets stuck when using wrong action format (e.g., `### Action:`)
+- **CRITICAL**: AI no longer gets stuck in edit-read-edit loops (edit fails → read → edit fails)
 - AI no longer gets stuck reading the same file repeatedly
 - Truncated responses are detected and rejected
 - System can recover automatically without human intervention
 - Unparseable responses trigger loop detection after 5 repetitions (previously never caught)
+- Edit failures trigger recovery after 3 attempts on same file (previously could loop indefinitely)
 
 ## [Previous Versions]
 
