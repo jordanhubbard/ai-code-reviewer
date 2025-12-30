@@ -6,6 +6,133 @@
 **Mission:** Find and fix code that would fail peer review, break builds, or embarrass the project
 
 ---
+## 2025-12-29 15:07 - bin/cpuset ✓
+
+**Directory:** `bin/cpuset`
+
+**Summary:** cpuset: Update review status in REVIEW-INDEX.md
+
+**Files fixed:**
+  - REVIEW-INDEX.md
+
+---
+
+## 2025-12-29 12:00 - bin/cpuset ✓
+
+**Directory:** `bin/cpuset`
+
+**Summary:** cpuset: Update REVIEW-INDEX.md generation timestamp
+
+**Files fixed:**
+  - REVIEW-INDEX.md
+
+---
+
+## 2025-12-28 19:39 - bin/cpuset ✓
+
+**Directory:** `bin/cpuset`
+
+**Summary:** cpuset: Correct logic errors in option handling
+
+**Files fixed:**
+  - REVIEW-INDEX.md
+  - bin/cpuset/cpuset.c
+
+---
+
+## 2025-12-28 18:48 - bin/cpuset ✓
+
+**Directory:** `bin/cpuset`
+
+**Summary:** cpuset: Improve argument validation to prevent misuse
+
+**Files fixed:**
+  - REVIEW-INDEX.md
+  - bin/cpuset/cpuset.c
+
+---
+
+## 2025-12-28 17:32 - bin/sync ✓
+
+**Directory:** `bin/sync`
+
+**Summary:** sync: Update review status and timestamp
+
+**Files fixed:**
+  - REVIEW-INDEX.md
+
+---
+
+## 2025-12-28 17:29 - bin/stty ✓
+
+**Directory:** `bin/stty`
+
+**Summary:** stty: Update review status and improve jail error handling
+
+**Files fixed:**
+  - REVIEW-INDEX.md
+  - bin/cpuset/cpuset.c
+
+---
+
+## 2025-12-28 17:06 - bin/sleep ✓
+
+**Directory:** `bin/sleep`
+
+**Summary:** sleep: Add negative value check in seconds calculation
+
+**Files fixed:**
+  - REVIEW-INDEX.md
+  - bin/sleep/sleep.c
+
+---
+
+## 2025-12-28 17:02 - bin/cpuset ✓
+
+**Directory:** `bin/cpuset`
+
+**Summary:** cpuset: Update review status in REVIEW-INDEX.md
+
+**Files fixed:**
+  - REVIEW-INDEX.md
+
+---
+
+## 2025-12-28 15:15 - bin/cpuset ✓
+
+**Directory:** `bin/cpuset`
+
+**Summary:** cpuset: Add checks for required arguments in main()
+
+**Files fixed:**
+  - REVIEW-INDEX.md
+  - bin/cpuset/cpuset.c
+
+---
+
+## 2025-12-28 14:11 - bin/sh ✓
+
+**Directory:** `bin/sh`
+
+**Summary:** sh: Update review status and timestamp for bin/sh
+
+**Files fixed:**
+  - REVIEW-INDEX.md
+
+---
+
+## 2025-12-28 14:02 - bin/cpuset ✓
+
+**Directory:** `bin/cpuset`
+
+**Summary:** cpuset: Update REVIEW-INDEX.md and fix usage output formatting
+
+**Files fixed:**
+  - REVIEW-INDEX.md
+  - bin/cpuset/cpuset.c
+
+---
+
 ## 2025-12-27 22:16 - bin/setfacl ✓
 
 **Directory:** `bin/setfacl`

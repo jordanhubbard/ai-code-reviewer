@@ -313,3 +313,9 @@ When converting atoi()/atol() to strtol() with validation:
 ### COMPILER: Stale .depend Files and Integer Conversion Errors
 - Stale `.depend` files caused build issues; integer conversion errors in `fmt.c` led to further failures.
 - Clean build directories with `make clean` before rebuilding and audit integer casts where widths differ.
+
+
+## 2025-12-28 17:19
+### HEADERS: Missing Header for INT_MAX
+- What went wrong: `INT_MAX` was used without including `<limits.h>`.
+- How to avoid it next time: Ensure all necessary headers are included in source files using standard constants like `INT_MAX`.
