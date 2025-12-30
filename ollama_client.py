@@ -13,7 +13,8 @@ import logging
 import os
 import sys
 import time
-from dataclasses import dataclass
+import threading
+from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Any
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
@@ -49,6 +50,14 @@ class OllamaConfig:
     timeout: int = 300
     max_tokens: int = 4096
     temperature: float = 0.1
+    num_batch: Optional[int] = None
+    adaptive_batching: bool = False
+    adaptive_batch_min_chars: int = 8000
+    adaptive_batch_max_chars: int = 60000
+    adaptive_batch_min: int = 2
+    adaptive_batch_max: int = 8
+    extra_options: Dict[str, Any] = field(default_factory=dict)
+    ps_monitor_interval: float = 0.0
 
 
 class OllamaClient:
@@ -158,7 +167,18 @@ class OllamaClient:
         body = json.dumps(data).encode('utf-8')
         
         request = Request(url, data=body, headers=headers, method="POST")
-        
+
+        monitor_stop_event: Optional[threading.Event] = None
+        monitor_thread: Optional[threading.Thread] = None
+        if self.config.ps_monitor_interval and self.config.ps_monitor_interval > 0:
+            monitor_stop_event = threading.Event()
+            monitor_thread = threading.Thread(
+                target=self._ps_monitor_loop,
+                args=(monitor_stop_event, float(self.config.ps_monitor_interval)),
+                name="ollama-ps-monitor",
+                daemon=True,
+            )
+            monitor_thread.start()
         try:
             with urlopen(request, timeout=timeout) as response:
                 full_response = []
@@ -188,6 +208,108 @@ class OllamaClient:
             raise OllamaConnectionError(
                 f"Cannot connect to Ollama server at {self.base_url}: {e.reason}"
             ) from e
+        finally:
+            if monitor_stop_event:
+                monitor_stop_event.set()
+            if monitor_thread:
+                monitor_thread.join(timeout=1.0)
+
+    def _apply_batching_options(self, options: Dict[str, Any], prompt_chars: int) -> Dict[str, Any]:
+        """Inject num_batch when configured or when adaptive batching is enabled."""
+        num_batch = self._resolve_num_batch(prompt_chars)
+        if num_batch:
+            options['num_batch'] = num_batch
+            logger.debug(
+                "Using num_batch=%s for prompt of approx %s chars",
+                num_batch,
+                prompt_chars,
+            )
+        return options
+
+    def _resolve_num_batch(self, prompt_chars: int) -> Optional[int]:
+        """Determine the num_batch value based on config and prompt size."""
+        if self.config.num_batch is not None:
+            try:
+                return max(1, int(self.config.num_batch))
+            except (TypeError, ValueError):
+                return 1
+        if not self.config.adaptive_batching:
+            return None
+        try:
+            min_chars = max(1, int(self.config.adaptive_batch_min_chars))
+            max_chars = max(min_chars, int(self.config.adaptive_batch_max_chars))
+            min_batch = max(1, int(self.config.adaptive_batch_min))
+            max_batch = max(min_batch, int(self.config.adaptive_batch_max))
+        except (TypeError, ValueError):
+            return None
+        if prompt_chars <= min_chars:
+            return min_batch
+        if prompt_chars >= max_chars:
+            return max_batch
+        span = max_chars - min_chars
+        ratio = (prompt_chars - min_chars) / span if span else 0.0
+        scaled = min_batch + ratio * (max_batch - min_batch)
+        return max(min_batch, min(max_batch, int(round(scaled))))
+
+    @staticmethod
+    def _estimate_message_chars(messages: List[Dict[str, Any]]) -> int:
+        total = 0
+        for msg in messages:
+            content = msg.get('content', '')
+            if isinstance(content, str):
+                total += len(content)
+            elif isinstance(content, list):
+                for part in content:
+                    if isinstance(part, dict):
+                        total += len(str(part.get('text', '')))
+                    elif isinstance(part, str):
+                        total += len(part)
+            else:
+                total += len(str(content))
+        return total
+
+    def _ps_monitor_loop(self, stop_event: threading.Event, interval: float) -> None:
+        """Periodically log /api/ps stats while a request is in flight."""
+        # Delay first print slightly so short calls do not spam
+        if stop_event.wait(interval):
+            return
+        while not stop_event.is_set():
+            line = self._build_ps_line()
+            if line:
+                print(line, flush=True)
+            if stop_event.wait(interval):
+                break
+
+    def _build_ps_line(self) -> Optional[str]:
+        try:
+            ps_data = self._make_request("/api/ps", timeout=5)
+        except Exception as exc:
+            logger.debug("Unable to fetch /api/ps: %s", exc)
+            return None
+        models = ps_data.get('models') or []
+        if not models:
+            return "[Ollama ps] no models loaded"
+        total_vram = sum((m.get('size_vram') or m.get('size') or 0) for m in models)
+        parts = []
+        for model in models[:2]:
+            name = model.get('name') or model.get('model') or 'unknown'
+            size = model.get('size_vram') or model.get('size') or 0
+            parts.append(f"{name}:{self._human_bytes(size)}")
+        if len(models) > 2:
+            parts.append(f"+{len(models)-2} more")
+        return (
+            f"[Ollama ps] loaded={len(models)} VRAM={self._human_bytes(total_vram)} :: "
+            + ' | '.join(parts)
+        )
+
+    @staticmethod
+    def _human_bytes(num_bytes: int) -> str:
+        units = ['B', 'KB', 'MB', 'GB', 'TB']
+        value = float(num_bytes)
+        for unit in units:
+            if value < 1024.0 or unit == units[-1]:
+                return f"{value:.1f}{unit}"
+            value /= 1024.0
     
     def _validate_connection(self) -> None:
         """
@@ -356,21 +478,25 @@ class OllamaClient:
         Returns:
             Generated text
         """
+        effective_max_tokens = max_tokens or self.config.max_tokens
+        option_payload = dict(self.config.extra_options)
+        option_payload["num_predict"] = effective_max_tokens
+        option_payload["temperature"] = (
+            temperature if temperature is not None else self.config.temperature
+        )
+        option_payload = self._apply_batching_options(option_payload, len(prompt or ""))
         data = {
             "model": self.config.model,
             "prompt": prompt,
             "stream": True,
-            "options": {
-                "num_predict": max_tokens or self.config.max_tokens,
-                "temperature": temperature if temperature is not None else self.config.temperature,
-            }
+            "options": option_payload,
         }
         
         return self._make_streaming_request("/api/generate", data)
     
     def chat(
         self, 
-        messages: List[Dict[str, str]],
+        messages: List[Dict[str, Any]],
         max_tokens: Optional[int] = None,
         temperature: Optional[float] = None
     ) -> str:
@@ -385,14 +511,21 @@ class OllamaClient:
         Returns:
             Assistant's response text
         """
+        effective_max_tokens = max_tokens or self.config.max_tokens
+        option_payload = dict(self.config.extra_options)
+        option_payload["num_predict"] = effective_max_tokens
+        option_payload["temperature"] = (
+            temperature if temperature is not None else self.config.temperature
+        )
+        option_payload = self._apply_batching_options(
+            option_payload,
+            self._estimate_message_chars(messages),
+        )
         data = {
             "model": self.config.model,
             "messages": messages,
             "stream": True,
-            "options": {
-                "num_predict": max_tokens or self.config.max_tokens,
-                "temperature": temperature if temperature is not None else self.config.temperature,
-            }
+            "options": option_payload,
         }
         
         start_time = time.time()
@@ -436,6 +569,56 @@ def create_client_from_config(config_dict: Dict[str, Any]) -> OllamaClient:
     # Allow environment variables to override config values for deployments
     env_url = os.environ.get('ANGRY_AI_OLLAMA_URL') or os.environ.get('OLLAMA_URL')
     env_model = os.environ.get('ANGRY_AI_OLLAMA_MODEL') or os.environ.get('OLLAMA_MODEL')
+    env_ps_interval = os.environ.get('ANGRY_AI_OLLAMA_PS_INTERVAL')
+
+    batching_cfg = ollama_config.get('batching', {})
+    if not isinstance(batching_cfg, dict):
+        batching_cfg = {}
+
+    def _coerce_int(value: Any, default: int) -> int:
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return default
+
+    def _coerce_bool(value: Any, default: bool) -> bool:
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            lowered = value.strip().lower()
+            if lowered in {"1", "true", "yes", "on"}:
+                return True
+            if lowered in {"0", "false", "no", "off"}:
+                return False
+        return default
+
+    env_num_batch = os.environ.get('ANGRY_AI_OLLAMA_NUM_BATCH')
+    if env_num_batch is not None:
+        try:
+            num_batch = int(env_num_batch)
+        except ValueError:
+            num_batch = None
+    else:
+        raw_num_batch = batching_cfg.get('num_batch')
+        if raw_num_batch is None:
+            num_batch = None
+        else:
+            try:
+                num_batch = int(raw_num_batch)
+            except (TypeError, ValueError):
+                num_batch = None
+
+    extra_options = ollama_config.get('options', {})
+    if not isinstance(extra_options, dict):
+        extra_options = {}
+
+    if env_ps_interval is not None:
+        try:
+            ps_interval = float(env_ps_interval)
+        except ValueError:
+            ps_interval = ollama_config.get('ps_monitor_interval', 0)
+    else:
+        ps_interval = ollama_config.get('ps_monitor_interval', 0)
 
     config = OllamaConfig(
         url=env_url or ollama_config.get('url', 'http://localhost:11434'),
@@ -443,6 +626,14 @@ def create_client_from_config(config_dict: Dict[str, Any]) -> OllamaClient:
         timeout=ollama_config.get('timeout', 300),
         max_tokens=ollama_config.get('max_tokens', 4096),
         temperature=ollama_config.get('temperature', 0.1),
+        num_batch=num_batch,
+        adaptive_batching=_coerce_bool(batching_cfg.get('adaptive'), False) if num_batch is None else False,
+        adaptive_batch_min_chars=_coerce_int(batching_cfg.get('min_chars', 8000), 8000),
+        adaptive_batch_max_chars=_coerce_int(batching_cfg.get('max_chars', 60000), 60000),
+        adaptive_batch_min=_coerce_int(batching_cfg.get('min_num_batch', 2), 2),
+        adaptive_batch_max=_coerce_int(batching_cfg.get('max_num_batch', 8), 8),
+        extra_options=extra_options,
+        ps_monitor_interval=max(0.0, float(ps_interval or 0)),
     )
     
     return OllamaClient(config)

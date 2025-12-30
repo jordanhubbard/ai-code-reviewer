@@ -239,7 +239,20 @@ class ReviewIndex:
             
             lines.append("")
         
-        self.index_path.write_text('\n'.join(lines))
+        new_content = '\n'.join(lines)
+        if self.index_path.exists():
+            try:
+                current_content = self.index_path.read_text()
+            except Exception:
+                current_content = None
+            if current_content and self._normalize_index_text(current_content) == self._normalize_index_text(new_content):
+                return
+        self.index_path.write_text(new_content)
+
+    @staticmethod
+    def _normalize_index_text(content: str) -> str:
+        """Strip volatile headers so that pure timestamp changes do not dirty git."""
+        return re.sub(r'^Generated: .*$','Generated: <normalized>', content, flags=re.MULTILINE)
     
     def get_next_pending(self) -> Optional[str]:
         """Get the next pending directory to review."""
