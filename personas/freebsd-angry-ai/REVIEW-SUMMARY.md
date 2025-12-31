@@ -6,6 +6,17 @@
 **Mission:** Find and fix code that would fail peer review, break builds, or embarrass the project
 
 ---
+## 2025-12-31 10:12 - bin/cpuset ✓
+
+**Directory:** `bin/cpuset`
+
+**Summary:** cpuset: Update review status in REVIEW-INDEX.md
+
+**Files fixed:**
+  - REVIEW-INDEX.md
+
+---
+
 ## 2025-12-30 18:30 - bin/cpuset ✓
 
 **Directory:** `bin/cpuset`

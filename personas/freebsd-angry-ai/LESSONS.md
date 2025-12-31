@@ -319,3 +319,195 @@ When converting atoi()/atol() to strtol() with validation:
 ### HEADERS: Missing Header for INT_MAX
 - What went wrong: `INT_MAX` was used without including `<limits.h>`.
 - How to avoid it next time: Ensure all necessary headers are included in source files using standard constants like `INT_MAX`.
+
+
+## 2025-12-31 12:25
+### COMPILER: Function Declaration and Format Mismatch
+- Implicit function declaration and format specifier mismatch caused build errors.
+- Ensure all functions are declared before use and correct format specifiers match argument types.
+
+
+## 2025-12-31 12:35
+### COMPILER: Stale .depend Files and Implicit Function Declarations
+- Stale `.depend` files caused build errors; undeclared function `get_which_name` led to implicit declaration issues.
+- Clean build directory with `make clean` before building; ensure all functions are declared properly in headers.
+
+
+## 2025-12-31 12:43
+### COMPILER: Stale .depend Files and Implicit Function Declarations
+- Stale `.depend` files and undeclared function `get_which_name` caused build failures.
+- Clean build directory with `make clean` and ensure all functions are declared before use.
+
+
+## 2025-12-31 12:51
+### COMPILER: Stale .depend Files and Implicit Function Declaration
+- Stale `.depend` files caused build errors; undeclared function `get_which_name` led to implicit declaration issues.
+- Clean build directory with `make clean` before building; ensure all functions are declared properly in headers.
+
+
+## 2025-12-31 12:56
+### COMPILER: Stale .depend Files and Implicit Function Declarations
+- Stale `.depend` files caused build errors; undeclared function `get_which_name` led to implicit declaration issues.
+- Clean build directory with `make clean` before building; ensure all functions are declared properly in headers.
+
+
+## 2025-12-31 13:04
+### COMPILER: Stale .depend Files and Implicit Function Declarations
+- Stale `.depend` files caused build errors; undeclared function `get_which_name` led to implicit declaration issues.
+- Clean build directory with `make clean` before building; ensure all functions are declared before use.
+
+
+## 2025-12-31 13:06
+### COMPILER: Stale .depend Files and Implicit Function Declarations
+- Stale `.depend` files and undeclared function `get_which_name` caused build failures.
+- Clean build directory with `make clean` and ensure all functions are declared before use.
+
+
+## 2025-12-31 13:10
+### COMPILER: Stale .depend Files and Implicit Function Declaration
+- Stale `.depend` files caused build errors; undeclared function `get_which_name` led to implicit declaration issues.
+- Clean build directory with `make clean` before building; ensure all functions are declared properly in headers.
+
+
+## 2025-12-31 13:15
+### COMPILER: Stale .depend Files and Implicit Function Declarations
+- Stale `.depend` files and undeclared function `get_which_name` caused build failures.
+- Clean build directory with `make clean` and ensure all functions are declared before use.
+
+
+## 2025-12-31 13:31
+### COMPILER: Stale .depend Files and Implicit Function Declarations
+- Stale `.depend` files and undeclared functions caused build failures.
+- Clean build directories with `make clean` and ensure all functions are declared before use.
+
+
+## 2025-12-31 13:36
+### COMPILER: Stale .depend Files and Implicit Function Declarations
+- Stale `.depend` files caused build errors; undeclared function `get_which_name` led to implicit declaration issues.
+- Clean build directories with `make clean` before building; ensure all functions are declared properly in headers.
+
+
+## 2025-12-31 13:40
+### COMPILER: Stale .depend Files and Implicit Function Declarations
+- Stale `.depend` files caused build errors; undeclared functions led to implicit declarations.
+- Clean build directories with `make clean` before building; ensure all functions are declared.
+
+
+## 2025-12-31 13:48
+### COMPILER: Stale .depend Files and Implicit Function Declarations
+- Stale `.depend` files and undeclared function `get_which_name` caused build failures.
+- Clean build directories with `make clean` and ensure all functions are declared before use.
+
+
+## 2025-12-31 13:58
+### COMPILER: Stale .depend Files and Implicit Function Declarations
+- Stale `.depend` files caused build errors; implicit function declaration led to a compilation failure.
+- Clean build directories using `make clean` before building again; ensure all functions are declared before use.
+
+
+## 2025-12-31 14:00
+### COMPILER: Stale .depend Files and Implicit Function Declarations
+- Stale `.depend` files and undeclared function `get_which_name` caused build failures.
+- Clean build directory with `make clean` and ensure all functions are declared before use.
+
+
+## 2025-12-31 14:02
+### COMPILER: Stale .depend Files and Implicit Function Declarations
+- Stale `.depend` files and undeclared functions caused build failures.
+- Clean build directories with `make clean` and ensure all functions are declared before use.
+
+
+## 2025-12-31 14:17
+### COMPILER: Stale .depend Files and Implicit Function Declarations
+- Stale `.depend` files and undeclared function `get_which_name` caused build failures.
+- Clean build directory with `make clean` and ensure all functions are declared before use.
+
+
+## 2025-12-31 14:19
+### COMPILER: Stale .depend Files and Implicit Function Declaration
+- Stale `.depend` files and an undeclared function caused build failures.
+- Clean build directories with `make clean` and ensure all functions are declared before use.
+
+
+## 2025-12-31 14:32
+### COMPILER: Stale .depend Files and Implicit Function Declarations
+- Stale `.depend` files caused build errors; undeclared function `get_which_name` led to a compilation failure.
+- Clean build directories with `make clean` before building; ensure all functions are declared or defined.
+
+
+## 2025-12-31 14:39
+### COMPILER: Stale .depend Files and Implicit Function Declarations
+- Stale `.depend` files and undeclared function `get_which_name` caused build failures.
+- Clean build directory with `make clean` and ensure all functions are declared before use.
+
+
+## 2025-12-31 14:47
+### COMPILER: Stale .depend Files and Implicit Function Declarations
+- Stale `.depend` files caused build errors; undeclared function `get_which_name` led to a compilation failure.
+- Clean build directories with `make clean` before building and ensure all functions are declared or defined.
+
+
+## 2025-12-31 14:52
+### COMPILER: Stale .depend Files and Implicit Function Declarations
+- Stale `.depend` files and undeclared function `get_which_name` caused build failures.
+- Clean build directory with `make clean` and ensure all functions are declared before use.
+
+
+## 2025-12-31 15:09
+### COMPILER: Stale .depend Files and Implicit Function Declarations
+- Stale `.depend` files caused build errors; undeclared function `get_which_name` led to implicit declaration issues.
+- Clean build directory with `make clean` before building; ensure all functions are declared or defined.
+
+
+## 2025-12-31 15:11
+### COMPILER: Stale .depend Files and Implicit Function Declarations
+- Stale `.depend` files and undeclared function `get_which_name` caused build failures.
+- Clean build directory with `make clean` and ensure all functions are declared before use.
+
+
+## 2025-12-31 15:12
+### COMPILER: Stale .depend Files and Implicit Function Declarations
+- Stale `.depend` files and undeclared function `get_which_name` caused build failures.
+- Clean build directory with `make clean` and ensure all functions are declared before use.
+
+
+## 2025-12-31 15:14
+### COMPILER: Stale .depend Files and Implicit Function Declarations
+- Stale `.depend` files caused build errors; undeclared function `get_which_name` led to a compilation failure.
+- Clean build directories with `make clean` before building; ensure all functions are declared or defined.
+
+
+## 2025-12-31 15:21
+### COMPILER: Stale .depend Files and Implicit Function Declarations
+- Stale `.depend` files caused build errors; undeclared function `get_which_name` led to a compilation failure.
+- Clean build directories with `make clean` before building; ensure all functions are declared or defined.
+
+
+## 2025-12-31 15:23
+### COMPILER: Stale .depend Files and Implicit Function Declarations
+- Stale `.depend` files and undeclared function `get_which_name` caused build failures.
+- Clean build directory with `make clean` and ensure all functions are declared before use.
+
+
+## 2025-12-31 15:30
+### COMPILER: Stale .depend Files and Implicit Function Declarations
+- Stale `.depend` files and undeclared function calls caused build failures.
+- Clean build directories with `make clean` and ensure all functions are declared before use.
+
+
+## 2025-12-31 15:32
+### COMPILER: Stale .depend Files and Implicit Function Declarations
+- Stale `.depend` files caused build issues; undeclared function `get_which_name` led to a compilation error.
+- Clean build directory with `make clean` before building; ensure all functions are declared or defined.
+
+
+## 2025-12-31 15:34
+### COMPILER: Stale .depend Files and Implicit Function Declarations
+- Stale `.depend` files and undeclared function `get_which_name` caused build failures.
+- Clean build directory with `make clean` and ensure all functions are declared before use.
+
+
+## 2025-12-31 15:36
+### COMPILER: Stale .depend Files and Implicit Function Declaration
+- Stale `.depend` files and an implicit function declaration caused build failures.
+- Clean the build directory with `make clean` and ensure all functions are declared before use.
