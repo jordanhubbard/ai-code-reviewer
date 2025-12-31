@@ -145,6 +145,10 @@ class ReviewSession:
         return "\n".join(lines) if lines else "No active review"
 
 
+class GitCommandError(RuntimeError):
+    """Raised when a git command fails."""
+
+
 class GitHelper:
     """Helper for git operations."""
     
@@ -212,6 +216,8 @@ class GitHelper:
     def show_status(self) -> str:
         """Get git status."""
         code, output = self._run(['status', '--short'])
+        if code != 0:
+            raise GitCommandError(output.strip() or "git status --short failed")
         return output
     
     def changed_files_list(self) -> List[str]:
@@ -1760,7 +1766,13 @@ Output ONLY the lesson entry, nothing else."""
         })
         
         # Show initial git status
-        status = self.git.show_status()
+        try:
+            status = self.git.show_status()
+        except GitCommandError as exc:
+            status = ""
+            print("\n*** WARNING: Unable to read git status:")
+            print(f"    {exc}")
+            print("    (repository may be in the middle of a rebase or have a corrupt index)")
         if status:
             print("\n*** Git status at start:")
             print(status)
@@ -1977,7 +1989,21 @@ def preflight_sanity_check(
     print("=" * 70 + "\n")
     
     # Check for uncommitted changes (excluding .beads/ which we'll auto-stash)
-    changes = git.show_status()
+    try:
+        changes = git.show_status()
+    except GitCommandError as exc:
+        print("ERROR: Unable to read git status for pre-flight:")
+        print(f"  {exc}")
+        print("\nThe FreeBSD source tree appears to have a corrupt git index or an interrupted rebase.")
+        print("Please repair the tree (e.g., 'git rebase --abort' then 'git reset --hard HEAD' followed by 'git clean -fd').")
+        print("Once git status runs cleanly, re-run make run.")
+        if ops_logger:
+            ops_logger.error(
+                "git status failed during preflight",
+                details={"error": str(exc)},
+            )
+        return False
+
     if changes:
         def _is_ignored_change(line: str) -> bool:
             trimmed = line.strip()
