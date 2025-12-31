@@ -6,6 +6,179 @@
 **Mission:** Find and fix code that would fail peer review, break builds, or embarrass the project
 
 ---
+## 2025-12-30 18:30 - bin/cpuset ✓
+
+**Directory:** `bin/cpuset`
+
+**Summary:** cpuset: Replace atoi() with strtonum() for safe integer parsing
+
+**Files fixed:**
+  - fatal: ambiguous argument 'HEAD': unknown revision or path not in the working tree.
+  - Use '--' to separate paths from revisions, like this:
+  - 'git <command> [<revision>...] -- [<file>...]'
+
+---
+
+## 2025-12-30 18:21 - bin/cpuset ✓
+
+**Directory:** `bin/cpuset`
+
+**Summary:** cpuset: Replace atoi() with strtonum() for safe integer parsing
+
+**Files fixed:**
+  - fatal: ambiguous argument 'HEAD': unknown revision or path not in the working tree.
+  - Use '--' to separate paths from revisions, like this:
+  - 'git <command> [<revision>...] -- [<file>...]'
+
+---
+
+## 2025-12-30 18:19 - bin/cpuset ✓
+
+**Directory:** `bin/cpuset`
+
+**Summary:** cpuset: Replace atoi() with strtonum() for safe integer parsing
+
+**Files fixed:**
+  - fatal: ambiguous argument 'HEAD': unknown revision or path not in the working tree.
+  - Use '--' to separate paths from revisions, like this:
+  - 'git <command> [<revision>...] -- [<file>...]'
+
+---
+
+## 2025-12-30 18:09 - bin/cpuset ✓
+
+**Directory:** `bin/cpuset`
+
+**Summary:** cpuset: Replace atoi() with strtonum() for safe integer parsing
+
+**Files fixed:**
+  - fatal: ambiguous argument 'HEAD': unknown revision or path not in the working tree.
+  - Use '--' to separate paths from revisions, like this:
+  - 'git <command> [<revision>...] -- [<file>...]'
+
+---
+
+## 2025-12-30 18:02 - bin/cpuset ✓
+
+**Directory:** `bin/cpuset`
+
+**Summary:** cpuset: Replace atoi() with strtonum() for safe integer parsing
+
+**Files fixed:**
+  - fatal: ambiguous argument 'HEAD': unknown revision or path not in the working tree.
+  - Use '--' to separate paths from revisions, like this:
+  - 'git <command> [<revision>...] -- [<file>...]'
+
+---
+
+## 2025-12-30 17:51 - bin/cpuset ✓
+
+**Directory:** `bin/cpuset`
+
+**Summary:** cpuset: Replace atoi() with strtonum() for safe integer parsing
+
+**Files fixed:**
+  - fatal: ambiguous argument 'HEAD': unknown revision or path not in the working tree.
+  - Use '--' to separate paths from revisions, like this:
+  - 'git <command> [<revision>...] -- [<file>...]'
+
+---
+
+## 2025-12-30 17:47 - bin/cpuset ✓
+
+**Directory:** `bin/cpuset`
+
+**Summary:** cpuset: Replace atoi() with strtonum() for safe integer parsing
+
+**Files fixed:**
+  - fatal: ambiguous argument 'HEAD': unknown revision or path not in the working tree.
+  - Use '--' to separate paths from revisions, like this:
+  - 'git <command> [<revision>...] -- [<file>...]'
+
+---
+
+## 2025-12-30 17:22 - bin/cpuset ✓
+
+**Directory:** `bin/cpuset`
+
+**Summary:** cpuset: Replace atoi() with strtonum() for safe integer parsing
+
+**Files fixed:**
+  - fatal: ambiguous argument 'HEAD': unknown revision or path not in the working tree.
+  - Use '--' to separate paths from revisions, like this:
+  - 'git <command> [<revision>...] -- [<file>...]'
+
+---
+
+## 2025-12-30 17:21 - bin/cpuset ✓
+
+**Directory:** `bin/cpuset`
+
+**Summary:** cpuset: Replace atoi() with strtonum() for safe integer parsing
+
+**Files fixed:**
+  - fatal: ambiguous argument 'HEAD': unknown revision or path not in the working tree.
+  - Use '--' to separate paths from revisions, like this:
+  - 'git <command> [<revision>...] -- [<file>...]'
+
+---
+
+## 2025-12-30 17:10 - bin/cpuset ✓
+
+**Directory:** `bin/cpuset`
+
+**Summary:** cpuset: Update review status in REVIEW-INDEX.md
+
+**Files fixed:**
+  - REVIEW-INDEX.md
+
+---
+
+## 2025-12-30 17:00 - bin/cpuset ✓
+
+**Directory:** `bin/cpuset`
+
+**Summary:** cpuset: Replace atoi() with strtonum() for safe integer parsing
+
+**Files fixed:**
+
+
+---
+
+## 2025-12-30 16:51 - bin/cpuset ✓
+
+**Directory:** `bin/cpuset`
+
+**Summary:** cpuset: Update review status in REVIEW-INDEX.md
+
+**Files fixed:**
+  - REVIEW-INDEX.md
+
+---
+
+## 2025-12-30 15:17 - sbin ✓
+
+**Directory:** `sbin`
+
+**Summary:** sbin: Update REVIEW-INDEX.md and fix ifconfig usage formatting
+
+**Files fixed:**
+  - REVIEW-INDEX.md
+  - sbin/ifconfig/ifconfig.c
+
+---
+
+## 2025-12-30 14:27 - bin/cpuset ✓
+
+**Directory:** `bin/cpuset`
+
+**Summary:** cpuset: Update review status and mark as pending
+
+**Files fixed:**
+  - REVIEW-INDEX.md
+
+---
+
 ## 2025-12-29 15:07 - bin/cpuset ✓
 
 **Directory:** `bin/cpuset`
