@@ -227,6 +227,50 @@ class GitHelper:
             return [f.strip() for f in output.split('\n') if f.strip()]
         return []
 
+    def recover_repository(self) -> bool:
+        """Attempt automatic recovery from corrupt git state."""
+        print("\n*** AUTOMATED GIT RECOVERY INITIATED ***")
+        success = True
+
+        def _run_step(description: str, args: List[str], ignore_failure: bool = False) -> bool:
+            print(f"  - {description} ({' '.join(['git'] + args)})")
+            code, output = self._run(args)
+            if code != 0:
+                print(f"    WARNING: Command failed with exit {code}: {output}")
+                if not ignore_failure:
+                    return False
+            return True
+
+        # Step 1: remove untracked files that block resets
+        _run_step("Removing untracked files", ['clean', '-fdx'], ignore_failure=True)
+
+        # Step 2: abort any in-progress rebase/merge
+        _run_step("Aborting unfinished rebase", ['rebase', '--abort'], ignore_failure=True)
+
+        # Determine upstream
+        upstream_ref = 'origin/main'
+        code, upstream = self._run(['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}'])
+        if code == 0 and upstream.strip():
+            upstream_ref = upstream.strip()
+        else:
+            print("    NOTE: Unable to detect upstream branch automatically; defaulting to origin/main")
+
+        # Step 3: fetch latest from origin
+        if not _run_step("Fetching latest refs", ['fetch', 'origin'], ignore_failure=False):
+            success = False
+
+        # Step 4: hard reset to upstream
+        reset_ok = _run_step(f"Resetting to {upstream_ref}", ['reset', '--hard', upstream_ref])
+        if not reset_ok:
+            success = False
+            if upstream_ref != 'origin/main':
+                print("    Attempting fallback reset to origin/main ...")
+                if _run_step("Resetting to origin/main", ['reset', '--hard', 'origin/main']):
+                    success = True
+
+        print("*** AUTOMATED GIT RECOVERY {} ***".format("SUCCEEDED" if success else "FAILED"))
+        return success
+
 
 class FileEditor:
     """Handles file editing operations."""
@@ -1773,6 +1817,12 @@ Output ONLY the lesson entry, nothing else."""
             print("\n*** WARNING: Unable to read git status:")
             print(f"    {exc}")
             print("    (repository may be in the middle of a rebase or have a corrupt index)")
+            if self.git.recover_repository():
+                try:
+                    status = self.git.show_status()
+                except GitCommandError as exc2:
+                    print("    Recovery attempt failed to repair git status:"
+                          f" {exc2}")
         if status:
             print("\n*** Git status at start:")
             print(status)
@@ -1995,14 +2045,29 @@ def preflight_sanity_check(
         print("ERROR: Unable to read git status for pre-flight:")
         print(f"  {exc}")
         print("\nThe FreeBSD source tree appears to have a corrupt git index or an interrupted rebase.")
-        print("Please repair the tree (e.g., 'git rebase --abort' then 'git reset --hard HEAD' followed by 'git clean -fd').")
-        print("Once git status runs cleanly, re-run make run.")
-        if ops_logger:
-            ops_logger.error(
-                "git status failed during preflight",
-                details={"error": str(exc)},
-            )
-        return False
+        recovered = git.recover_repository()
+        if recovered:
+            try:
+                changes = git.show_status()
+            except GitCommandError as exc2:
+                print("Recovery attempt failed to restore git status:"
+                      f" {exc2}")
+                print("Manual intervention required. Re-run make run after fixing the tree.")
+                if ops_logger:
+                    ops_logger.error(
+                        "git status failed during preflight after auto-recover",
+                        details={"error": str(exc2)},
+                    )
+                return False
+        else:
+            print("Automatic git recovery did not succeed. Manual repair required.")
+            print("Suggested commands: 'git clean -fdx', 'git rebase --abort', 'git fetch', 'git reset --hard origin/main'.")
+            if ops_logger:
+                ops_logger.error(
+                    "git status failed during preflight and auto-recover",
+                    details={"error": str(exc)},
+                )
+            return False
 
     if changes:
         def _is_ignored_change(line: str) -> bool:

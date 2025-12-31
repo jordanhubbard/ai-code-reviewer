@@ -38,6 +38,7 @@ ollama:
     max_chars: 60000         # prompt length that maps to max_num_batch
     min_num_batch: 2         # minimum batch size when adaptive is enabled
     max_num_batch: 12        # maximum batch size Angry AI will request
+    max_parallel_requests: 4 # cap on simultaneous Ollama requests
 
   # Additional per-request options forwarded directly to Ollama's API.
   # Useful for num_ctx, num_gpu, repeat penalties, etc.

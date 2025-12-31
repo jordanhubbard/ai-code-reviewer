@@ -58,6 +58,7 @@ class OllamaConfig:
     adaptive_batch_max: int = 8
     extra_options: Dict[str, Any] = field(default_factory=dict)
     ps_monitor_interval: float = 0.0
+    max_parallel_requests: int = 1
 
 
 class OllamaClient:
@@ -86,6 +87,7 @@ class OllamaClient:
         """
         self.config = config
         self.base_url = config.url.rstrip('/')
+        self._concurrency_sem = threading.Semaphore(max(1, config.max_parallel_requests))
         
         # Validate everything on init
         self._validate_connection()
@@ -179,6 +181,12 @@ class OllamaClient:
                 daemon=True,
             )
             monitor_thread.start()
+        semaphore_timeout = min(timeout or self.config.timeout, self.config.timeout)
+        acquired = self._concurrency_sem.acquire(timeout=semaphore_timeout)
+        if not acquired:
+            raise OllamaConnectionError(
+                f"Timed out waiting for Ollama concurrency slot ({self.config.max_parallel_requests} max)."
+            )
         try:
             with urlopen(request, timeout=timeout) as response:
                 full_response = []
@@ -213,6 +221,7 @@ class OllamaClient:
                 monitor_stop_event.set()
             if monitor_thread:
                 monitor_thread.join(timeout=1.0)
+            self._concurrency_sem.release()
 
     def _apply_batching_options(self, options: Dict[str, Any], prompt_chars: int) -> Dict[str, Any]:
         """Inject num_batch when configured or when adaptive batching is enabled."""
@@ -570,6 +579,7 @@ def create_client_from_config(config_dict: Dict[str, Any]) -> OllamaClient:
     env_url = os.environ.get('ANGRY_AI_OLLAMA_URL') or os.environ.get('OLLAMA_URL')
     env_model = os.environ.get('ANGRY_AI_OLLAMA_MODEL') or os.environ.get('OLLAMA_MODEL')
     env_ps_interval = os.environ.get('ANGRY_AI_OLLAMA_PS_INTERVAL')
+    env_parallel = os.environ.get('ANGRY_AI_OLLAMA_MAX_PARALLEL')
 
     batching_cfg = ollama_config.get('batching', {})
     if not isinstance(batching_cfg, dict):
@@ -620,6 +630,14 @@ def create_client_from_config(config_dict: Dict[str, Any]) -> OllamaClient:
     else:
         ps_interval = ollama_config.get('ps_monitor_interval', 0)
 
+    if env_parallel is not None:
+        try:
+            max_parallel = int(env_parallel)
+        except ValueError:
+            max_parallel = _coerce_int(batching_cfg.get('max_parallel_requests', 1), 1)
+    else:
+        max_parallel = _coerce_int(batching_cfg.get('max_parallel_requests', 1), 1)
+
     config = OllamaConfig(
         url=env_url or ollama_config.get('url', 'http://localhost:11434'),
         model=env_model or ollama_config.get('model', 'qwen2.5-coder:32b'),
@@ -634,6 +652,7 @@ def create_client_from_config(config_dict: Dict[str, Any]) -> OllamaClient:
         adaptive_batch_max=_coerce_int(batching_cfg.get('max_num_batch', 8), 8),
         extra_options=extra_options,
         ps_monitor_interval=max(0.0, float(ps_interval or 0)),
+        max_parallel_requests=max(1, int(max_parallel or 1)),
     )
     
     return OllamaClient(config)
