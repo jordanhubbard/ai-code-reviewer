@@ -1979,9 +1979,19 @@ def preflight_sanity_check(
     # Check for uncommitted changes (excluding .beads/ which we'll auto-stash)
     changes = git.show_status()
     if changes:
-        # Check if only .beads/ files are modified
+        def _is_ignored_change(line: str) -> bool:
+            trimmed = line.strip()
+            if not trimmed:
+                return True
+            path = trimmed.split()[-1]
+            if path.startswith('.beads/'):
+                return True
+            if path == 'REVIEW-INDEX.md':
+                return True
+            return False
+
         non_beads_changes = [line for line in changes.split('\n') 
-                            if line.strip() and not '.beads/' in line]
+                            if line.strip() and not _is_ignored_change(line)]
         
         if non_beads_changes:
             print("WARNING: Uncommitted changes detected (excluding .beads/):")
@@ -1991,7 +2001,7 @@ def preflight_sanity_check(
             print("Note: .beads/ changes are auto-stashed during recovery if needed.")
             return False
         
-        print("Note: .beads/ changes detected - will be auto-stashed if recovery needed")
+        print("Note: Ignoring .beads/ and REVIEW-INDEX.md changes (managed by Angry AI)")
     
     # Get current commit for reference
     code, current_commit = git._run(['rev-parse', 'HEAD'])
