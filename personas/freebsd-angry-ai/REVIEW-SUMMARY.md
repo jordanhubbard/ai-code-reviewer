@@ -6,6 +6,52 @@
 **Mission:** Find and fix code that would fail peer review, break builds, or embarrass the project
 
 ---
+## 2026-01-02 07:06 - bin/cpuset ✓
+
+**Directory:** `bin/cpuset`
+
+**Summary:** cpuset: Mark cpuset as auto-skipped after 3 retries
+
+**Files fixed:**
+  - .beads/beads.db-shm
+  - .beads/beads.db-wal
+  - REVIEW-INDEX.md
+
+---
+
+## 2026-01-02 06:48 - bin/cpuset ✓
+
+**Directory:** `bin/cpuset`
+
+**Summary:** cpuset: Update review status and metadata
+
+**Files fixed:**
+  - .beads/beads.db-shm
+  - .beads/beads.db-wal
+  - REVIEW-INDEX.md
+
+---
+
+## 2026-01-02 06:40 - bin/cpuset ✓
+
+**Directory:** `bin/cpuset`
+
+**Summary:** cpuset: Downgrade .beads version and clean up review data
+
+**Files fixed:**
+  - .beads/.local_version
+  - .beads/beads.db
+  - .beads/beads.db-shm
+  - .beads/beads.db-wal
+  - .beads/beads.left.jsonl
+  - .beads/beads.left.meta.json
+  - .beads/daemon.lock
+  - .beads/daemon.log
+  - .beads/daemon.pid
+  - REVIEW-INDEX.md
+
+---
+
 ## 2026-01-01 04:22 - Build ✓
 
 **Summary:** REVIEW-INDEX.md: Update generation date and line counts
