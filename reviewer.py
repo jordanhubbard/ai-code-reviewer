@@ -26,8 +26,10 @@ import datetime
 import logging
 import os
 import re
+import shutil
 import subprocess
 import sys
+from difflib import SequenceMatcher
 
 from index_generator import generate_index
 from build_executor import BuildResult
@@ -35,9 +37,26 @@ from chunker import CFileChunker, format_chunk_for_review
 from dataclasses import dataclass, field
 from ops_logger import OpsLogger, create_logger_from_config
 from pathlib import Path
-from typing import Dict, List, Optional, Any, Tuple
+from typing import Dict, List, Optional, Any, Tuple, Set
+import json
 
 logger = logging.getLogger(__name__)
+
+# File types considered "text" for review workflows
+REVIEWABLE_SUFFIXES = {
+    '.c', '.h', '.cc', '.cpp', '.cxx', '.s', '.S', '.sh', '.py', '.awk', '.ksh',
+    '.mk', '.m4', '.rs', '.go', '.m', '.mm', '.1', '.2', '.3', '.4', '.5', '.6',
+    '.7', '.8', '.9', '.txt', '.md', '.in'
+}
+
+REVIEWABLE_SPECIAL_FILES = {
+    'Makefile', 'Makefile.inc', 'BSDmakefile', 'README', 'README.md'
+}
+
+MANPAGE_SUFFIXES = {'.1', '.2', '.3', '.4', '.5', '.6', '.7', '.8', '.9', '.mdoc'}
+
+# Used to collapse large code blocks in console output while keeping logs intact
+CODE_BLOCK_RE = re.compile(r"```(\w*)\n(.*?)```", re.DOTALL)
 
 
 def load_yaml_config(config_path: Path) -> Dict[str, Any]:
@@ -111,6 +130,7 @@ class ReviewSession:
     current_file_chunks_reviewed: int = 0  # Chunks reviewed so far
     files_in_current_directory: List[str] = field(default_factory=list)
     files_reviewed_in_directory: int = 0
+    visited_files_in_directory: Set[str] = field(default_factory=set)
     
     # Changes tracking (accumulated until BUILD)
     pending_changes: bool = False
@@ -154,6 +174,7 @@ class GitHelper:
     
     def __init__(self, repo_root: Path):
         self.repo_root = repo_root
+        self._git_dir = repo_root / '.git'
     
     def _run(self, args: List[str], capture: bool = True) -> Tuple[int, str]:
         """Run a git command and return (returncode, output)."""
@@ -164,6 +185,106 @@ class GitHelper:
         else:
             result = subprocess.run(cmd)
             return result.returncode, ""
+
+    def _path_exists(self, relative: str) -> bool:
+        if not self._git_dir.exists():
+            return False
+        return (self._git_dir / relative).exists()
+
+    def has_rebase_in_progress(self) -> bool:
+        return any(self._path_exists(name) for name in ['rebase-apply', 'rebase-merge'])
+
+    def has_merge_in_progress(self) -> bool:
+        return self._path_exists('MERGE_HEAD')
+
+    def abort_rebase_if_needed(self) -> Tuple[bool, Optional[str]]:
+        if not self.has_rebase_in_progress():
+            return True, None
+        code, output = self._run(['rebase', '--abort'])
+        if code == 0:
+            return True, 'aborted incomplete rebase'
+        return False, f'Failed to abort rebase: {output}'
+
+    def abort_merge_if_needed(self) -> Tuple[bool, Optional[str]]:
+        if not self.has_merge_in_progress():
+            return True, None
+        code, output = self._run(['merge', '--abort'])
+        if code == 0:
+            return True, 'aborted unfinished merge'
+        return False, f'Failed to abort merge: {output}'
+
+    def get_current_branch(self) -> Optional[str]:
+        code, output = self._run(['rev-parse', '--abbrev-ref', 'HEAD'])
+        if code != 0:
+            return None
+        return output.strip()
+
+    def get_default_remote_branch(self) -> str:
+        code, output = self._run(['symbolic-ref', 'refs/remotes/origin/HEAD'])
+        if code == 0 and output.strip():
+            return output.strip().split('/')[-1]
+        return 'main'
+
+    def get_upstream_ref(self, fallback_branch: Optional[str] = None) -> Optional[str]:
+        code, output = self._run(['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}'])
+        if code == 0 and output.strip():
+            return output.strip()
+        branch = fallback_branch or self.get_default_remote_branch()
+        return f'origin/{branch}' if branch else None
+
+    def ensure_repository_ready(self, preferred_branch: str = 'main', allow_rebase: bool = False) -> Tuple[bool, str]:
+        """Abort unfinished operations, ensure on a branch, optionally sync with upstream."""
+        actions: List[str] = []
+
+        ok, msg = self.abort_rebase_if_needed()
+        if not ok:
+            return False, msg or 'Failed to abort rebase'
+        if msg:
+            actions.append(msg)
+
+        ok, msg = self.abort_merge_if_needed()
+        if not ok:
+            return False, msg or 'Failed to abort merge'
+        if msg:
+            actions.append(msg)
+
+        branch = self.get_current_branch()
+        target_branch = preferred_branch or self.get_default_remote_branch()
+        if branch == 'HEAD' or not branch:
+            code, output = self._run(['checkout', target_branch])
+            if code != 0:
+                return False, f'Failed to checkout {target_branch}: {output}'
+            actions.append(f'checked out {target_branch}')
+        else:
+            target_branch = branch
+
+        # Ensure there are no unmerged files lingering
+        code, status = self._run(['status', '--short'])
+        if code != 0:
+            return False, status or 'git status failed'
+        unmerged = [line[3:] for line in status.splitlines() if line.startswith(('UU ', 'AA ', 'DD '))]
+        if unmerged:
+            return False, f'Unmerged files present: {", ".join(unmerged)}'
+
+        can_rebase = allow_rebase and not self.has_changes()
+        if can_rebase:
+            upstream = self.get_upstream_ref(target_branch)
+            if upstream:
+                self._run(['fetch', 'origin'])
+                code, counts = self._run(['rev-list', '--left-right', '--count', f'{upstream}...HEAD'])
+                if code == 0:
+                    parts = counts.strip().split()
+                    behind = int(parts[0]) if parts else 0
+                    if behind > 0:
+                        code, output = self._run(['pull', '--rebase'])
+                        if code != 0:
+                            self.abort_rebase_if_needed()
+                            return False, f'Failed to rebase onto {upstream}: {output}'
+                        actions.append(f'rebased onto {upstream}')
+
+        if not actions:
+            return True, 'repository already clean'
+        return True, '; '.join(actions)
     
     def has_changes(self) -> bool:
         """Check if there are uncommitted changes."""
@@ -272,11 +393,181 @@ class GitHelper:
         return success
 
 
+class BeadsManager:
+    """Lightweight wrapper around the bd CLI for directory tracking."""
+
+    def __init__(self, repo_root: Path, bd_cmd: Optional[str] = None):
+        self.repo_root = repo_root
+        self.bd_cmd = bd_cmd or shutil.which(os.environ.get('BD_CMD', 'bd'))
+        self.enabled = self.bd_cmd is not None and (self.repo_root / '.beads').exists()
+        self.issues: Dict[str, Dict[str, Any]] = {}
+        if self.enabled:
+            self._load_existing_issues()
+        else:
+            logger.info("Beads integration disabled (bd command or .beads missing)")
+
+    def _run_bd(self, args: List[str]) -> Optional[str]:
+        if not self.enabled or not self.bd_cmd:
+            return None
+        try:
+            result = subprocess.run(
+                [self.bd_cmd] + args,
+                cwd=str(self.repo_root),
+                capture_output=True,
+                text=True,
+                timeout=120,
+            )
+            if result.returncode != 0:
+                logger.warning("bd command failed (%s): %s", ' '.join(args), result.stderr.strip())
+                return None
+            return result.stdout
+        except FileNotFoundError:
+            logger.warning("bd command not found at runtime")
+            self.enabled = False
+        except subprocess.TimeoutExpired:
+            logger.warning("bd command timed out: %s", ' '.join(args))
+        except Exception as exc:
+            logger.warning("bd command error: %s", exc)
+        return None
+
+    def _load_existing_issues(self) -> None:
+        output = self._run_bd(['search', '--json', '--limit', '200000', 'Review directory:'])
+        if not output:
+            return
+        try:
+            data = json.loads(output)
+        except json.JSONDecodeError as exc:
+            logger.warning("Unable to parse bd search output: %s", exc)
+            return
+
+        for issue in data:
+            directory = self._extract_directory(issue)
+            if not directory:
+                continue
+            # Prefer non-closed issues if duplicates exist
+            existing = self.issues.get(directory)
+            if existing:
+                if existing.get('status') != 'closed' and issue.get('status') == 'closed':
+                    continue
+            self.issues[directory] = {
+                'id': issue.get('id'),
+                'status': issue.get('status', 'open'),
+                'title': issue.get('title'),
+            }
+
+    @staticmethod
+    def _extract_directory(issue: Dict[str, Any]) -> Optional[str]:
+        title = (issue.get('title') or '').strip()
+        if title.startswith('Review directory: '):
+            candidate = title.split(':', 1)[1].strip()
+            if candidate:
+                return candidate
+        description = issue.get('description') or ''
+        match = re.search(r'in ([\w./-]+) directory \(relative to source root', description)
+        if match:
+            return match.group(1)
+        return None
+
+    def ensure_directories(self, directories: List[str]) -> int:
+        if not self.enabled:
+            return 0
+        created = 0
+        for directory in directories:
+            if directory in self.issues:
+                continue
+            description = (
+                f"AI code review of all files in {directory} directory "
+                f"(relative to source root: {self.repo_root})"
+            )
+            output = self._run_bd([
+                'create',
+                f'Review directory: {directory}',
+                '--description', description,
+                '-t', 'task',
+                '-p', '2',
+                '--json'
+            ])
+            if not output:
+                continue
+            try:
+                issue = json.loads(output)
+                self.issues[directory] = {
+                    'id': issue.get('id'),
+                    'status': issue.get('status', 'open'),
+                    'title': issue.get('title'),
+                }
+                created += 1
+            except json.JSONDecodeError:
+                logger.warning("Failed to parse bd create output for %s", directory)
+        return created
+
+    def _get_issue_id(self, directory: str) -> Optional[str]:
+        issue = self.issues.get(directory)
+        return issue.get('id') if issue else None
+
+    def mark_in_progress(self, directory: str) -> None:
+        issue_id = self._get_issue_id(directory)
+        if not issue_id:
+            return
+        output = self._run_bd(['update', issue_id, '--status', 'in_progress', '--json'])
+        if output:
+            self.issues[directory]['status'] = 'in_progress'
+
+    def mark_open(self, directory: str) -> None:
+        issue_id = self._get_issue_id(directory)
+        if not issue_id:
+            return
+        output = self._run_bd(['update', issue_id, '--status', 'open', '--json'])
+        if output:
+            self.issues[directory]['status'] = 'open'
+
+    def mark_completed(self, directory: str, commit_hash: str) -> None:
+        issue_id = self._get_issue_id(directory)
+        if not issue_id:
+            return
+        reason = f"Completed via commit {commit_hash}"
+        output = self._run_bd(['close', issue_id, '--reason', reason, '--json'])
+        if output:
+            self.issues[directory]['status'] = 'closed'
+
+
 class FileEditor:
     """Handles file editing operations."""
     
     def __init__(self, git: GitHelper):
         self.git = git
+
+    @staticmethod
+    def _closest_block(content: str, target: str) -> Optional[str]:
+        """Return the closest matching block from content for the target snippet."""
+        target_clean = target.strip()
+        if not target_clean:
+            return None
+        target_lines = [line for line in target.splitlines() if line.strip()]
+        if not target_lines:
+            return None
+
+        content_lines = content.splitlines()
+        window = len(target_lines)
+        if window == 0 or window > len(content_lines):
+            return None
+
+        best_ratio = 0
+        best_block = None
+        for idx in range(len(content_lines) - window + 1):
+            block = content_lines[idx:idx + window]
+            ratio = SequenceMatcher(
+                None,
+                '\n'.join(block).strip(),
+                '\n'.join(target_lines).strip()
+            ).ratio()
+            if ratio > best_ratio:
+                best_ratio = ratio
+                best_block = block
+
+        if best_block and best_ratio >= 0.4:
+            return '\n'.join(best_block)
+        return None
     
     @staticmethod
     def read_file(file_path: Path, max_chars: int = 50000) -> str:
@@ -301,7 +592,14 @@ class FileEditor:
             content = file_path.read_text(encoding='utf-8')
             
             if old_text not in content:
-                return False, f"OLD text not found in {file_path}", ""
+                closest = self._closest_block(content, old_text)
+                hint = ""
+                if closest:
+                    hint = (
+                        "\nClosest match found in file (copy this EXACT block for OLD):\n<<<\n"
+                        f"{closest}\n>>>"
+                    )
+                return False, f"OLD text not found in {file_path}{hint}", ""
             
             count = content.count(old_text)
             if count > 1:
@@ -338,24 +636,77 @@ class FileEditor:
 
 class ActionParser:
     """Parses AI responses for file edit actions."""
-    
-    # Match both "ACTION:" and markdown "### Action:" variants
-    ACTION_RE = re.compile(r'^(?:###\s+)?ACTION:\s*([A-Z_]+)(.*)$', re.MULTILINE | re.IGNORECASE)
-    
+
+    # Support leading markdown bullets/headings and either colons or dashes
+    ACTION_RE = re.compile(
+        r'^[\t >*\-\x60]*'        # optional list markers like "> ", "- ", "```"
+        r'(?:#{1,6}\s*)?'          # optional markdown heading prefix
+        r'ACTION'                   # the literal ACTION keyword
+        r'\s*[:\-]\s*'           # separator (colon or dash)
+        r'([A-Z0-9_]+)'             # action name (READ_FILE, EDIT_FILE, etc.)
+        r'(.*)$',
+        re.MULTILINE | re.IGNORECASE,
+    )
+
+    # Fallback matcher that finds inline ACTION directives anywhere in a line
+    ACTION_INLINE_RE = re.compile(
+        r'ACTION\s*[:\-]\s*([A-Z0-9_]+)\s*(.*)',
+        re.IGNORECASE,
+    )
+
+    ACTIONS_WITH_ARGUMENT = {
+        'READ_FILE', 'EDIT_FILE', 'WRITE_FILE', 'LIST_DIR', 'FIND_FILE',
+        'GREP', 'SET_SCOPE'
+    }
+
+    @classmethod
+    def _find_fallback_match(cls, response: str) -> Optional[Tuple[str, str, int]]:
+        """Fallback search for ACTION lines when strict regex misses them."""
+        fallback_match = None
+        for match in cls.ACTION_INLINE_RE.finditer(response):
+            fallback_match = match
+        if not fallback_match:
+            return None
+        action = fallback_match.group(1)
+        arg = fallback_match.group(2)
+        return action, arg, fallback_match.end()
+
     @classmethod
     def parse(cls, response: str) -> Optional[Dict[str, Any]]:
         """Parse an AI response for action directives."""
         matches = list(cls.ACTION_RE.finditer(response))
-        if not matches:
-            return None
-        
-        match = matches[-1]
-        action = match.group(1).strip()
-        arg = match.group(2).strip()
-        body = response[match.end():].strip()
-        
+        match = matches[-1] if matches else None
+        action_raw: Optional[str]
+        arg_raw: str
+        body_start: int
+
+        if match:
+            action_raw = match.group(1)
+            arg_raw = match.group(2)
+            body_start = match.end()
+        else:
+            fallback = cls._find_fallback_match(response)
+            if not fallback:
+                return None
+            action_raw, arg_raw, body_start = fallback
+
+        action = action_raw.strip().upper().replace('-', '_')
+        arg = arg_raw.strip()
+
+        remainder = response[body_start:]
+        remainder = remainder.lstrip('\r\n')
+
+        if not arg and action in cls.ACTIONS_WITH_ARGUMENT and remainder:
+            # Some models put the argument on the next line
+            lines = remainder.splitlines()
+            if lines:
+                arg = lines[0].strip()
+                remainder = '\n'.join(lines[1:])
+
+        body = remainder.strip()
+
         result = {'action': action, 'argument': arg, 'body': body}
-        
+
         if action == 'EDIT_FILE':
             result['file_path'] = arg
             old_match = re.search(r'OLD:\s*<<<(.*?)>>>', body, re.DOTALL)
@@ -363,34 +714,34 @@ class ActionParser:
             if old_match and new_match:
                 result['old_text'] = old_match.group(1).strip()
                 result['new_text'] = new_match.group(1).strip()
-        
+
         elif action == 'WRITE_FILE':
             result['file_path'] = arg
             content_match = re.search(r'CONTENT:\s*<<<(.*?)>>>', body, re.DOTALL)
             if content_match:
                 result['content'] = content_match.group(1).strip()
-        
+
         elif action == 'READ_FILE':
             result['file_path'] = arg
-        
+
         elif action == 'LIST_DIR':
             result['dir_path'] = arg
-        
+
         elif action == 'FIND_FILE':
             result['pattern'] = arg
-        
+
         elif action == 'GREP':
             result['pattern'] = arg
-        
+
         elif action == 'SET_SCOPE':
             result['directory'] = arg
-        
+
         elif action == 'NEXT_CHUNK':
             pass  # No arguments needed
-        
+
         elif action == 'SKIP_FILE':
             pass  # No arguments needed
-        
+
         return result
 
 
@@ -403,6 +754,7 @@ class ReviewLoop:
         build_executor: Any,
         source_root: Path,
         persona_dir: Path,
+        review_config: Optional[Dict[str, Any]] = None,
         target_directories: int = 10,
         max_iterations_per_directory: int = 200,
         log_dir: Optional[Path] = None,
@@ -414,6 +766,7 @@ class ReviewLoop:
         self.persona_dir = persona_dir
         self.target_directories = target_directories
         self.max_iterations_per_directory = max_iterations_per_directory
+        self.review_config = review_config or {}
         
         # All persona files live in persona_dir (keeps source tree clean!)
         self.bootstrap_file = persona_dir / "AI_START_HERE.md"
@@ -436,6 +789,11 @@ class ReviewLoop:
         
         # Operations logger for internal metrics
         self.ops = ops_logger or OpsLogger(session_id=self.session.session_id)
+
+        # Retry tracker for problematic directories
+        self.retry_tracker_path = self.persona_dir / 'retry-tracker.json'
+        self.retry_tracker = self._load_retry_tracker()
+        self.max_directory_retries = int(self.review_config.get('max_directory_retries', 3))
         
         # Chunk tracking for large files
         self.current_chunks: List[Any] = []  # Chunks for current file
@@ -449,12 +807,84 @@ class ReviewLoop:
         print("*** Loading review index...")
         self.index = generate_index(source_root)
         print(f"    Found {len(self.index.entries)} reviewable directories")
+        self.beads = self._init_beads_manager()
         
         # Conversation history
         self.history: List[Dict[str, str]] = []
         
         self._init_conversation()
     
+    def _load_retry_tracker(self) -> Dict[str, Dict[str, Any]]:
+        if self.retry_tracker_path.exists():
+            try:
+                with open(self.retry_tracker_path, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                    if isinstance(data, dict):
+                        return data
+            except Exception as exc:
+                print(f"*** WARNING: Unable to read {self.retry_tracker_path}: {exc}")
+        return {}
+
+    def _save_retry_tracker(self) -> None:
+        try:
+            with open(self.retry_tracker_path, 'w', encoding='utf-8') as f:
+                json.dump(self.retry_tracker, f, indent=2, sort_keys=True)
+        except Exception as exc:
+            print(f"*** WARNING: Unable to write {self.retry_tracker_path}: {exc}")
+
+    def _init_beads_manager(self) -> Optional[BeadsManager]:
+        try:
+            manager = BeadsManager(self.source_root)
+            if not manager.enabled:
+                print("*** Beads integration disabled (bd unavailable)")
+                return None
+            created = manager.ensure_directories(list(self.index.entries.keys()))
+            if created:
+                print(f"    Beads: created {created} missing directory issues")
+            else:
+                print("    Beads: all directories already tracked in beads")
+            return manager
+        except Exception as exc:
+            print(f"*** WARNING: Unable to initialize beads manager: {exc}")
+            logger.warning("Beads initialization failed", exc_info=exc)
+            return None
+
+    def _beads_mark_in_progress(self, directory: str) -> None:
+        if self.beads:
+            self.beads.mark_in_progress(directory)
+
+    def _beads_mark_completed(self, directory: str, commit_hash: str) -> None:
+        if self.beads:
+            self.beads.mark_completed(directory, commit_hash)
+
+    def _beads_mark_open(self, directory: str) -> None:
+        if self.beads:
+            self.beads.mark_open(directory)
+
+    def _get_retry_record(self, directory: str) -> Dict[str, Any]:
+        return self.retry_tracker.get(directory, {})
+
+    def _should_auto_skip(self, directory: str) -> bool:
+        if self.max_directory_retries <= 0:
+            return False
+        attempts = self._get_retry_record(directory).get('attempts', 0)
+        return attempts >= self.max_directory_retries
+
+    def _record_directory_attempt(self, directory: str) -> int:
+        record = self.retry_tracker.setdefault(directory, {})
+        attempts = record.get('attempts', 0) + 1
+        record['attempts'] = attempts
+        record['last_attempt'] = datetime.datetime.now().isoformat()
+        self._save_retry_tracker()
+        return attempts
+
+    def _clear_directory_attempt(self, directory: Optional[str]) -> None:
+        if not directory:
+            return
+        if directory in self.retry_tracker:
+            self.retry_tracker.pop(directory, None)
+            self._save_retry_tracker()
+
     def _init_conversation(self) -> None:
         """Initialize the conversation with system prompt, bootstrap, and index."""
         system_prompt = self._build_system_prompt()
@@ -638,6 +1068,24 @@ Respond with analysis followed by a single ACTION line.
             f.write(request)
             f.write("\n\n--- RESPONSE ---\n")
             f.write(response)
+
+    def _format_response_for_console(self, response: str) -> str:
+        """Collapse noisy code blocks before printing to stdout."""
+        def _collapse_block(match: re.Match) -> str:
+            lang = match.group(1).strip().lower()
+            body = match.group(2)
+            if lang == 'diff':
+                return match.group(0)
+            line_count = len(body.splitlines())
+            return f"```{lang}\n[... {line_count} lines hidden; see persona logs ...]\n```"
+
+        sanitized = CODE_BLOCK_RE.sub(_collapse_block, response)
+        max_chars = 2000
+        if len(sanitized) > max_chars:
+            trimmed = sanitized[:max_chars].rstrip()
+            hidden = len(sanitized) - max_chars
+            return f"{trimmed}\n... [truncated {hidden} chars; see persona logs for full output]"
+        return sanitized
     
     def _resolve_path(self, path_str: str) -> Path:
         """Resolve a relative path within the source tree."""
@@ -902,6 +1350,12 @@ Output ONLY the lesson entry, nothing else."""
     def _commit_and_push(self, message: str) -> Tuple[bool, str]:
         """Stage all changes, commit with message, and push."""
         print("\n*** Committing changes...")
+
+        ok, prep_msg = self.git.ensure_repository_ready(allow_rebase=False)
+        if not ok:
+            return False, f"Repository not ready: {prep_msg}"
+        if prep_msg:
+            print(f"*** Repository ready: {prep_msg}")
         
         if not self.git.add_all():
             return False, "Failed to stage changes"
@@ -917,16 +1371,21 @@ Output ONLY the lesson entry, nothing else."""
         success, output = self.git.pull_rebase()
         if not success:
             print(f"*** Warning: pull --rebase failed: {output}")
-            # Continue anyway, push might still work
+            self.git.abort_rebase_if_needed()
+            return False, f"Failed to rebase before push: {output}"
         
         print("*** Pushing to origin...")
         success, output = self.git.push()
         if not success:
             # Retry once after pull
             print("*** Push failed, trying pull --rebase again...")
-            self.git.pull_rebase()
+            rebase_ok, rebase_output = self.git.pull_rebase()
+            if not rebase_ok:
+                self.git.abort_rebase_if_needed()
+                return False, f"Failed to rebase during push retry: {rebase_output}"
             success, output = self.git.push()
             if not success:
+                self.git.ensure_repository_ready()
                 return False, f"Failed to push after retry: {output}"
         
         print("*** Pushed successfully!")
@@ -1112,6 +1571,21 @@ Output ONLY the lesson entry, nothing else."""
             
             # Normalize path (remove leading ./ or /)
             directory = directory.lstrip('./')
+
+            if self._should_auto_skip(directory):
+                attempts = self._get_retry_record(directory).get('attempts', 0)
+                self.index.mark_skipped(directory, reason=f"Auto-skipped after {attempts} retries")
+                self.index.save()
+                next_dir = self.index.get_next_pending()
+                skip_msg = (
+                    f"AUTO_SKIP: Directory {directory} skipped automatically after {attempts} failed attempts.\n\n"
+                    f"To retry it later, remove or edit {self.retry_tracker_path.name}."
+                )
+                if next_dir:
+                    skip_msg += f"\nPlease choose a different directory, e.g., ACTION: SET_SCOPE {next_dir}"
+                else:
+                    skip_msg += "\nNo other pending directories remain."
+                return skip_msg
             
             # IMPORTANT: Prevent changing directories with uncommitted changes
             if self.session.current_directory and self.session.current_directory != directory:
@@ -1144,10 +1618,11 @@ Output ONLY the lesson entry, nothing else."""
             # Discover all reviewable files in directory
             files_in_dir = []
             for item in sorted(dir_path.iterdir()):
-                if item.is_file() and not item.name.startswith('.'):
-                    # Include source files, headers, man pages
-                    if item.suffix in ['.c', '.h', '.cc', '.cpp', '.8', '.9', '.1', '.5'] or item.name == 'Makefile':
-                        files_in_dir.append(str(item.relative_to(self.source_root)))
+                if not item.is_file() or item.name.startswith('.'):
+                    continue
+                suffix = item.suffix.lower()
+                if suffix in REVIEWABLE_SUFFIXES or item.name in REVIEWABLE_SPECIAL_FILES:
+                    files_in_dir.append(str(item.relative_to(self.source_root)))
             
             # Update session state
             self.session.current_directory = directory
@@ -1158,10 +1633,12 @@ Output ONLY the lesson entry, nothing else."""
             self.session.current_file_chunks_reviewed = 0
             self.session.changed_files = []  # Reset changed files for new scope
             self.session.pending_changes = False
+            self.session.visited_files_in_directory = set()
             
             # Update the review index to track current position
             self.index.set_current(directory)
             self.index.save()
+            self._beads_mark_in_progress(directory)
             
             # Log directory start
             self.ops.directory_start(directory)
@@ -1181,10 +1658,11 @@ Output ONLY the lesson entry, nothing else."""
                 result += f"⚠ No Makefile - may be subdirectory\n\n"
             
             result += f"FILES TO REVIEW:\n"
-            for f in files_in_dir[:10]:  # Show first 10
-                result += f"  - {f}\n"
-            if len(files_in_dir) > 10:
-                result += f"  ... and {len(files_in_dir) - 10} more\n"
+            if files_in_dir:
+                for f in files_in_dir:
+                    result += f"  - {f}\n"
+            else:
+                result += "  (No reviewable text files detected. Directory may be an intermediate container.)\n"
             
             result += f"\n{progress}\n\n"
             result += f"WORKFLOW:\n"
@@ -1195,6 +1673,16 @@ Output ONLY the lesson entry, nothing else."""
             result += f"5. Move to next directory (SET_SCOPE)\n"
             
             print(f"\n*** Scope set to: {directory}")
+
+            attempt_num = self._record_directory_attempt(directory)
+            if self.max_directory_retries > 0:
+                remaining = max(self.max_directory_retries - attempt_num, 0)
+                result += f"\nAttempts recorded for {directory}: {attempt_num}/{self.max_directory_retries}."
+                if remaining == 0:
+                    result += "\nNext attempt will auto-skip this directory."
+                else:
+                    result += f"\n{remaining} attempt(s) remain before auto-skip."
+            
             return result
         
         elif action_type == 'READ_FILE':
@@ -1205,7 +1693,21 @@ Output ONLY the lesson entry, nothing else."""
             # Update session tracking
             rel_path = str(path.relative_to(self.source_root))
             self.session.current_file = rel_path
+            self.session.visited_files_in_directory.add(rel_path)
             
+            suffix = path.suffix.lower()
+            if suffix in MANPAGE_SUFFIXES:
+                self.session.files_reviewed_in_directory += 1
+                self.session.current_file = None
+                msg = (
+                    f"READ_FILE_SKIPPED: {path} is documentation (suffix {suffix}).\n"
+                    f"No code changes required. Marked as reviewed.\n"
+                    f"Remaining files in {self.session.current_directory} you can work on:\n"
+                    f"{self._remaining_files_summary()}\n\n"
+                    f"Please choose another source file or SET_SCOPE to a new directory."
+                )
+                return msg
+
             # Check if file should be chunked
             if self.chunker.should_chunk(path):
                 # Start chunked review
@@ -1300,18 +1802,12 @@ Output ONLY the lesson entry, nothing else."""
                 # Log edit success
                 self.ops.edit_success(rel_path, message)
                 
-                result = f"EDIT_FILE_OK: {message}\n\n"
+                result = f"EDIT_FILE_OK: {message}\n"
                 if self.session.current_directory:
                     result += f"Scope: {self.session.current_directory}\n"
-                result += "GIT DIFF (verify this looks correct):\n"
-                result += "```diff\n"
-                result += diff if diff else "(no diff - file may be new or unchanged)"
-                result += "\n```"
+                result += "Diffs will be shown for all changed files after BUILD succeeds."
                 
                 print(f"\n*** Edited: {path}")
-                print("*** Git diff:")
-                print(diff if diff else "(no diff)")
-                
                 return result
             else:
                 # Track consecutive edit failures on same file
@@ -1378,15 +1874,9 @@ Output ONLY the lesson entry, nothing else."""
                 if str(path) not in self.session.changed_files:
                     self.session.changed_files.append(str(path.relative_to(self.source_root)))
                 
-                result = f"WRITE_FILE_OK: {message}\n\n"
-                result += "GIT DIFF:\n```diff\n"
-                result += diff if diff else "(new file)"
-                result += "\n```"
+                result = f"WRITE_FILE_OK: {message}\nDiffs will be shown for all changed files after BUILD succeeds."
                 
                 print(f"\n*** Wrote: {path}")
-                print("*** Git diff:")
-                print(diff if diff else "(new file)")
-                
                 return result
             else:
                 return f"WRITE_FILE_ERROR: {message}"
@@ -1412,6 +1902,8 @@ Output ONLY the lesson entry, nothing else."""
                 # Log build success
                 self.ops.build_success(result.duration_seconds, result.warning_count)
                 
+                final_diffs = self._render_final_diffs(changed_files)
+
                 # Generate commit message using AI (include directory context)
                 commit_msg = self._generate_commit_message(
                     full_diff, changed_files, self.session.current_directory
@@ -1438,12 +1930,15 @@ Output ONLY the lesson entry, nothing else."""
                     
                     # Log commit success
                     self.ops.commit_success(commit_hash, changed_files)
+                    if self.session.current_directory:
+                        self._beads_mark_completed(self.session.current_directory, commit_hash)
                     
                     # Mark directory as completed in session
                     if self.session.current_directory:
                         if self.session.current_directory not in self.session.completed_directories:
                             self.session.completed_directories.append(self.session.current_directory)
                         self.session.directories_completed += 1
+                        self._clear_directory_attempt(self.session.current_directory)
                         
                         # Log directory complete
                         self.ops.directory_complete(
@@ -1464,7 +1959,7 @@ Output ONLY the lesson entry, nothing else."""
                            f"Changes committed and pushed.\n" \
                            f"REVIEW-SUMMARY.md and REVIEW-INDEX.md updated.\n\n" \
                            f"Completed directories so far: {self.session.directories_completed}" \
-                           f"{next_msg}"
+                           f"{next_msg}\n\nFINAL DIFFS:\n{final_diffs}"
                 else:
                     # Log commit failure
                     self.ops.commit_failure(output)
@@ -1504,6 +1999,8 @@ Output ONLY the lesson entry, nothing else."""
                 # Record lesson learned from the failure
                 print("*** Recording lesson learned...")
                 self._record_lesson(error_report, failed_fix_attempt=", ".join(reverted_files))
+                if self.session.current_directory:
+                    self._beads_mark_open(self.session.current_directory)
                 
                 # Commit and push LESSONS.md so the AI has it in context
                 self.git.add(str(self.lessons_file))
@@ -1540,14 +2037,17 @@ Output ONLY the lesson entry, nothing else."""
             
             # 2. Check if no directories have been completed
             if self.session.directories_completed == 0:
-                # Find directories that could be reviewed
-                suggestions = self._find_reviewable_directories()
-                if suggestions:
-                    return f"HALT_REJECTED: No directories have been completed yet.\n" \
-                           f"You must review at least one directory before halting.\n\n" \
-                           f"Suggested directories to review:\n" + \
-                           "\n".join(f"  - {d}" for d in suggestions[:5]) + \
-                           f"\n\nUse SET_SCOPE to begin reviewing one of these directories."
+                pending_dirs = [path for path, entry in self.index.entries.items()
+                                if entry.status == 'pending']
+                if pending_dirs:
+                    suggestion_lines = "\n".join(f"  - {d}" for d in pending_dirs[:5])
+                    return (
+                        "HALT_REJECTED: No directories have been completed yet.\n"
+                        "You must successfully review at least one directory before halting.\n\n"
+                        "Suggested directories to review next:\n"
+                        f"{suggestion_lines}\n\n"
+                        "Use ACTION: SET_SCOPE <dir> to continue."
+                    )
                 else:
                     return "HALT_ACKNOWLEDGED (no reviewable directories found)"
             
@@ -1585,6 +2085,8 @@ Output ONLY the lesson entry, nothing else."""
                 self.session.current_file = None
                 self.session.current_file_chunks_total = 0
                 self.session.current_file_chunks_reviewed = 0
+                rel_path = str(file_path.relative_to(self.source_root))
+                self.session.visited_files_in_directory.add(rel_path)
                 
                 progress = self.session.get_progress_summary()
                 return f"NEXT_CHUNK_COMPLETE: All chunks of {file_path} reviewed.\n\nPROGRESS:\n{progress}\n\n" \
@@ -1607,54 +2109,63 @@ Output ONLY the lesson entry, nothing else."""
         elif action_type == 'SKIP_FILE':
             if self.chunked_file_path:
                 file_path = self.chunked_file_path
+                rel_path = str(file_path.relative_to(self.source_root))
+                self.session.visited_files_in_directory.add(rel_path)
                 self.current_chunks = []
                 self.current_chunk_index = 0
                 self.chunked_file_path = None
-                return f"SKIP_FILE_OK: Skipped remaining chunks of {file_path}"
+                self.session.current_file = None
+                next_hint = self._remaining_files_summary()
+                return (
+                    f"SKIP_FILE_OK: Skipped remaining chunks of {file_path}.\n"
+                    f"Remaining files in {self.session.current_directory}:\n{next_hint}\n"
+                    "Pick another file with ACTION: READ_FILE <path> or move to a different directory with ACTION: SET_SCOPE <dir>."
+                )
             else:
-                return "SKIP_FILE_OK: No chunked file to skip"
+                skipped = self.session.current_file
+                self.session.current_file = None
+                if skipped:
+                    self.session.visited_files_in_directory.add(skipped)
+                next_hint = self._remaining_files_summary()
+                return (
+                    "SKIP_FILE_OK: Marked current file as skipped.\n"
+                    f"Remaining files in {self.session.current_directory}:\n{next_hint}\n"
+                    "Please READ_FILE another source file or SET_SCOPE to continue progress."
+                )
         
         else:
             return f"UNKNOWN_ACTION: {action_type}"
     
     def _find_reviewable_directories(self) -> List[str]:
-        """
-        Find directories in the source tree that contain C source and could be reviewed.
-        Focuses on bin/, sbin/, usr.bin/, usr.sbin/ directories.
-        """
-        reviewable = []
-        
-        for top_dir in ['bin', 'sbin', 'usr.bin', 'usr.sbin']:
-            top_path = self.source_root / top_dir
-            if not top_path.exists():
-                continue
-            
-            try:
-                for subdir in sorted(top_path.iterdir()):
-                    if not subdir.is_dir():
-                        continue
-                    
-                    # Skip if already reviewed
-                    rel_path = f"{top_dir}/{subdir.name}"
-                    if rel_path in self.session.completed_directories:
-                        continue
-                    
-                    # Check if it has C source files
-                    has_c_files = any(subdir.glob('*.c'))
-                    has_makefile = (subdir / 'Makefile').exists()
-                    
-                    if has_c_files and has_makefile:
-                        reviewable.append(rel_path)
-                    
-                    if len(reviewable) >= 20:  # Limit results
-                        break
-            except Exception:
-                continue
-            
-            if len(reviewable) >= 20:
-                break
-        
-        return reviewable
+        """Return a sample of pending directories from the review index."""
+        pending = [path for path, entry in self.index.entries.items()
+                   if entry.status == 'pending']
+        return pending[:20]
+
+    def _remaining_files_summary(self, limit: int = 5) -> str:
+        if not self.session.files_in_current_directory:
+            return "  (No files recorded for current directory)"
+        remaining = [f for f in self.session.files_in_current_directory
+                     if f not in self.session.visited_files_in_directory]
+        if not remaining:
+            return "  (All tracked files reviewed or skipped in this directory)"
+        lines = []
+        for path in remaining[:limit]:
+            lines.append(f"  - {path}")
+        if len(remaining) > limit:
+            lines.append(f"  ... plus {len(remaining) - limit} more")
+        return '\n'.join(lines)
+
+    def _render_final_diffs(self, files: List[str]) -> str:
+        if not files:
+            return "No files were modified in this directory."
+        sections = []
+        for rel_path in files:
+            diff = self.git.diff(rel_path)
+            header = f"--- {rel_path} ---"
+            body = diff if diff.strip() else "(no changes)"
+            sections.append(f"{header}\n```diff\n{body}\n```")
+        return "\n\n".join(sections)
     
     def _recover_from_loop(self, action: Dict[str, Any]) -> str:
         """
@@ -1893,7 +2404,7 @@ Output ONLY the lesson entry, nothing else."""
             print(f"\n{'='*60}")
             print("AI RESPONSE:")
             print('='*60)
-            print(response)
+            print(self._format_response_for_console(response))
             print('='*60)
             
             self.history.append({"role": "assistant", "content": response})
@@ -2342,6 +2853,7 @@ Examples:
         sys.exit(1)
     
     source_root = builder.config.source_root
+    git_helper = GitHelper(source_root)
     
     review_config = config.get('review', {})
     
@@ -2375,8 +2887,6 @@ Examples:
     # PRE-FLIGHT SANITY CHECK: Verify source builds before starting review
     # If build fails, revert commits until it builds again
     if not args.skip_preflight:
-        git_helper = GitHelper(source_root)
-        
         # Get max_reverts from config, default to 100
         max_reverts = review_config.get('max_reverts', 100)
         
@@ -2388,12 +2898,19 @@ Examples:
         logger.warning("Skipping pre-flight build check (--skip-preflight)")
         print("\n⚠️  WARNING: Pre-flight check skipped!")
         print("   If source doesn't build, AI may make things worse.\n")
+
+    ready, ready_msg = git_helper.ensure_repository_ready(allow_rebase=not git_helper.has_changes())
+    if not ready:
+        logger.error(f"Unable to prepare source tree: {ready_msg}")
+        sys.exit(1)
+    print(f"\n*** Source tree ready: {ready_msg}")
     
     loop = ReviewLoop(
         ollama_client=ollama,
         build_executor=builder,
         source_root=source_root,
         persona_dir=persona_dir,
+        review_config=review_config,
         ops_logger=ops_logger,
         target_directories=review_config.get('target_directories', 10),
         max_iterations_per_directory=review_config.get('max_iterations_per_directory', 200),
