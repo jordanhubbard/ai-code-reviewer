@@ -33,6 +33,17 @@ class DirectoryEntry:
     notes: str = ""
 
 
+REVIEWABLE_SUFFIXES = {
+    '.c', '.h', '.cc', '.cpp', '.cxx', '.s', '.S', '.sh', '.py', '.awk', '.ksh',
+    '.mk', '.m4', '.rs', '.go', '.m', '.mm', '.1', '.2', '.3', '.4', '.5', '.6',
+    '.7', '.8', '.9', '.txt', '.md', '.in'
+}
+
+REVIEWABLE_SPECIAL_FILES = {
+    'Makefile', 'Makefile.inc', 'BSDmakefile', 'README', 'README.md'
+}
+
+
 class ReviewIndex:
     """
     Manages the review index file.
@@ -46,7 +57,11 @@ class ReviewIndex:
     INDEX_FILE = "REVIEW-INDEX.md"
     
     # Directories to scan for reviewable code
-    TOP_DIRS = ['bin', 'sbin', 'usr.bin', 'usr.sbin', 'lib', 'libexec']
+    TOP_DIRS = [
+        'bin', 'sbin', 'usr.bin', 'usr.sbin', 'lib', 'libexec',
+        'cddl', 'contrib', 'crypto', 'gnu', 'include', 'kerberos5', 'krb5',
+        'release', 'secure', 'share', 'stand', 'sys', 'targets', 'tests', 'tools'
+    ]
     
     def __init__(self, source_root: Path):
         self.source_root = source_root
@@ -94,20 +109,34 @@ class ReviewIndex:
                 
                 rel_path = f"{prefix}/{item.name}"
                 
-                # Check for C files
-                c_files = list(item.glob('*.c'))
-                h_files = list(item.glob('*.h'))
+                c_files = []
+                h_files = []
+                reviewable_found = False
+                try:
+                    for child in item.iterdir():
+                        if not child.is_file() or child.name.startswith('.'):
+                            continue
+                        name = child.name
+                        suffix = child.suffix.lower()
+                        if name in REVIEWABLE_SPECIAL_FILES:
+                            reviewable_found = True
+                        if suffix == '.c':
+                            c_files.append(child)
+                            reviewable_found = True
+                        elif suffix == '.h':
+                            h_files.append(child)
+                            reviewable_found = True
+                        elif suffix in REVIEWABLE_SUFFIXES:
+                            reviewable_found = True
+                except PermissionError:
+                    reviewable_found = False
                 
-                # Check for Makefile (indicates buildable module)
-                has_makefile = (item / 'Makefile').exists()
-                
-                if c_files and has_makefile:
-                    # Count lines
+                if reviewable_found:
                     total_lines = 0
                     for f in c_files + h_files:
                         try:
                             total_lines += sum(1 for _ in open(f, 'rb'))
-                        except:
+                        except OSError:
                             pass
                     
                     entry = DirectoryEntry(
