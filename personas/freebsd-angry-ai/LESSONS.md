@@ -511,3 +511,447 @@ When converting atoi()/atol() to strtol() with validation:
 ### COMPILER: Stale .depend Files and Implicit Function Declaration
 - Stale `.depend` files and an implicit function declaration caused build failures.
 - Clean the build directory with `make clean` and ensure all functions are declared before use.
+
+
+## 2026-01-01 04:17
+### COMPILER: Broken Pipe Error
+- What went wrong: The build system encountered a broken pipe error.
+- How to avoid it next time: Ensure all output streams are properly handled and check for any issues with the build environment or configuration.
+
+
+## 2026-01-01 04:20
+### COMPILER: Broken Pipe Error
+- What went wrong: The build system encountered a broken pipe error.
+- How to avoid it next time: Ensure all build processes are correctly configured and that no external interruptions occur during builds.
+
+
+## 2026-01-01 04:22
+### COMPILER: Broken Pipe Error
+- What went wrong: The build system encountered a broken pipe error.
+- How to avoid it next time: Ensure all output streams are properly handled and check for any issues with the build environment or configuration.
+
+
+## 2026-01-01 04:25
+### COMPILER: Broken Pipe Error
+- What went wrong: The build system encountered a broken pipe error.
+- How to avoid it next time: Ensure all output streams are properly managed and that no processes are prematurely terminated during the build.
+
+
+## 2026-01-01 04:40
+### COMPILER: Broken Pipe Error
+- What went wrong: The build system encountered a broken pipe error.
+- How to avoid it next time: Ensure all output streams are properly handled and check for any issues with the build environment or configuration.
+
+
+## 2026-01-01 04:41
+### COMPILER: Broken Pipe Error
+- What went wrong: The build system encountered a broken pipe error.
+- How to avoid it next time: Ensure all output streams are properly managed and that no processes prematurely terminate.
+
+
+## 2026-01-01 04:43
+### COMPILER: Broken Pipe Error
+- What went wrong: The build system encountered a broken pipe error.
+- How to avoid it next time: Ensure all output streams are properly managed and that no processes prematurely terminate.
+
+
+## 2026-01-01 04:45
+### COMPILER: Broken Pipe Error
+- What went wrong: The build system encountered a broken pipe error.
+- How to avoid it next time: Ensure all output streams are properly managed and that no processes prematurely terminate.
+
+
+## 2026-01-01 04:46
+### COMPILER: Broken Pipe Error
+- What went wrong: The build system encountered a broken pipe error.
+- How to avoid it next time: Ensure all output streams are properly handled and that no processes prematurely terminate.
+
+
+## 2026-01-01 04:52
+### COMPILER: Broken Pipe Error
+- What went wrong: The build system encountered a broken pipe error.
+- How to avoid it next time: Ensure all output streams are properly managed and that no processes prematurely terminate.
+
+
+## 2026-01-01 04:58
+### COMPILER: Broken Pipe Error
+- What went wrong: The build system encountered a broken pipe error.
+- How to avoid it next time: Ensure all output streams are properly managed and that no processes prematurely terminate.
+
+
+## 2026-01-01 05:15
+### COMPILER: Broken Pipe Error
+- What went wrong: The build system encountered a broken pipe error.
+- How to avoid it next time: Ensure all build processes are properly configured and that no output streams are prematurely closed.
+
+
+## 2026-01-01 05:18
+### COMPILER: Broken Pipe Error
+- What went wrong: The build system encountered a broken pipe error.
+- How to avoid it next time: Ensure all output streams are properly managed and that no processes prematurely terminate.
+
+
+## 2026-01-01 05:19
+### COMPILER: Broken Pipe Error
+- The build system encountered a broken pipe error.
+- Ensure all output streams are properly managed and no processes prematurely terminate.
+
+
+## 2026-01-01 05:30
+### COMPILER: Empty Build Error Report
+- The build failed without any specific error or warning messages.
+- Ensure all dependencies and environment configurations are correctly set up before starting a build.
+
+
+## 2026-01-01 05:32
+### COMPILER: Build System Configuration Issue
+- The build system reported a failure without specific errors or warnings.
+- Verify build configuration and ensure all dependencies are correctly installed and up-to-date.
+
+
+## 2026-01-01 05:33
+### COMPILER: Empty Build Error Log
+- The build failed with no specific errors or warnings logged.
+- Ensure all build tools and dependencies are correctly installed and configured.
+
+
+## 2026-01-01 05:48
+### COMPILER: Build Script Issues
+- The build failed due to issues in the clean script and source files.
+- Ensure scripts and source files are correctly formatted and executable permissions are set.
+
+
+## 2026-01-01 05:49
+### COMPILER: Build System Configuration Issue
+- The build system reported a failure without specific errors or warnings.
+- Verify build configuration and environment setup to ensure all dependencies are correctly installed and paths are set properly.
+
+
+## 2026-01-01 05:50
+### COMPILER: Build System Configuration Issue
+- The build system reported a failure without specific errors or warnings.
+- Verify build configuration and environment setup to ensure all dependencies are correctly installed and paths are set properly.
+
+
+## 2026-01-01 05:51
+### COMPILER: Empty Build Error Log
+- The build failed with no errors or warnings logged.
+- Ensure all build tools and configurations are correctly set up to capture and report errors.
+
+
+## 2026-01-01 05:52
+### COMPILER: Empty Build Error Report
+- The build failed without any specific error or warning messages.
+- Ensure all dependencies and environment configurations are correctly set up before starting a build.
+
+
+## 2026-01-01 05:55
+### COMPILER: Empty Build Error Report
+- The build failed without any specific error or warning messages.
+- Ensure all dependencies and environment configurations are correctly set up before starting a build.
+
+
+## 2026-01-01 06:02
+### COMPILER: Build System Configuration Issue
+- The build system reported a failure without specific errors or warnings.
+- Verify build configuration and environment setup to ensure all dependencies are correctly installed and paths are set properly.
+
+
+## 2026-01-01 07:07
+### COMPILER: Broken Pipe Error
+- What went wrong: The build system encountered a broken pipe error.
+- How to avoid it next time: Ensure all build tools and dependencies are up-to-date and check for any issues with resource limits or process management.
+
+
+## 2026-01-01 07:08
+### COMPILER: Broken Pipe Error
+- What went wrong: The build system encountered a broken pipe error.
+- How to avoid it next time: Ensure all output streams are properly handled and that no processes prematurely terminate.
+
+
+## 2026-01-01 07:09
+### COMPILER: Broken Pipe Error
+- What went wrong: The build system encountered a broken pipe error.
+- How to avoid it next time: Ensure all output streams are properly handled and that no processes prematurely terminate.
+
+
+## 2026-01-01 07:10
+### COMPILER: Broken Pipe Error
+- What went wrong: The build system encountered a broken pipe error.
+- How to avoid it next time: Ensure all output streams are properly managed and that no processes prematurely terminate.
+
+
+## 2026-01-01 07:14
+### COMPILER: Broken Pipe Error
+- What went wrong: The build system encountered a broken pipe error.
+- How to avoid it next time: Ensure all output streams are properly handled and that no processes prematurely terminate.
+
+
+## 2026-01-01 07:22
+### COMPILER: Broken Pipe Error
+- What went wrong: The build system encountered a broken pipe error.
+- How to avoid it next time: Ensure all build processes are correctly configured and that no external interruptions occur during builds.
+
+
+## 2026-01-01 07:23
+### COMPILER: Broken Pipe Error
+- What went wrong: The build system encountered a broken pipe error.
+- How to avoid it next time: Ensure all output streams are properly managed and that no processes prematurely terminate.
+
+
+## 2026-01-01 07:25
+### COMPILER: Broken Pipe Error
+- What went wrong: The build system encountered a broken pipe error.
+- How to avoid it next time: Ensure all output streams are properly handled and that no processes prematurely terminate.
+
+
+## 2026-01-01 07:26
+### COMPILER: Broken Pipe Error
+- What went wrong: The build system encountered a broken pipe error.
+- How to avoid it next time: Ensure all output streams are properly managed and that no processes prematurely terminate.
+
+
+## 2026-01-01 08:13
+### COMPILER: Broken Pipe Error
+- What went wrong: The build system encountered a broken pipe error.
+- How to avoid it next time: Ensure all build tools and dependencies are up-to-date and check for any issues with the build environment configuration.
+
+
+## 2026-01-01 08:23
+### COMPILER: Broken Pipe Error
+- What went wrong: The build system encountered a broken pipe error.
+- How to avoid it next time: Ensure all output streams are properly managed and that no processes prematurely terminate.
+
+
+## 2026-01-01 08:24
+### COMPILER: Broken Pipe Error
+- What went wrong: The build system encountered a broken pipe error.
+- How to avoid it next time: Ensure all output streams are properly managed and check for any issues with the build environment or tools.
+
+
+## 2026-01-01 08:25
+### COMPILER: Broken Pipe Error
+- What went wrong: The build system encountered a broken pipe error.
+- How to avoid it next time: Ensure all output streams are properly managed and that no processes prematurely terminate.
+
+
+## 2026-01-01 08:26
+### COMPILER: Broken Pipe Error
+- What went wrong: The build system encountered a broken pipe error.
+- How to avoid it next time: Ensure all output streams are properly handled and that no processes prematurely terminate.
+
+
+## 2026-01-01 08:33
+### COMPILER: Broken Pipe Error
+- What went wrong: The build system encountered a broken pipe error.
+- How to avoid it next time: Ensure all output streams are properly handled and that no processes prematurely terminate.
+
+
+## 2026-01-01 08:34
+### COMPILER: Broken Pipe Error
+- What went wrong: The build system encountered a broken pipe error.
+- How to avoid it next time: Ensure all output streams are properly handled and that no processes prematurely terminate.
+
+
+## 2026-01-01 08:36
+### COMPILER: Broken Pipe Error
+- What went wrong: The build system encountered a broken pipe error.
+- How to avoid it next time: Ensure all output streams are properly handled and that no processes prematurely terminate.
+
+
+## 2026-01-01 08:40
+### BUILD: Build failure
+- Error occurred during buildworld
+- Review compiler output carefully
+
+
+## 2026-01-01 10:58
+### COMPILER: Stale .depend Files and Implicit Function Declarations
+- Stale `.depend` files and undeclared function `get_which_name` caused build failures.
+- Clean build directory with `make clean` and ensure all functions are declared before use.
+
+
+## 2026-01-01 11:06
+### COMPILER: Stale .depend Files and Implicit Function Declarations
+- Stale `.depend` files and undeclared function `get_which_name` caused build failures.
+- Clean build directory with `make clean` and ensure all functions are declared before use.
+
+
+## 2026-01-01 11:43
+### COMPILER: Stale Dependencies and Implicit Function Calls
+- Stale dependencies and undeclared function calls caused build failures.
+- Clean build directories and ensure all functions are declared before use.
+
+
+## 2026-01-01 11:45
+### COMPILER: Stale .depend Files and Implicit Function Declarations
+- Stale `.depend` files caused build errors; undeclared function `get_which_name` led to a compilation failure.
+- Clean build directories using `make clean` before building; ensure all functions are declared or defined.
+
+
+## 2026-01-01 11:47
+### COMPILER: Stale .depend Files and Implicit Function Declarations
+- Stale `.depend` files and undeclared function calls caused build failures.
+- Clean build directories with `make clean` and ensure all functions are declared before use.
+
+
+## 2026-01-01 11:49
+### COMPILER: Stale .depend Files and Implicit Function Declarations
+- Stale `.depend` files caused build errors; undeclared function `get_which_name` led to a compiler error.
+- Clean build directory with `make clean` before building; ensure all functions are declared or defined.
+
+
+## 2026-01-01 11:56
+### COMPILER: Stale .depend Files and Implicit Function Declarations
+- Stale `.depend` files caused build errors; undeclared function `get_which_name` led to a compilation failure.
+- Clean build directory with `make clean` before building; ensure all functions are declared or defined.
+
+
+## 2026-01-01 12:01
+### COMPILER: Stale .depend Files and Implicit Function Declarations
+- Stale `.depend` files and undeclared function `get_which_name` caused build failures.
+- Clean build directory with `make clean` and ensure all functions are declared before use.
+
+
+## 2026-01-01 12:03
+### COMPILER: Stale .depend Files and Implicit Function Declarations
+- Stale `.depend` files caused build errors; undeclared function `get_which_name` led to a compiler error.
+- Clean build directory with `make clean` before building; ensure all functions are declared or defined.
+
+
+## 2026-01-01 12:05
+### COMPILER: Stale .depend Files and Implicit Function Declarations
+- Stale `.depend` files and undeclared function `get_which_name` caused build failures.
+- Clean build directory with `make clean` and ensure all functions are declared before use.
+
+
+## 2026-01-01 12:07
+### COMPILER: Stale .depend Files and Implicit Function Declarations
+- Stale `.depend` files caused build errors; undeclared function `get_which_name` led to implicit declaration warnings treated as errors.
+- Clean build directory with `make clean` before building; ensure all functions are declared or defined.
+
+
+## 2026-01-01 12:14
+### COMPILER: Stale .depend Files and Implicit Function Declarations
+- Stale `.depend` files and undeclared function `get_which_name` caused build failures.
+- Clean build directory with `make clean` and ensure all functions are declared before use.
+
+
+## 2026-01-01 12:19
+### COMPILER: Stale .depend Files and Implicit Function Declarations
+- Stale `.depend` files and undeclared function `get_which_name` caused build failures.
+- Clean build directories with `make clean` and ensure all functions are declared before use.
+
+
+## 2026-01-01 12:21
+### COMPILER: Stale .depend Files and Implicit Function Declarations
+- Stale `.depend` files caused build errors; undeclared function `get_which_name` led to implicit declaration issues.
+- Clean build directory with `make clean` before building; ensure all functions are declared properly in headers.
+
+
+## 2026-01-01 12:26
+### COMPILER: Stale .depend Files and Implicit Function Declarations
+- Stale `.depend` files and undeclared function `get_which_name` caused build failures.
+- Clean build directory with `make clean` and ensure all functions are declared before use.
+
+
+## 2026-01-01 12:28
+### COMPILER: Stale .depend Files and Implicit Function Declarations
+- Stale `.depend` files and undeclared function calls caused build failures.
+- Clean build directories with `make clean` and ensure all functions are declared before use.
+
+
+## 2026-01-01 12:31
+### COMPILER: Stale .depend Files and Implicit Function Declarations
+- Stale `.depend` files caused build errors; undeclared function `get_which_name` led to a compilation failure.
+- Clean build directories with `make clean` before building and ensure all functions are declared or defined.
+
+
+## 2026-01-01 12:35
+### COMPILER: Stale .depend Files and Implicit Function Declarations
+- Stale `.depend` files caused build errors; undeclared function `get_which_name` led to implicit declaration warnings treated as errors.
+- Clean build directory with `make clean` before rebuilding; ensure all functions are declared or defined.
+
+
+## 2026-01-01 12:43
+### COMPILER: Stale .depend Files and Implicit Function Declarations
+- Stale `.depend` files and undeclared function `get_which_name` caused build failures.
+- Clean build directory with `make clean` and ensure all functions are declared before use.
+
+
+## 2026-01-01 12:45
+### COMPILER: Stale .depend Files and Implicit Function Declarations
+- Stale `.depend` files and undeclared function `get_which_name` caused build failures.
+- Clean build directory with `make clean` and ensure all functions are declared before use.
+
+
+## 2026-01-01 12:47
+### COMPILER: Stale .depend Files and Implicit Function Declarations
+- Stale `.depend` files caused build errors; undeclared function `get_which_name` led to a compilation failure.
+- Clean build directory with `make clean` before building; ensure all functions are declared or defined.
+
+
+## 2026-01-01 13:02
+### COMPILER: Stale .depend Files and Implicit Function Declarations
+- Stale `.depend` files caused build errors; undeclared function `get_which_name` led to a compilation failure.
+- Clean build directories with `make clean` before building and ensure all functions are declared or defined.
+
+
+## 2026-01-01 13:09
+### COMPILER: Stale .depend Files and Implicit Function Declarations
+- Stale `.depend` files and undeclared function `get_which_name` caused build failures.
+- Clean build directory with `make clean` and ensure all functions are declared before use.
+
+
+## 2026-01-01 13:19
+### COMPILER: Stale .depend Files and Implicit Function Declarations
+- Stale `.depend` files and undeclared function calls caused build failures.
+- Clean build directories with `make clean` and ensure all functions are declared before use.
+
+
+## 2026-01-01 13:25
+### COMPILER: Stale .depend Files and Implicit Function Declarations
+- Stale `.depend` files caused build errors; undeclared function `get_which_name` led to implicit declaration issues.
+- Clean build directory with `make clean` before building; ensure all functions are declared before use.
+
+
+## 2026-01-01 13:36
+### COMPILER: Stale .depend Files and Implicit Function Declarations
+- Stale `.depend` files caused build errors; undeclared function `get_which_name` led to a compilation failure.
+- Clean build directory with `make clean` before building; ensure all functions are declared or defined.
+
+
+## 2026-01-01 13:37
+### COMPILER: Stale .depend Files and Implicit Function Declarations
+- Stale `.depend` files caused build errors; undeclared function `get_which_name` led to a compilation failure.
+- Clean build directories with `make clean` before building; ensure all functions are declared or defined.
+
+
+## 2026-01-01 13:47
+### COMPILER: Stale .depend Files and Implicit Function Declarations
+- Stale `.depend` files and an implicit function declaration caused build failures.
+- Clean build directories with `make clean` and ensure all functions are declared before use.
+
+
+## 2026-01-01 13:54
+### COMPILER: Stale .depend Files and Implicit Function Declarations
+- Stale `.depend` files caused build errors; undeclared function `get_which_name` led to a compilation failure.
+- Clean build directory with `make clean` before building; ensure all functions are declared or defined.
+
+
+## 2026-01-01 14:05
+### COMPILER: Stale .depend Files and Implicit Function Declarations
+- Stale `.depend` files and undeclared function `get_which_name` caused build failures.
+- Clean build directories with `make clean` and ensure all functions are declared before use.
+
+
+## 2026-01-01 14:08
+### COMPILER: Stale .depend Files and Implicit Function Declarations
+- Stale `.depend` files caused build errors; undeclared function `get_which_name` led to implicit declaration issues.
+- Clean build directory using `make clean` before building; ensure all functions are declared properly in headers.
+
+
+## 2026-01-01 14:13
+### COMPILER: Stale .depend Files and Implicit Function Declarations
+- Stale `.depend` files caused build errors; undeclared function `get_which_name` led to a compilation failure.
+- Clean build directory with `make clean` before building; ensure all functions are declared or defined.

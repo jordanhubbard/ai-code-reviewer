@@ -39,6 +39,9 @@ from typing import Dict, List, Optional, Any, Tuple
 
 logger = logging.getLogger(__name__)
 
+# Used to collapse large code blocks in console output while keeping logs intact
+CODE_BLOCK_RE = re.compile(r"```(\w*)\n(.*?)```", re.DOTALL)
+
 
 def load_yaml_config(config_path: Path) -> Dict[str, Any]:
     """Load YAML configuration file."""
@@ -154,6 +157,7 @@ class GitHelper:
     
     def __init__(self, repo_root: Path):
         self.repo_root = repo_root
+        self._git_dir = repo_root / '.git'
     
     def _run(self, args: List[str], capture: bool = True) -> Tuple[int, str]:
         """Run a git command and return (returncode, output)."""
@@ -164,6 +168,106 @@ class GitHelper:
         else:
             result = subprocess.run(cmd)
             return result.returncode, ""
+
+    def _path_exists(self, relative: str) -> bool:
+        if not self._git_dir.exists():
+            return False
+        return (self._git_dir / relative).exists()
+
+    def has_rebase_in_progress(self) -> bool:
+        return any(self._path_exists(name) for name in ['rebase-apply', 'rebase-merge'])
+
+    def has_merge_in_progress(self) -> bool:
+        return self._path_exists('MERGE_HEAD')
+
+    def abort_rebase_if_needed(self) -> Tuple[bool, Optional[str]]:
+        if not self.has_rebase_in_progress():
+            return True, None
+        code, output = self._run(['rebase', '--abort'])
+        if code == 0:
+            return True, 'aborted incomplete rebase'
+        return False, f'Failed to abort rebase: {output}'
+
+    def abort_merge_if_needed(self) -> Tuple[bool, Optional[str]]:
+        if not self.has_merge_in_progress():
+            return True, None
+        code, output = self._run(['merge', '--abort'])
+        if code == 0:
+            return True, 'aborted unfinished merge'
+        return False, f'Failed to abort merge: {output}'
+
+    def get_current_branch(self) -> Optional[str]:
+        code, output = self._run(['rev-parse', '--abbrev-ref', 'HEAD'])
+        if code != 0:
+            return None
+        return output.strip()
+
+    def get_default_remote_branch(self) -> str:
+        code, output = self._run(['symbolic-ref', 'refs/remotes/origin/HEAD'])
+        if code == 0 and output.strip():
+            return output.strip().split('/')[-1]
+        return 'main'
+
+    def get_upstream_ref(self, fallback_branch: Optional[str] = None) -> Optional[str]:
+        code, output = self._run(['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}'])
+        if code == 0 and output.strip():
+            return output.strip()
+        branch = fallback_branch or self.get_default_remote_branch()
+        return f'origin/{branch}' if branch else None
+
+    def ensure_repository_ready(self, preferred_branch: str = 'main', allow_rebase: bool = False) -> Tuple[bool, str]:
+        """Abort unfinished operations, ensure on a branch, optionally sync with upstream."""
+        actions: List[str] = []
+
+        ok, msg = self.abort_rebase_if_needed()
+        if not ok:
+            return False, msg or 'Failed to abort rebase'
+        if msg:
+            actions.append(msg)
+
+        ok, msg = self.abort_merge_if_needed()
+        if not ok:
+            return False, msg or 'Failed to abort merge'
+        if msg:
+            actions.append(msg)
+
+        branch = self.get_current_branch()
+        target_branch = preferred_branch or self.get_default_remote_branch()
+        if branch == 'HEAD' or not branch:
+            code, output = self._run(['checkout', target_branch])
+            if code != 0:
+                return False, f'Failed to checkout {target_branch}: {output}'
+            actions.append(f'checked out {target_branch}')
+        else:
+            target_branch = branch
+
+        # Ensure there are no unmerged files lingering
+        code, status = self._run(['status', '--short'])
+        if code != 0:
+            return False, status or 'git status failed'
+        unmerged = [line[3:] for line in status.splitlines() if line.startswith(('UU ', 'AA ', 'DD '))]
+        if unmerged:
+            return False, f'Unmerged files present: {", ".join(unmerged)}'
+
+        can_rebase = allow_rebase and not self.has_changes()
+        if can_rebase:
+            upstream = self.get_upstream_ref(target_branch)
+            if upstream:
+                self._run(['fetch', 'origin'])
+                code, counts = self._run(['rev-list', '--left-right', '--count', f'{upstream}...HEAD'])
+                if code == 0:
+                    parts = counts.strip().split()
+                    behind = int(parts[0]) if parts else 0
+                    if behind > 0:
+                        code, output = self._run(['pull', '--rebase'])
+                        if code != 0:
+                            self.abort_rebase_if_needed()
+                            return False, f'Failed to rebase onto {upstream}: {output}'
+                        actions.append(f'rebased onto {upstream}')
+
+        if not actions:
+            return True, 'repository already clean'
+        return True, '; '.join(actions)
     
     def has_changes(self) -> bool:
         """Check if there are uncommitted changes."""
@@ -338,24 +442,77 @@ class FileEditor:
 
 class ActionParser:
     """Parses AI responses for file edit actions."""
-    
-    # Match both "ACTION:" and markdown "### Action:" variants
-    ACTION_RE = re.compile(r'^(?:###\s+)?ACTION:\s*([A-Z_]+)(.*)$', re.MULTILINE | re.IGNORECASE)
-    
+
+    # Support leading markdown bullets/headings and either colons or dashes
+    ACTION_RE = re.compile(
+        r'^[\t >*\-\x60]*'        # optional list markers like "> ", "- ", "```"
+        r'(?:#{1,6}\s*)?'          # optional markdown heading prefix
+        r'ACTION'                   # the literal ACTION keyword
+        r'\s*[:\-]\s*'           # separator (colon or dash)
+        r'([A-Z0-9_]+)'             # action name (READ_FILE, EDIT_FILE, etc.)
+        r'(.*)$',
+        re.MULTILINE | re.IGNORECASE,
+    )
+
+    # Fallback matcher that finds inline ACTION directives anywhere in a line
+    ACTION_INLINE_RE = re.compile(
+        r'ACTION\s*[:\-]\s*([A-Z0-9_]+)\s*(.*)',
+        re.IGNORECASE,
+    )
+
+    ACTIONS_WITH_ARGUMENT = {
+        'READ_FILE', 'EDIT_FILE', 'WRITE_FILE', 'LIST_DIR', 'FIND_FILE',
+        'GREP', 'SET_SCOPE'
+    }
+
+    @classmethod
+    def _find_fallback_match(cls, response: str) -> Optional[Tuple[str, str, int]]:
+        """Fallback search for ACTION lines when strict regex misses them."""
+        fallback_match = None
+        for match in cls.ACTION_INLINE_RE.finditer(response):
+            fallback_match = match
+        if not fallback_match:
+            return None
+        action = fallback_match.group(1)
+        arg = fallback_match.group(2)
+        return action, arg, fallback_match.end()
+
     @classmethod
     def parse(cls, response: str) -> Optional[Dict[str, Any]]:
         """Parse an AI response for action directives."""
         matches = list(cls.ACTION_RE.finditer(response))
-        if not matches:
-            return None
-        
-        match = matches[-1]
-        action = match.group(1).strip()
-        arg = match.group(2).strip()
-        body = response[match.end():].strip()
-        
+        match = matches[-1] if matches else None
+        action_raw: Optional[str]
+        arg_raw: str
+        body_start: int
+
+        if match:
+            action_raw = match.group(1)
+            arg_raw = match.group(2)
+            body_start = match.end()
+        else:
+            fallback = cls._find_fallback_match(response)
+            if not fallback:
+                return None
+            action_raw, arg_raw, body_start = fallback
+
+        action = action_raw.strip().upper().replace('-', '_')
+        arg = arg_raw.strip()
+
+        remainder = response[body_start:]
+        remainder = remainder.lstrip('\r\n')
+
+        if not arg and action in cls.ACTIONS_WITH_ARGUMENT and remainder:
+            # Some models put the argument on the next line
+            lines = remainder.splitlines()
+            if lines:
+                arg = lines[0].strip()
+                remainder = '\n'.join(lines[1:])
+
+        body = remainder.strip()
+
         result = {'action': action, 'argument': arg, 'body': body}
-        
+
         if action == 'EDIT_FILE':
             result['file_path'] = arg
             old_match = re.search(r'OLD:\s*<<<(.*?)>>>', body, re.DOTALL)
@@ -363,34 +520,34 @@ class ActionParser:
             if old_match and new_match:
                 result['old_text'] = old_match.group(1).strip()
                 result['new_text'] = new_match.group(1).strip()
-        
+
         elif action == 'WRITE_FILE':
             result['file_path'] = arg
             content_match = re.search(r'CONTENT:\s*<<<(.*?)>>>', body, re.DOTALL)
             if content_match:
                 result['content'] = content_match.group(1).strip()
-        
+
         elif action == 'READ_FILE':
             result['file_path'] = arg
-        
+
         elif action == 'LIST_DIR':
             result['dir_path'] = arg
-        
+
         elif action == 'FIND_FILE':
             result['pattern'] = arg
-        
+
         elif action == 'GREP':
             result['pattern'] = arg
-        
+
         elif action == 'SET_SCOPE':
             result['directory'] = arg
-        
+
         elif action == 'NEXT_CHUNK':
             pass  # No arguments needed
-        
+
         elif action == 'SKIP_FILE':
             pass  # No arguments needed
-        
+
         return result
 
 
@@ -638,6 +795,24 @@ Respond with analysis followed by a single ACTION line.
             f.write(request)
             f.write("\n\n--- RESPONSE ---\n")
             f.write(response)
+
+    def _format_response_for_console(self, response: str) -> str:
+        """Collapse noisy code blocks before printing to stdout."""
+        def _collapse_block(match: re.Match) -> str:
+            lang = match.group(1).strip().lower()
+            body = match.group(2)
+            if lang == 'diff':
+                return match.group(0)
+            line_count = len(body.splitlines())
+            return f"```{lang}\n[... {line_count} lines hidden; see persona logs ...]\n```"
+
+        sanitized = CODE_BLOCK_RE.sub(_collapse_block, response)
+        max_chars = 2000
+        if len(sanitized) > max_chars:
+            trimmed = sanitized[:max_chars].rstrip()
+            hidden = len(sanitized) - max_chars
+            return f"{trimmed}\n... [truncated {hidden} chars; see persona logs for full output]"
+        return sanitized
     
     def _resolve_path(self, path_str: str) -> Path:
         """Resolve a relative path within the source tree."""
@@ -902,6 +1077,12 @@ Output ONLY the lesson entry, nothing else."""
     def _commit_and_push(self, message: str) -> Tuple[bool, str]:
         """Stage all changes, commit with message, and push."""
         print("\n*** Committing changes...")
+
+        ok, prep_msg = self.git.ensure_repository_ready(allow_rebase=False)
+        if not ok:
+            return False, f"Repository not ready: {prep_msg}"
+        if prep_msg:
+            print(f"*** Repository ready: {prep_msg}")
         
         if not self.git.add_all():
             return False, "Failed to stage changes"
@@ -917,16 +1098,21 @@ Output ONLY the lesson entry, nothing else."""
         success, output = self.git.pull_rebase()
         if not success:
             print(f"*** Warning: pull --rebase failed: {output}")
-            # Continue anyway, push might still work
+            self.git.abort_rebase_if_needed()
+            return False, f"Failed to rebase before push: {output}"
         
         print("*** Pushing to origin...")
         success, output = self.git.push()
         if not success:
             # Retry once after pull
             print("*** Push failed, trying pull --rebase again...")
-            self.git.pull_rebase()
+            rebase_ok, rebase_output = self.git.pull_rebase()
+            if not rebase_ok:
+                self.git.abort_rebase_if_needed()
+                return False, f"Failed to rebase during push retry: {rebase_output}"
             success, output = self.git.push()
             if not success:
+                self.git.ensure_repository_ready()
                 return False, f"Failed to push after retry: {output}"
         
         print("*** Pushed successfully!")
@@ -1893,7 +2079,7 @@ Output ONLY the lesson entry, nothing else."""
             print(f"\n{'='*60}")
             print("AI RESPONSE:")
             print('='*60)
-            print(response)
+            print(self._format_response_for_console(response))
             print('='*60)
             
             self.history.append({"role": "assistant", "content": response})
@@ -2342,6 +2528,7 @@ Examples:
         sys.exit(1)
     
     source_root = builder.config.source_root
+    git_helper = GitHelper(source_root)
     
     review_config = config.get('review', {})
     
@@ -2375,8 +2562,6 @@ Examples:
     # PRE-FLIGHT SANITY CHECK: Verify source builds before starting review
     # If build fails, revert commits until it builds again
     if not args.skip_preflight:
-        git_helper = GitHelper(source_root)
-        
         # Get max_reverts from config, default to 100
         max_reverts = review_config.get('max_reverts', 100)
         
@@ -2388,6 +2573,12 @@ Examples:
         logger.warning("Skipping pre-flight build check (--skip-preflight)")
         print("\n⚠️  WARNING: Pre-flight check skipped!")
         print("   If source doesn't build, AI may make things worse.\n")
+
+    ready, ready_msg = git_helper.ensure_repository_ready(allow_rebase=not git_helper.has_changes())
+    if not ready:
+        logger.error(f"Unable to prepare source tree: {ready_msg}")
+        sys.exit(1)
+    print(f"\n*** Source tree ready: {ready_msg}")
     
     loop = ReviewLoop(
         ollama_client=ollama,
