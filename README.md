@@ -17,6 +17,9 @@
 - ✅ **Safe**: Tests every change with your build system
 - ✅ **Autonomous**: Runs for hours reviewing entire directories
 - ✅ **Smart**: Uses LLM (via Ollama) for intelligent analysis
+- ✅ **Parallel**: Optional concurrent file processing for faster reviews (experimental)
+- ✅ **Self-Healing**: Auto-detects loops, learns from build failures, files systemic issues
+- ✅ **Secure**: Scans commits for secrets before pushing
 
 ## Works With
 

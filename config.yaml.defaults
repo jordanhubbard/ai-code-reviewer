@@ -112,6 +112,14 @@ review:
   # A typical directory needs 50-100 iterations (read files, edit, build)
   max_iterations_per_directory: 200
   
+  # Parallel file processing (EXPERIMENTAL)
+  # Process multiple files concurrently for faster reviews
+  # Set to 1 for sequential processing (safest)
+  # Set to 2-4 for parallel processing (faster but more complex)
+  # Note: Builds are always sequential per directory regardless of this setting
+  # DEFAULT: 2 (moderate parallelism for testing)
+  max_parallel_files: 2
+  
   # Maximum commits to revert during pre-flight sanity check recovery
   # If source doesn't build at startup, pre-flight reverts commits until it does
   # Higher values allow recovery from longer periods of broken commits

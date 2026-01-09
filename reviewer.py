@@ -29,6 +29,8 @@ import re
 import shutil
 import subprocess
 import sys
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from difflib import SequenceMatcher
 
 from index_generator import generate_index
@@ -169,12 +171,158 @@ class GitCommandError(RuntimeError):
     """Raised when a git command fails."""
 
 
+class SecretScanner:
+    """Scans git diffs for potentially sensitive information before commits."""
+    
+    # Patterns for common secret types
+    PATTERNS = [
+        # API Keys and Tokens
+        (r'["\']?api[_-]?key["\']?\s*[:=]\s*["\']([A-Za-z0-9_\-]{20,})["\']', 'API Key'),
+        (r'["\']?api[_-]?secret["\']?\s*[:=]\s*["\']([A-Za-z0-9_\-]{20,})["\']', 'API Secret'),
+        (r'["\']?auth[_-]?token["\']?\s*[:=]\s*["\']([A-Za-z0-9_\-]{20,})["\']', 'Auth Token'),
+        (r'["\']?access[_-]?token["\']?\s*[:=]\s*["\']([A-Za-z0-9_\-]{20,})["\']', 'Access Token'),
+        (r'["\']?bearer["\']?\s*[:=]\s*["\']([A-Za-z0-9_\-]{20,})["\']', 'Bearer Token'),
+        
+        # AWS Credentials
+        (r'AKIA[0-9A-Z]{16}', 'AWS Access Key ID'),
+        (r'["\']?aws[_-]?secret["\']?\s*[:=]\s*["\']([A-Za-z0-9/+=]{40})["\']', 'AWS Secret Access Key'),
+        
+        # Private Keys
+        (r'-----BEGIN (RSA |DSA |EC |OPENSSH )?PRIVATE KEY-----', 'Private Key'),
+        (r'-----BEGIN (PGP|SSH2) PRIVATE KEY', 'Private Key'),
+        
+        # Passwords (only when obviously sensitive)
+        (r'["\']?password["\']?\s*[:=]\s*["\']([^"\'\s]{8,})["\']', 'Hardcoded Password'),
+        (r'["\']?passwd["\']?\s*[:=]\s*["\']([^"\'\s]{8,})["\']', 'Hardcoded Password'),
+        (r'["\']?pwd["\']?\s*[:=]\s*["\']([^"\'\s]{8,})["\']', 'Hardcoded Password'),
+        
+        # Database Connection Strings
+        (r'(mysql|postgresql|mongodb|redis)://[^:]+:[^@]+@', 'Database Credentials'),
+        (r'jdbc:[a-z]+://[^:]+:[^@]+@', 'JDBC Credentials'),
+        
+        # OAuth and Client Secrets
+        (r'["\']?client[_-]?secret["\']?\s*[:=]\s*["\']([A-Za-z0-9_\-]{20,})["\']', 'Client Secret'),
+        (r'["\']?oauth[_-]?token["\']?\s*[:=]\s*["\']([A-Za-z0-9_\-]{20,})["\']', 'OAuth Token'),
+        
+        # GitHub/GitLab Tokens
+        (r'gh[pousr]_[A-Za-z0-9]{36,}', 'GitHub Token'),
+        (r'glpat-[A-Za-z0-9_\-]{20,}', 'GitLab Token'),
+        
+        # Generic High-Entropy Strings (base64-like)
+        (r'["\']([A-Za-z0-9+/]{40,}={0,2})["\']', 'High-Entropy String (possible secret)'),
+    ]
+    
+    # False positive patterns to exclude
+    EXCLUDE_PATTERNS = [
+        r'example\.com',
+        r'placeholder',
+        r'your[_-]?(api|secret|key|token)',
+        r'INSERT[_-]?(YOUR|API|SECRET|KEY|TOKEN)',
+        r'xxxx+',
+        r'\*\*\*\*+',
+        r'test[_-]?(key|secret|token)',
+        r'fake[_-]?(key|secret|token)',
+        r'dummy[_-]?(key|secret|token)',
+    ]
+    
+    @classmethod
+    def scan_diff(cls, diff_output: str) -> List[Tuple[str, str, str]]:
+        """
+        Scan git diff for potential secrets.
+        
+        Args:
+            diff_output: Output from 'git diff' command
+            
+        Returns:
+            List of (file_path, secret_type, matched_text) tuples
+        """
+        findings = []
+        current_file = None
+        
+        for line in diff_output.split('\n'):
+            # Track current file being diffed
+            if line.startswith('+++'):
+                current_file = line.split()[-1].lstrip('b/')
+                continue
+            
+            # Only scan added lines (those starting with +)
+            if not line.startswith('+') or line.startswith('+++'):
+                continue
+            
+            # Remove the + prefix
+            content = line[1:]
+            
+            # Check against each pattern
+            for pattern, secret_type in cls.PATTERNS:
+                matches = re.finditer(pattern, content, re.IGNORECASE)
+                for match in matches:
+                    matched_text = match.group(0)
+                    
+                    # Check if it's a false positive
+                    is_false_positive = any(
+                        re.search(exclude, matched_text, re.IGNORECASE)
+                        for exclude in cls.EXCLUDE_PATTERNS
+                    )
+                    
+                    if not is_false_positive:
+                        findings.append((current_file or 'unknown', secret_type, matched_text))
+        
+        return findings
+    
+    @classmethod
+    def format_findings(cls, findings: List[Tuple[str, str, str]]) -> str:
+        """Format scan findings as a readable report."""
+        if not findings:
+            return ""
+        
+        lines = [
+            "=" * 70,
+            "⚠️  POTENTIAL SECRETS DETECTED IN COMMIT",
+            "=" * 70,
+            "",
+            f"Found {len(findings)} potential secret(s):",
+            ""
+        ]
+        
+        for i, (file_path, secret_type, matched_text) in enumerate(findings, 1):
+            # Redact the middle of the matched text for display
+            if len(matched_text) > 20:
+                redacted = matched_text[:8] + "..." + matched_text[-8:]
+            else:
+                redacted = matched_text[:4] + "..." + matched_text[-4:]
+            
+            lines.append(f"[{i}] {file_path}")
+            lines.append(f"    Type: {secret_type}")
+            lines.append(f"    Match: {redacted}")
+            lines.append("")
+        
+        lines.extend([
+            "=" * 70,
+            "COMMIT BLOCKED FOR SAFETY",
+            "=" * 70,
+            "",
+            "If these are false positives:",
+            "1. Review the patterns in SecretScanner.PATTERNS",
+            "2. Add exclusions to SecretScanner.EXCLUDE_PATTERNS",
+            "3. Or manually commit with git (bypassing this tool)",
+            "",
+            "If these ARE secrets:",
+            "1. Remove them from the code",
+            "2. Use environment variables or config files (gitignored)",
+            "3. Rotate any exposed credentials immediately",
+            ""
+        ])
+        
+        return '\n'.join(lines)
+
+
 class GitHelper:
     """Helper for git operations."""
     
     def __init__(self, repo_root: Path):
         self.repo_root = repo_root
         self._git_dir = repo_root / '.git'
+        self.secret_scanner = SecretScanner()
     
     def _run(self, args: List[str], capture: bool = True) -> Tuple[int, str]:
         """Run a git command and return (returncode, output)."""
@@ -319,8 +467,29 @@ class GitHelper:
         code, _ = self._run(['add', '-A'])
         return code == 0
     
-    def commit(self, message: str) -> Tuple[bool, str]:
-        """Commit staged changes."""
+    def commit(self, message: str, skip_secret_scan: bool = False) -> Tuple[bool, str]:
+        """
+        Commit staged changes after scanning for secrets.
+        
+        Args:
+            message: Commit message
+            skip_secret_scan: Set to True to bypass secret scanning (use with caution!)
+            
+        Returns:
+            Tuple of (success, output/error_message)
+        """
+        # Scan staged changes for potential secrets before committing
+        if not skip_secret_scan:
+            staged_diff = self.diff_staged()
+            if staged_diff:
+                findings = self.secret_scanner.scan_diff(staged_diff)
+                if findings:
+                    # Secrets detected - block the commit
+                    error_report = self.secret_scanner.format_findings(findings)
+                    logger.error(f"Commit blocked: {len(findings)} potential secrets detected")
+                    print("\n" + error_report)
+                    return False, error_report
+        
         code, output = self._run(['commit', '-m', message])
         return code == 0, output
     
@@ -529,6 +698,59 @@ class BeadsManager:
         output = self._run_bd(['close', issue_id, '--reason', reason, '--json'])
         if output:
             self.issues[directory]['status'] = 'closed'
+    
+    def create_systemic_issue(
+        self,
+        title: str,
+        description: str,
+        issue_type: str = 'bug',
+        priority: int = 1,
+        labels: Optional[List[str]] = None
+    ) -> Optional[str]:
+        """
+        Create a beads issue for systemic problems discovered during review.
+        
+        Args:
+            title: Short issue title
+            description: Detailed description
+            issue_type: bug, feature, task, epic, chore
+            priority: 0-4 (0=critical, 1=high, 2=medium, 3=low, 4=backlog)
+            labels: Optional list of labels
+            
+        Returns:
+            Issue ID if created, None otherwise
+        """
+        if not self.enabled:
+            return None
+        
+        args = [
+            'create',
+            title,
+            '--description', description,
+            '-t', issue_type,
+            '-p', str(priority),
+            '--json'
+        ]
+        
+        # Add labels if provided
+        if labels:
+            for label in labels:
+                args.extend(['--label', label])
+        
+        output = self._run_bd(args)
+        if not output:
+            return None
+        
+        try:
+            issue = json.loads(output)
+            issue_id = issue.get('id')
+            if issue_id:
+                logger.info(f"Created systemic issue: {issue_id} - {title}")
+                return issue_id
+        except json.JSONDecodeError as exc:
+            logger.warning(f"Failed to parse bd create output: {exc}")
+        
+        return None
 
 
 class FileEditor:
@@ -757,6 +979,7 @@ class ReviewLoop:
         review_config: Optional[Dict[str, Any]] = None,
         target_directories: int = 10,
         max_iterations_per_directory: int = 200,
+        max_parallel_files: int = 1,
         log_dir: Optional[Path] = None,
         ops_logger: Optional[OpsLogger] = None,
     ):
@@ -766,6 +989,7 @@ class ReviewLoop:
         self.persona_dir = persona_dir
         self.target_directories = target_directories
         self.max_iterations_per_directory = max_iterations_per_directory
+        self.max_parallel_files = max_parallel_files
         self.review_config = review_config or {}
         
         # All persona files live in persona_dir (keeps source tree clean!)
@@ -811,6 +1035,14 @@ class ReviewLoop:
         
         # Conversation history
         self.history: List[Dict[str, str]] = []
+        
+        # Parallel processing support
+        self._edit_lock = threading.Lock() if max_parallel_files > 1 else None
+        self._parallel_mode = max_parallel_files > 1
+        
+        if self._parallel_mode:
+            logger.info(f"Parallel file processing enabled: max_workers={max_parallel_files}")
+            print(f"*** Parallel mode: {max_parallel_files} concurrent file reviews")
         
         self._init_conversation()
     
@@ -886,8 +1118,20 @@ class ReviewLoop:
             self._save_retry_tracker()
 
     def _init_conversation(self) -> None:
-        """Initialize the conversation with system prompt, bootstrap, and index."""
+        """Initialize the conversation with system prompt, bootstrap, lessons, and index."""
         system_prompt = self._build_system_prompt()
+        
+        # Load LESSONS.md to provide context of past mistakes
+        lessons_content = ""
+        if self.lessons_file.exists():
+            try:
+                lessons_content = self.lessons_file.read_text(encoding='utf-8')
+                # Truncate if too long (keep last 8000 chars = ~20-30 lessons)
+                if len(lessons_content) > 8000:
+                    lessons_content = "...[earlier lessons truncated]...\n\n" + lessons_content[-8000:]
+            except Exception as e:
+                logger.warning(f"Failed to load LESSONS.md: {e}")
+                lessons_content = ""
         
         # Get current position and next target from index
         index_summary = self.index.get_summary_for_ai()
@@ -904,6 +1148,23 @@ class ReviewLoop:
 {index_summary}
 
 """
+        
+        # Include lessons learned if available
+        if lessons_content:
+            init_message += f"""
+=== LESSONS LEARNED FROM PAST MISTAKES ===
+
+**CRITICAL**: Before making ANY edit, consult these lessons to avoid repeating mistakes!
+
+```markdown
+{lessons_content}
+```
+
+**Remember**: These lessons were learned the hard way (build failures, reverted changes).
+Check this list before every EDIT_FILE action to ensure you're not repeating a documented mistake.
+
+"""
+        
         if current:
             init_message += f"\nRESUME reviewing: `{current}` (already in progress)\n"
             init_message += f"Use: ACTION: SET_SCOPE {current}\n"
@@ -1053,6 +1314,8 @@ RULES:
 3. Commit message will reflect the entire directory's changes
 4. Use relative paths from source root
 5. Include enough context in OLD blocks for uniqueness
+6. **CONSULT LESSONS.md** - Before making edits, check the lessons learned from past mistakes!
+   The lessons are provided in your initial context. Don't repeat documented errors.
 
 Respond with analysis followed by a single ACTION line.
 """
@@ -1824,6 +2087,31 @@ Output ONLY the lesson entry, nothing else."""
                 MAX_EDIT_FAILURES = 3
                 if self.session.edit_failure_count >= MAX_EDIT_FAILURES:
                     logger.error(f"EDIT_FILE failed {self.session.edit_failure_count} times on {rel_path}")
+                    
+                    # File a beads issue for this edit failure pattern
+                    if self.beads:
+                        issue_desc = (
+                            f"AI stuck in edit-read-edit failure loop.\n\n"
+                            f"File: {rel_path}\n"
+                            f"Failed attempts: {self.session.edit_failure_count}\n"
+                            f"Error: {message}\n"
+                            f"Directory: {self.session.current_directory or 'unknown'}\n"
+                            f"Session: {self.session.session_id}\n\n"
+                            f"This pattern suggests:\n"
+                            f"- File content doesn't match AI expectations\n"
+                            f"- Code already changed by previous edits\n"
+                            f"- Whitespace/tab mismatches in OLD block\n"
+                            f"- File too complex for reliable editing\n"
+                            f"- AI not reading file carefully before editing"
+                        )
+                        self.beads.create_systemic_issue(
+                            title=f"Edit failure loop on {rel_path}",
+                            description=issue_desc,
+                            issue_type='bug',
+                            priority=2,
+                            labels=['ai-behavior', 'edit-failure', 'file-mismatch']
+                        )
+                    
                     return (
                         f"EDIT_FILE_ERROR: {message}\n\n"
                         f"{'='*70}\n"
@@ -2214,6 +2502,30 @@ Output ONLY the lesson entry, nothing else."""
         self.session.consecutive_identical_actions = 0
         self.session.last_action_hash = None
         
+        # 5. File a beads issue for this systemic problem
+        if self.beads:
+            action_hash = self._get_action_hash(action)
+            issue_desc = (
+                f"AI got stuck in an infinite loop during code review.\n\n"
+                f"Action repeated: {action_type} - {action_hash}\n"
+                f"Repetitions: {len([a for a in self.session.action_history if a[1] == action_hash])}\n"
+                f"Directory: {self.session.current_directory or 'unknown'}\n"
+                f"Session: {self.session.session_id}\n\n"
+                f"Recovery actions taken:\n" + "\n".join(f"- {a}" for a in recovery_actions) +
+                f"\n\nThis indicates a problem with:\n"
+                f"- AI instruction clarity\n"
+                f"- File/directory complexity\n"
+                f"- Loop detection thresholds\n"
+                f"- Error handling logic"
+            )
+            self.beads.create_systemic_issue(
+                title=f"Loop detection triggered: {action_type} in {self.session.current_directory or 'unknown'}",
+                description=issue_desc,
+                issue_type='bug',
+                priority=1,
+                labels=['ai-behavior', 'loop-detection', 'automatic-recovery']
+            )
+        
         print("="*70)
         print("✓ RECOVERY COMPLETE - You must now take a different approach")
         print("="*70 + "\n")
@@ -2439,6 +2751,29 @@ Output ONLY the lesson entry, nothing else."""
                 # If same unparseable response repeated too many times, force recovery
                 if self.session.consecutive_parse_failures >= 5:
                     logger.error(f"Same unparseable response repeated {self.session.consecutive_parse_failures} times")
+                    
+                    # File a beads issue for this parsing problem
+                    if self.beads:
+                        issue_desc = (
+                            f"AI repeatedly provided unparseable responses.\n\n"
+                            f"Failed response (truncated):\n{response[:500]}...\n\n"
+                            f"Repetitions: {self.session.consecutive_parse_failures}\n"
+                            f"Directory: {self.session.current_directory or 'unknown'}\n"
+                            f"Session: {self.session.session_id}\n\n"
+                            f"This suggests:\n"
+                            f"- Wrong format being used (e.g., '### Action:' instead of 'ACTION:')\n"
+                            f"- Response truncation issues\n"
+                            f"- LLM not following instructions\n"
+                            f"- Parser regex needs improvement"
+                        )
+                        self.beads.create_systemic_issue(
+                            title=f"Unparseable response loop in {self.session.current_directory or 'unknown'}",
+                            description=issue_desc,
+                            issue_type='bug',
+                            priority=1,
+                            labels=['ai-behavior', 'parsing-failure', 'format-error']
+                        )
+                    
                     recovery_msg = (
                         f"\n{'='*70}\n"
                         f"⚠️  CRITICAL: UNPARSEABLE LOOP DETECTED ⚠️\n"
@@ -2914,6 +3249,7 @@ Examples:
         ops_logger=ops_logger,
         target_directories=review_config.get('target_directories', 10),
         max_iterations_per_directory=review_config.get('max_iterations_per_directory', 200),
+        max_parallel_files=review_config.get('max_parallel_files', 1),
     )
     
     try:
