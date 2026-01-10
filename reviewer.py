@@ -2362,13 +2362,13 @@ Output ONLY the lesson entry, nothing else."""
                 )
                 
                 # Mark directory as done in the persistent index BEFORE commit
-                # so REVIEW-INDEX.md is included in the commit
+                # so updated REVIEW-INDEX.md is included in the commit
                 if self.session.current_directory:
                     self.index.mark_done(self.session.current_directory, 
                                        f"Fixed by session {self.session.session_id}")
                     self.index.save()
                 
-                # Commit and push (includes REVIEW-SUMMARY.md and REVIEW-INDEX.md)
+                # Commit and push (includes all .ai-code-reviewer/ metadata)
                 success, output = self._commit_and_push(commit_msg)
                 if success:
                     # Get commit hash for logging
@@ -2404,7 +2404,7 @@ Output ONLY the lesson entry, nothing else."""
                     return f"BUILD_SUCCESS: Build completed successfully.\n" \
                            f"Directory {current_dir} is now complete.\n" \
                            f"Changes committed and pushed.\n" \
-                           f"REVIEW-SUMMARY.md and REVIEW-INDEX.md updated.\n\n" \
+                           f"Metadata files in .ai-code-reviewer/ updated.\n\n" \
                            f"Completed directories so far: {self.session.directories_completed}" \
                            f"{next_msg}\n\nFINAL DIFFS:\n{final_diffs}"
                 else:
@@ -2770,10 +2770,11 @@ Output ONLY the lesson entry, nothing else."""
                     if code == 0:
                         print(f"    Reverted: {file_path}")
             
-            # Also revert REVIEW-INDEX.md if modified
-            code, output = self.git._run(['checkout', 'REVIEW-INDEX.md'])
-            if code == 0:
-                print("    Reverted: REVIEW-INDEX.md")
+            # Also revert REVIEW-INDEX.md if modified (check both locations)
+            for index_path in ['REVIEW-INDEX.md', '.ai-code-reviewer/REVIEW-INDEX.md']:
+                code, output = self.git._run(['checkout', index_path])
+                if code == 0:
+                    print(f"    Reverted: {index_path}")
             
             self.session.pending_changes = False
             self.session.changed_files = []
@@ -3086,7 +3087,7 @@ def preflight_sanity_check(
                 return True
             if path.startswith('.angry-ai/'):  # Legacy location
                 return True
-            if path == 'REVIEW-INDEX.md':
+            if path == 'REVIEW-INDEX.md':  # Legacy location
                 return True
             return False
 
@@ -3101,7 +3102,7 @@ def preflight_sanity_check(
             print("Note: .beads/ and .ai-code-reviewer/ changes are auto-managed by the tool.")
             return False
         
-        print("Note: Ignoring .beads/, .ai-code-reviewer/, and REVIEW-INDEX.md changes (managed by tool)")
+        print("Note: Ignoring .beads/ and .ai-code-reviewer/ changes (managed by tool)")
     
     # Get current commit for reference
     code, current_commit = git._run(['rev-parse', 'HEAD'])

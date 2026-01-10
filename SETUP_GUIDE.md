@@ -199,7 +199,7 @@ After successful setup:
 2. It will run a pre-flight build check to ensure the source builds
 3. The AI will start reviewing code directory by directory
 4. Progress is tracked in:
-   - `REVIEW-INDEX.md` - Directory completion status
+   - `.ai-code-reviewer/REVIEW-INDEX.md` - Directory completion status
    - `personas/*/REVIEW-SUMMARY.md` - Detailed review history
    - `personas/*/LESSONS.md` - Patterns learned from mistakes
    - `.beads/` - Issue tracking database (if beads is installed)

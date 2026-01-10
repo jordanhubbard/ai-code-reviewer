@@ -55,6 +55,7 @@ class ReviewIndex:
     """
     
     INDEX_FILE = "REVIEW-INDEX.md"
+    META_DIR = ".ai-code-reviewer"
     
     # Directories to scan for reviewable code
     TOP_DIRS = [
@@ -65,9 +66,33 @@ class ReviewIndex:
     
     def __init__(self, source_root: Path):
         self.source_root = source_root
-        self.index_path = source_root / self.INDEX_FILE
+        # Store index in .ai-code-reviewer/ metadata directory
+        self.meta_dir = source_root / self.META_DIR
+        self.meta_dir.mkdir(parents=True, exist_ok=True)
+        self.index_path = self.meta_dir / self.INDEX_FILE
+        
+        # Check for legacy index location and migrate
+        self._migrate_legacy_index()
+        
         self.entries: Dict[str, DirectoryEntry] = {}
         self.current_position: Optional[str] = None
+    
+    def _migrate_legacy_index(self) -> None:
+        """Migrate REVIEW-INDEX.md from source root to .ai-code-reviewer/"""
+        legacy_path = self.source_root / self.INDEX_FILE
+        
+        if not legacy_path.exists():
+            return  # No legacy file to migrate
+        
+        if self.index_path.exists():
+            return  # Already migrated
+        
+        try:
+            import shutil
+            shutil.move(str(legacy_path), str(self.index_path))
+            print(f"*** Migrated {self.INDEX_FILE} to {self.META_DIR}/")
+        except Exception as e:
+            print(f"WARNING: Could not migrate {self.INDEX_FILE}: {e}")
     
     def generate(self) -> None:
         """
