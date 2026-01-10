@@ -1019,10 +1019,29 @@ class ReviewLoop:
         self.max_parallel_files = max_parallel_files
         self.review_config = review_config or {}
         
-        # All persona files live in persona_dir (keeps source tree clean!)
+        # Persona files (behavior templates - shared across projects)
         self.bootstrap_file = persona_dir / "AI_START_HERE.md"
-        self.lessons_file = persona_dir / "LESSONS.md"
-        self.review_summary_file = persona_dir / "REVIEW-SUMMARY.md"
+        
+        # Source-specific files (lessons learned and progress - per project)
+        # These live in the source tree so each project has its own history
+        self.source_meta_dir = source_root / ".angry-ai"
+        self.source_meta_dir.mkdir(parents=True, exist_ok=True)
+        self.lessons_file = self.source_meta_dir / "LESSONS.md"
+        self.review_summary_file = self.source_meta_dir / "REVIEW-SUMMARY.md"
+        
+        # Initialize files if they don't exist
+        if not self.lessons_file.exists():
+            self.lessons_file.write_text(
+                "# Lessons Learned\n\n"
+                "This file tracks mistakes made during code review to avoid repeating them.\n"
+                "Each lesson is recorded with timestamp, category, and remediation advice.\n\n"
+            )
+        if not self.review_summary_file.exists():
+            self.review_summary_file.write_text(
+                "# Review Summary\n\n"
+                "Progress tracking for code review sessions.\n\n"
+                "---\n\n"
+            )
         
         # Logs go in persona directory too (or override)
         self.log_dir = log_dir or (persona_dir / 'logs')
@@ -1534,7 +1553,7 @@ Output ONLY the lesson entry, nothing else."""
         
         success, msg = self.editor.append_to_file(lessons_path, entry)
         if success:
-            print(f"*** Lesson recorded to {self.lessons_file.relative_to(self.persona_dir.parent)}")
+            print(f"*** Lesson recorded to {self.lessons_file.relative_to(self.source_root)}")
         else:
             logger.warning(f"Failed to record lesson: {msg}")
     
@@ -1578,7 +1597,7 @@ Output ONLY the lesson entry, nothing else."""
                 new_content = current + entry
             
             summary_path.write_text(new_content, encoding='utf-8')
-            print(f"*** Updated {self.review_summary_file.relative_to(self.persona_dir.parent)}")
+            print(f"*** Updated {self.review_summary_file.relative_to(self.source_root)}")
         except Exception as e:
             logger.warning(f"Failed to update review summary: {e}")
     

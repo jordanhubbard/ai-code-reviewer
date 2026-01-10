@@ -114,8 +114,14 @@ test:
 # Run targets
 #
 
-# Run the review loop (checks dependencies first)
+# Run the review loop (checks dependencies first, auto-updates config if defaults are newer)
 run: check-deps
+	@# Auto-update config.yaml if defaults are newer
+	@if [ -f config.yaml ] && [ -f config.yaml.defaults ] && [ config.yaml.defaults -nt config.yaml ]; then \
+		echo "*** config.yaml.defaults is newer than config.yaml"; \
+		echo "*** Running config-update to merge new settings..."; \
+		$(MAKE) config-update; \
+	fi
 	$(PYTHON) reviewer.py --config config.yaml
 
 # Run with verbose logging

@@ -24,8 +24,8 @@ ollama:
   temperature: 0.1
 
   # Interval in seconds to print /api/ps stats while a model request is running.
-  # Set to 0 to disable live GPU utilization updates.
-  ps_monitor_interval: 5
+  # Set to 0 to disable live GPU utilization updates (recommended - too verbose).
+  ps_monitor_interval: 0
 
   # Optional: control Ollama's internal batching for better GPU utilization
   # Set num_batch to a fixed value to force a specific micro-batch size.
