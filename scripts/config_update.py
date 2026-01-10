@@ -8,6 +8,7 @@ from pathlib import Path
 # Format: ("section.subsection.key", old_default) -> new_default
 CHANGED_DEFAULTS = {
     ("ollama.ps_monitor_interval", 5): 0,  # Changed: too verbose
+    ("ollama.timeout", 300): 600,  # Changed: prevent timeouts on large files
 }
 
 def merge_dicts(defaults, config, path="", added=None, updated=None):

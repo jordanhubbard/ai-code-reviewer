@@ -15,7 +15,8 @@ ollama:
   model: "qwen2.5-coder:32b"
   
   # Request timeout in seconds
-  timeout: 300
+  # Increase if you get timeouts with large files or slow models
+  timeout: 600
   
   # Maximum tokens to generate per response
   max_tokens: 4096
@@ -83,6 +84,11 @@ source:
 
 # Review configuration
 review:
+  # File chunking settings (prevents timeouts on large files)
+  # Files larger than chunk_threshold get split into chunks
+  chunk_threshold: 400          # Lines before file is chunked (default: 400)
+  chunk_size: 250               # Maximum lines per chunk (default: 250)
+  
   # Persona directory (contains AI behavior, lessons, progress tracking)
   # Structure: personas/<name>/
   #   - AI_START_HERE.md (bootstrap/instructions)

@@ -1053,7 +1053,15 @@ class ReviewLoop:
         self.git = GitHelper(source_root)
         self.editor = FileEditor(self.git)
         self.parser = ActionParser()
-        self.chunker = CFileChunker(max_chunk_lines=500, small_file_threshold=800)
+        
+        # Initialize chunker with config values (with sensible defaults)
+        chunk_size = review_config.get('chunk_size', 250)
+        chunk_threshold = review_config.get('chunk_threshold', 400)
+        self.chunker = CFileChunker(
+            max_chunk_lines=chunk_size, 
+            small_file_threshold=chunk_threshold
+        )
+        logger.info(f"File chunker: threshold={chunk_threshold} lines, chunk_size={chunk_size} lines")
         
         self.session = ReviewSession(
             session_id=datetime.datetime.now().strftime("%Y%m%d_%H%M%S"),
@@ -1361,8 +1369,8 @@ ACTION: GREP pattern
 
 ACTION: READ_FILE path/to/file
   - Read a file from the source tree
-  - Large files (>800 lines) are automatically chunked by function
-  - You'll review function-by-function for better focus and performance
+  - Large files are automatically chunked by function
+  - You'll review function-by-function for better performance
 
 ACTION: NEXT_CHUNK
   - Get the next chunk of a large file being reviewed
