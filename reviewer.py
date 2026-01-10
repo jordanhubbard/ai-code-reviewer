@@ -2992,22 +2992,24 @@ def preflight_sanity_check(
             path = trimmed.split()[-1]
             if path.startswith('.beads/'):
                 return True
+            if path.startswith('.angry-ai/'):
+                return True
             if path == 'REVIEW-INDEX.md':
                 return True
             return False
 
-        non_beads_changes = [line for line in changes.split('\n') 
+        non_tool_changes = [line for line in changes.split('\n') 
                             if line.strip() and not _is_ignored_change(line)]
         
-        if non_beads_changes:
-            print("WARNING: Uncommitted changes detected (excluding .beads/):")
-            print('\n'.join(non_beads_changes))
+        if non_tool_changes:
+            print("WARNING: Uncommitted changes detected (excluding tool-managed files):")
+            print('\n'.join(non_tool_changes))
             print("\nCannot run pre-flight check with uncommitted changes.")
             print("Please commit or stash changes first.")
-            print("Note: .beads/ changes are auto-stashed during recovery if needed.")
+            print("Note: .beads/ and .angry-ai/ changes are auto-managed by the tool.")
             return False
         
-        print("Note: Ignoring .beads/ and REVIEW-INDEX.md changes (managed by Angry AI)")
+        print("Note: Ignoring .beads/, .angry-ai/, and REVIEW-INDEX.md changes (managed by Angry AI)")
     
     # Get current commit for reference
     code, current_commit = git._run(['rev-parse', 'HEAD'])
@@ -3051,16 +3053,16 @@ def preflight_sanity_check(
         print("\nAttempting to recover by reverting recent commits...")
         print(f"(Will revert up to {max_reverts} commits to find a working state)\n")
         
-        # Stash any .beads/ changes before reverting
-        beads_stashed = False
+        # Stash any .beads/ and .angry-ai/ changes before reverting
+        tool_files_stashed = False
         if git.has_changes():
-            print("Stashing .beads/ changes before reverting...")
-            code, output = git._run(['stash', 'push', '-m', 'preflight-beads-backup', '.beads/'])
+            print("Stashing .beads/ and .angry-ai/ changes before reverting...")
+            code, output = git._run(['stash', 'push', '-m', 'preflight-tool-backup', '.beads/', '.angry-ai/'])
             if code == 0:
-                beads_stashed = True
-                print("✓ .beads/ changes stashed")
+                tool_files_stashed = True
+                print("✓ Tool-managed files stashed")
             else:
-                print(f"WARNING: Could not stash .beads/ changes: {output}")
+                print(f"WARNING: Could not stash tool-managed files: {output}")
         
         reverted_commits = []
         
@@ -3109,14 +3111,14 @@ def preflight_sanity_check(
                     if code == 0 and skipped.strip():
                         print("Note: These commits still exist but are not on your current branch")
                 
-                # Restore beads changes if we stashed them
-                if beads_stashed:
-                    print("\nRestoring .beads/ changes...")
+                # Restore tool-managed files if we stashed them
+                if tool_files_stashed:
+                    print("\nRestoring tool-managed files...")
                     code, output = git._run(['stash', 'pop'])
                     if code == 0:
-                        print("✓ .beads/ changes restored")
+                        print("✓ Tool-managed files restored")
                     else:
-                        print(f"WARNING: Could not restore .beads/ changes: {output}")
+                        print(f"WARNING: Could not restore tool-managed files: {output}")
                         print("You may need to manually restore: git stash list")
                 
                 print("\nProceeding with review workflow from this point...")
@@ -3142,14 +3144,14 @@ def preflight_sanity_check(
             print(f"ERROR: Could not restore original state: {output}")
             print(f"Manually reset with: git reset --hard {current_commit}")
         
-        # Restore beads changes if we stashed them
-        if beads_stashed:
-            print("\nRestoring .beads/ changes...")
+        # Restore tool-managed files if we stashed them
+        if tool_files_stashed:
+            print("\nRestoring tool-managed files...")
             code, output = git._run(['stash', 'pop'])
             if code == 0:
-                print("✓ .beads/ changes restored")
+                print("✓ Tool-managed files restored")
             else:
-                print(f"WARNING: Could not restore .beads/ changes: {output}")
+                print(f"WARNING: Could not restore tool-managed files: {output}")
         
         print("\nManual intervention required.")
         print("The build has been broken for more than the last 100 commits.")
