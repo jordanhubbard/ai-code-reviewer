@@ -25,7 +25,7 @@ all: help
 # Setup targets
 #
 
-# Check and install system dependencies (Python3, pip, pyyaml)
+# Check and install system dependencies (Python3, pip, pyyaml, beads)
 check-deps:
 	@echo "Checking dependencies..."
 	@# Check for python3
@@ -49,7 +49,24 @@ check-deps:
 	else \
 		echo "✓ PyYAML found"; \
 	fi
-	@echo "All dependencies satisfied!"
+	@# Check for beads (bd)
+	@if ! command -v bd >/dev/null 2>&1; then \
+		echo "⚠  Beads (bd) CLI not found"; \
+		echo "   Install from: https://github.com/steveyegge/beads"; \
+		echo "   (Optional but recommended for issue tracking)"; \
+	else \
+		echo "✓ Beads (bd) found: $$(bd --version 2>/dev/null || echo 'installed')"; \
+	fi
+	@# Check for config.yaml
+	@if [ ! -f config.yaml ]; then \
+		echo ""; \
+		echo "⚠  config.yaml not found - will be created on first run"; \
+		echo "   You'll need to edit it to set:"; \
+		echo "   - Ollama server URL"; \
+		echo "   - Source tree path"; \
+		echo "   - Build command"; \
+	fi
+	@echo "All required dependencies satisfied!"
 
 # Install Python dependencies (just PyYAML - no torch/GPU stuff)
 # Legacy target - use check-deps instead

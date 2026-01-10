@@ -570,8 +570,12 @@ class BeadsManager:
         self.bd_cmd = bd_cmd or shutil.which(os.environ.get('BD_CMD', 'bd'))
         self.enabled = self.bd_cmd is not None and (self.repo_root / '.beads').exists()
         self.issues: Dict[str, Dict[str, Any]] = {}
+        self.wrong_source_tree = False
         if self.enabled:
             self._load_existing_issues()
+            # Check if loaded issues reference directories outside our source tree
+            if self.issues:
+                self.wrong_source_tree = self._check_for_wrong_source_tree()
         else:
             logger.info("Beads integration disabled (bd command or .beads missing)")
 
@@ -636,6 +640,29 @@ class BeadsManager:
         if match:
             return match.group(1)
         return None
+    
+    def _check_for_wrong_source_tree(self) -> bool:
+        """
+        Check if loaded beads reference directories outside our source tree.
+        Returns True if issues appear to be for a different source tree.
+        """
+        if not self.issues:
+            return False
+        
+        # Check first few directories to see if they look like external paths
+        sample_size = min(10, len(self.issues))
+        sample_dirs = list(self.issues.keys())[:sample_size]
+        
+        external_count = 0
+        for directory in sample_dirs:
+            # Check for obvious external path markers
+            if directory.startswith('../'):
+                external_count += 1
+            elif '/' in directory and not (self.repo_root / directory.split('/')[0]).exists():
+                external_count += 1
+        
+        # If more than half look external, this is probably the wrong source tree
+        return external_count > (sample_size / 2)
 
     def ensure_directories(self, directories: List[str]) -> int:
         if not self.enabled:
@@ -1070,11 +1097,34 @@ class ReviewLoop:
             if not manager.enabled:
                 print("*** Beads integration disabled (bd unavailable)")
                 return None
+            
+            # Check if beads are for a different source tree
+            if manager.wrong_source_tree:
+                print("\n" + "=" * 70)
+                print("WARNING: Existing beads appear to be for a different source tree")
+                print("=" * 70)
+                print(f"Current source root: {self.source_root}")
+                print(f"Beads database has {len(manager.issues)} issues for external directories")
+                print()
+                print("Sample beads found:")
+                for i, directory in enumerate(list(manager.issues.keys())[:5]):
+                    print(f"  - {directory}")
+                print()
+                print("Options:")
+                print("  1. Run 'bd close --all' to clear old beads")
+                print("  2. Or delete .beads/ directory to start fresh")
+                print("  3. Or point source.root in config.yaml to the correct tree")
+                print()
+                print("Continuing with empty beads tracking for this run...")
+                print("=" * 70 + "\n")
+                # Clear the issues so we create new ones for this source tree
+                manager.issues = {}
+            
             created = manager.ensure_directories(list(self.index.entries.keys()))
             if created:
-                print(f"    Beads: created {created} missing directory issues")
+                print(f"    Beads: created {created} new directory issues")
             else:
-                print("    Beads: all directories already tracked in beads")
+                print("    Beads: all directories already tracked")
             return manager
         except Exception as exc:
             print(f"*** WARNING: Unable to initialize beads manager: {exc}")
@@ -3093,6 +3143,47 @@ def preflight_sanity_check(
         return False
 
 
+def validate_source_tree(source_root: Path) -> Tuple[bool, str]:
+    """
+    Validate that source_root points to a buildable source tree.
+    
+    Returns:
+        Tuple of (is_valid, error_message)
+    """
+    if not source_root.exists():
+        return False, f"Source root does not exist: {source_root}"
+    
+    if not source_root.is_dir():
+        return False, f"Source root is not a directory: {source_root}"
+    
+    # Check for common indicators of a source tree
+    # FreeBSD: Makefile with buildworld target
+    # Linux kernel: Makefile with vmlinux target  
+    # Other: any Makefile or CMakeLists.txt
+    makefile = source_root / "Makefile"
+    cmake = source_root / "CMakeLists.txt"
+    
+    if not makefile.exists() and not cmake.exists():
+        return False, (
+            f"Source root does not appear to be a buildable project: {source_root}\n"
+            f"Expected to find Makefile or CMakeLists.txt but found neither.\n"
+            f"Please set source.root in config.yaml to point to your source tree."
+        )
+    
+    return True, ""
+
+
+def check_beads_installation() -> Tuple[bool, Optional[str]]:
+    """
+    Check if beads (bd) CLI is installed.
+    
+    Returns:
+        Tuple of (is_installed, bd_path)
+    """
+    bd_path = shutil.which(os.environ.get('BD_CMD', 'bd'))
+    return (bd_path is not None, bd_path)
+
+
 def main():
     """Main entry point."""
     parser = argparse.ArgumentParser(
@@ -3143,6 +3234,7 @@ Examples:
     config_path = Path(args.config)
     defaults_path = config_path.parent / "config.yaml.defaults"
     
+    created_new_config = False
     if not config_path.exists():
         # Try to copy from defaults
         if defaults_path.exists():
@@ -3150,8 +3242,13 @@ Examples:
             shutil.copy(defaults_path, config_path)
             logger.warning(f"No {config_path} found - copied from {defaults_path}")
             print(f"\n*** Created {config_path} from defaults")
-            print("*** IMPORTANT: Edit config.yaml to set your Ollama server URL!")
+            print("*** IMPORTANT: Edit config.yaml to configure:")
+            print(f"***   1. Ollama server URL (ollama.url)")
+            print(f"***   2. Source root path (source.root)")
+            print(f"***   3. Build command (source.build_command)")
+            print(f"***")
             print(f"***   vim {config_path}\n")
+            created_new_config = True
         else:
             logger.error(f"Configuration file not found: {config_path}")
             logger.error(f"Defaults file also not found: {defaults_path}")
@@ -3160,6 +3257,29 @@ Examples:
     
     logger.info(f"Loading configuration from {config_path}")
     config = load_yaml_config(config_path)
+    
+    # Check if beads (bd) CLI is installed
+    bd_installed, bd_path = check_beads_installation()
+    if not bd_installed:
+        print("\n" + "=" * 70)
+        print("WARNING: Beads (bd) CLI not found")
+        print("=" * 70)
+        print("The 'bd' command is not available in your PATH.")
+        print("This project uses beads for issue tracking and progress management.")
+        print()
+        print("To install beads:")
+        print("  1. Visit: https://github.com/steveyegge/beads")
+        print("  2. Follow installation instructions")
+        print("  3. Run: bd onboard")
+        print()
+        print("Without beads:")
+        print("  - Issue tracking will be disabled")
+        print("  - Directory work items won't be created")
+        print("  - Progress tracking will be limited")
+        print()
+        print("Continuing without beads integration...")
+        print("=" * 70 + "\n")
+        logger.warning("Beads CLI not found - continuing without beads integration")
     
     from ollama_client import create_client_from_config, OllamaError
     from build_executor import create_executor_from_config
@@ -3188,6 +3308,30 @@ Examples:
         sys.exit(1)
     
     source_root = builder.config.source_root
+    
+    # Validate source tree before proceeding
+    is_valid, error_msg = validate_source_tree(source_root)
+    if not is_valid:
+        print("\n" + "=" * 70)
+        print("ERROR: Invalid Source Tree Configuration")
+        print("=" * 70)
+        print(error_msg)
+        print()
+        if created_new_config:
+            print("You just created a new config.yaml from defaults.")
+            print("The default source.root setting is '..' which may not be correct.")
+            print()
+        print("Please fix config.yaml:")
+        print(f"  1. Open: {config_path}")
+        print(f"  2. Set source.root to your source tree path")
+        print(f"  3. Example: source.root: \"{Path.home()}/freebsd-src\"")
+        print(f"  4. Set source.build_command to your build command")
+        print()
+        print(f"Current source.root: {source_root}")
+        print("=" * 70 + "\n")
+        sys.exit(1)
+    
+    logger.info(f"Source tree validated: {source_root}")
     git_helper = GitHelper(source_root)
     
     review_config = config.get('review', {})
