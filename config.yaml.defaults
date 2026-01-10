@@ -140,7 +140,7 @@ review:
 # Logging configuration
 logging:
   # Directory for log files (relative to source root)
-  log_dir: ".angry-ai/logs"
+  log_dir: ".ai-code-reviewer/logs"
   
   # Log level: DEBUG, INFO, WARNING, ERROR
   level: "INFO"

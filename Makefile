@@ -134,7 +134,7 @@ run-verbose:
 
 # Clean logs and Python cache
 clean:
-	rm -rf ../.angry-ai/logs/*.txt
+	rm -rf ../.ai-code-reviewer/logs/*.txt
 	rm -rf __pycache__
 	rm -rf *.pyc
 

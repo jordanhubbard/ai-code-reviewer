@@ -206,7 +206,7 @@ After successful setup:
 
 ## Getting Help
 
-- Check the logs: `.angry-ai/logs/`
+- Check the logs: `.ai-code-reviewer/logs/`
 - Enable verbose mode: `make run-verbose`
 - Review the persona files in `personas/freebsd-angry-ai/`
 - Check for git conflicts: `git status`

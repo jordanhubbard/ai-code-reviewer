@@ -92,7 +92,7 @@ Without personas:
 freebsd-src/
 ├── REVIEW-SUMMARY.md      ← Pollutes source
 ├── AI_START_HERE.md       ← Pollutes source  
-├── .angry-ai/logs/        ← Pollutes source
+├── .ai-code-reviewer/logs/ ← Logs in source
 └── bin/chmod/chmod.c
 ```
 

@@ -22,9 +22,9 @@ Files:
 
 **Why here?**: Personas are templates that define HOW to review, not WHAT was reviewed.
 
-### 2. Source-Specific Files (Per-Project) - `<source-root>/.angry-ai/`
+### 2. Source-Specific Files (Per-Project) - `<source-root>/.ai-code-reviewer/`
 
-**Location**: `<your-source-tree>/.angry-ai/`  
+**Location**: `<your-source-tree>/.ai-code-reviewer/`  
 **Purpose**: Per-project review history and lessons  
 **Git**: In the source tree being reviewed  
 **Shared**: NO - each project has its own
@@ -38,11 +38,12 @@ Files:
 - Lessons are specific to the codebase (e.g., "FreeBSD uses strtonum, not atoi")
 - Review progress is per-project
 - Multiple projects can use the same persona but have separate histories
+- Named after the tool (not persona-specific)
 
 Example:
 ```
-/usr/src/freebsd/.angry-ai/LESSONS.md       # FreeBSD-specific lessons
-/home/user/linux/.angry-ai/LESSONS.md       # Linux-specific lessons
+/usr/src/freebsd/.ai-code-reviewer/LESSONS.md       # FreeBSD-specific lessons
+/home/user/linux/.ai-code-reviewer/LESSONS.md       # Linux-specific lessons
 ```
 
 ### 3. Issue Tracking (Per-Project) - `<source-root>/.beads/`
@@ -78,13 +79,13 @@ ai-code-reviewer/
 │       └── logs/             ✓ (session logs)
 
 /usr/src/freebsd/              # Source tree being reviewed
-├── .angry-ai/
+├── .ai-code-reviewer/
 │   ├── LESSONS.md             ✓ (FreeBSD-specific)
 │   └── REVIEW-SUMMARY.md      ✓ (FreeBSD-specific)
 └── .beads/                    ✓ (FreeBSD work items)
 
 /home/user/linux/              # Another source tree
-├── .angry-ai/
+├── .ai-code-reviewer/
 │   ├── LESSONS.md             ✓ (Linux-specific)
 │   └── REVIEW-SUMMARY.md      ✓ (Linux-specific)
 └── .beads/                    ✓ (Linux work items)
@@ -102,7 +103,7 @@ review:
   persona: "personas/freebsd-angry-ai"
 ```
 
-Lessons go to: `/usr/src/freebsd/.angry-ai/LESSONS.md`
+Lessons go to: `/usr/src/freebsd/.ai-code-reviewer/LESSONS.md`
 
 ### Multiple Projects, Same Persona
 Review different codebases with the same review style:
@@ -161,12 +162,12 @@ personas/*/logs/         # Session logs
 ### In source trees being reviewed
 ```gitignore
 # Recommended additions
-.angry-ai/logs/          # Build logs (large)
+.ai-code-reviewer/logs/  # Build logs (large)
 .beads/                  # If not syncing to branch
 
 # Keep these committed (if desired)
-# .angry-ai/LESSONS.md       # Team lessons learned
-# .angry-ai/REVIEW-SUMMARY.md # Review history
+# .ai-code-reviewer/LESSONS.md       # Team lessons learned
+# .ai-code-reviewer/REVIEW-SUMMARY.md # Review history
 ```
 
 ## Benefits of New Structure
@@ -176,23 +177,23 @@ personas/*/logs/         # Session logs
 3. **Project-Specific Learning**: Lessons stay with the codebase
 4. **Multi-Project Support**: Review multiple codebases easily
 5. **Team Collaboration**: Commit lessons to share with team
-6. **Source Tree Integrity**: Everything in `.angry-ai/` is self-contained
+6. **Source Tree Integrity**: Everything in `.ai-code-reviewer/` is self-contained
+7. **Tool-Branded**: Named after the tool, not a specific persona
 
 ## Automatic Migration
 
-The system automatically creates and initializes files on first run:
+The system automatically migrates files from legacy locations on first run:
 
-1. If `.angry-ai/` doesn't exist → creates it
-2. If `LESSONS.md` doesn't exist → creates with template
-3. If `REVIEW-SUMMARY.md` doesn't exist → creates with template
+**Legacy locations checked:**
+1. `personas/<persona>/LESSONS.md` (oldest)
+2. `personas/<persona>/REVIEW-SUMMARY.md` (oldest)
+3. `.angry-ai/LESSONS.md` (previous)
+4. `.angry-ai/REVIEW-SUMMARY.md` (previous)
 
-Old persona-based files are NOT automatically migrated. If you have existing lessons in `personas/freebsd-angry-ai/LESSONS.md`, manually move them:
+**Migration behavior:**
+- If file found in legacy location → copies to `.ai-code-reviewer/`
+- If file already exists in new location → merges content with separator
+- Removes legacy files after successful migration
+- Shows migration summary on startup
 
-```bash
-# Backup old location
-cp personas/freebsd-angry-ai/LESSONS.md personas/freebsd-angry-ai/LESSONS.md.bak
-
-# Move to source tree
-mv personas/freebsd-angry-ai/LESSONS.md /usr/src/freebsd/.angry-ai/LESSONS.md
-mv personas/freebsd-angry-ai/REVIEW-SUMMARY.md /usr/src/freebsd/.angry-ai/REVIEW-SUMMARY.md
-```
+**You don't need to do anything** - the tool handles migration automatically!

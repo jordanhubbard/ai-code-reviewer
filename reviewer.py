@@ -1024,10 +1024,13 @@ class ReviewLoop:
         
         # Source-specific files (lessons learned and progress - per project)
         # These live in the source tree so each project has its own history
-        self.source_meta_dir = source_root / ".angry-ai"
+        self.source_meta_dir = source_root / ".ai-code-reviewer"
         self.source_meta_dir.mkdir(parents=True, exist_ok=True)
         self.lessons_file = self.source_meta_dir / "LESSONS.md"
         self.review_summary_file = self.source_meta_dir / "REVIEW-SUMMARY.md"
+        
+        # One-time migration from legacy locations
+        self._migrate_legacy_files(source_root, persona_dir)
         
         # Initialize files if they don't exist
         if not self.lessons_file.exists():
@@ -1091,6 +1094,93 @@ class ReviewLoop:
             print(f"*** Parallel mode: {max_parallel_files} concurrent file reviews")
         
         self._init_conversation()
+    
+    def _migrate_legacy_files(self, source_root: Path, persona_dir: Path) -> None:
+        """
+        One-time migration from legacy file locations.
+        
+        Checks for files in:
+        1. Persona directory (oldest location: personas/*/LESSONS.md)
+        2. .angry-ai/ (previous location)
+        
+        Moves/merges them to: .ai-code-reviewer/
+        
+        This ensures continuity when users update the tool.
+        """
+        import shutil
+        
+        legacy_locations = [
+            # (source_path, description)
+            (persona_dir / "LESSONS.md", "persona directory"),
+            (persona_dir / "REVIEW-SUMMARY.md", "persona directory"),
+            (source_root / ".angry-ai" / "LESSONS.md", ".angry-ai directory"),
+            (source_root / ".angry-ai" / "REVIEW-SUMMARY.md", ".angry-ai directory"),
+        ]
+        
+        migrated = []
+        
+        for legacy_path, location_desc in legacy_locations:
+            if not legacy_path.exists():
+                continue
+            
+            # Determine target file
+            filename = legacy_path.name
+            target_path = self.source_meta_dir / filename
+            
+            # Read legacy content
+            try:
+                legacy_content = legacy_path.read_text(encoding='utf-8')
+            except Exception as e:
+                logger.warning(f"Could not read legacy file {legacy_path}: {e}")
+                continue
+            
+            # If target already exists, merge content
+            if target_path.exists():
+                try:
+                    existing_content = target_path.read_text(encoding='utf-8')
+                    # Append legacy content with separator
+                    merged_content = (
+                        existing_content.rstrip() + "\n\n" +
+                        f"--- Migrated from {location_desc} ---\n\n" +
+                        legacy_content
+                    )
+                    target_path.write_text(merged_content, encoding='utf-8')
+                    migrated.append(f"{filename} (merged from {location_desc})")
+                except Exception as e:
+                    logger.warning(f"Could not merge {legacy_path} into {target_path}: {e}")
+                    continue
+            else:
+                # Move to new location
+                try:
+                    shutil.copy2(legacy_path, target_path)
+                    migrated.append(f"{filename} (from {location_desc})")
+                except Exception as e:
+                    logger.warning(f"Could not copy {legacy_path} to {target_path}: {e}")
+                    continue
+            
+            # Remove legacy file after successful migration
+            try:
+                legacy_path.unlink()
+                logger.info(f"Removed legacy file: {legacy_path}")
+            except Exception as e:
+                logger.warning(f"Could not remove legacy file {legacy_path}: {e}")
+        
+        # Try to remove .angry-ai/ directory if empty
+        old_dir = source_root / ".angry-ai"
+        if old_dir.exists():
+            try:
+                # Only remove if empty (logs/ might still be there)
+                if not any(old_dir.iterdir()):
+                    old_dir.rmdir()
+                    logger.info(f"Removed empty legacy directory: {old_dir}")
+            except Exception:
+                pass  # Not empty or can't remove, that's fine
+        
+        if migrated:
+            print(f"\n*** Migrated legacy files to .ai-code-reviewer/:")
+            for item in migrated:
+                print(f"    ✓ {item}")
+            print()
     
     def _load_retry_tracker(self) -> Dict[str, Dict[str, Any]]:
         if self.retry_tracker_path.exists():
@@ -2992,7 +3082,9 @@ def preflight_sanity_check(
             path = trimmed.split()[-1]
             if path.startswith('.beads/'):
                 return True
-            if path.startswith('.angry-ai/'):
+            if path.startswith('.ai-code-reviewer/'):
+                return True
+            if path.startswith('.angry-ai/'):  # Legacy location
                 return True
             if path == 'REVIEW-INDEX.md':
                 return True
@@ -3006,10 +3098,10 @@ def preflight_sanity_check(
             print('\n'.join(non_tool_changes))
             print("\nCannot run pre-flight check with uncommitted changes.")
             print("Please commit or stash changes first.")
-            print("Note: .beads/ and .angry-ai/ changes are auto-managed by the tool.")
+            print("Note: .beads/ and .ai-code-reviewer/ changes are auto-managed by the tool.")
             return False
         
-        print("Note: Ignoring .beads/, .angry-ai/, and REVIEW-INDEX.md changes (managed by Angry AI)")
+        print("Note: Ignoring .beads/, .ai-code-reviewer/, and REVIEW-INDEX.md changes (managed by tool)")
     
     # Get current commit for reference
     code, current_commit = git._run(['rev-parse', 'HEAD'])
@@ -3053,11 +3145,11 @@ def preflight_sanity_check(
         print("\nAttempting to recover by reverting recent commits...")
         print(f"(Will revert up to {max_reverts} commits to find a working state)\n")
         
-        # Stash any .beads/ and .angry-ai/ changes before reverting
+        # Stash any .beads/ and .ai-code-reviewer/ changes before reverting
         tool_files_stashed = False
         if git.has_changes():
-            print("Stashing .beads/ and .angry-ai/ changes before reverting...")
-            code, output = git._run(['stash', 'push', '-m', 'preflight-tool-backup', '.beads/', '.angry-ai/'])
+            print("Stashing .beads/ and .ai-code-reviewer/ changes before reverting...")
+            code, output = git._run(['stash', 'push', '-m', 'preflight-tool-backup', '.beads/', '.ai-code-reviewer/', '.angry-ai/'])
             if code == 0:
                 tool_files_stashed = True
                 print("✓ Tool-managed files stashed")
