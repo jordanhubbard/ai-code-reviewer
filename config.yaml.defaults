@@ -4,15 +4,35 @@
 # Generic AI code reviewer with build validation
 # Works with ANY codebase - just configure your build command
 
-# Remote Ollama server configuration
-ollama:
-  # URL of the Ollama server (must be reachable from this machine)
-  # CHANGE THIS to your Ollama server's address
-  url: "http://localhost:11434"
+# =============================================================================
+# LLM Server Configuration (NEW - supports vLLM + Ollama with multi-host)
+# =============================================================================
+# The 'llm' section supports multiple hosts and models for increased throughput.
+# For each host, vLLM is tried first (OpenAI-compatible API), then Ollama.
+# Models are tried in priority order until one is found on the server.
+#
+# Benefits:
+#   - Round-robin load balancing across multiple GPU servers
+#   - Automatic backend detection (vLLM preferred, Ollama fallback)
+#   - Model priority list for graceful fallback
+#
+llm:
+  # List of LLM server URLs (at least one required)
+  # Requests are distributed round-robin across all available hosts
+  # Each host is probed at startup: vLLM API first, then Ollama API
+  hosts:
+    - "http://localhost:11434"
+    # - "http://gpu-server-2:11434"
+    # - "http://gpu-server-3:8000"  # vLLM typically uses port 8000
   
-  # Model to use for code review (must be available on the Ollama server)
-  # Recommended: qwen2.5-coder:32b or similar code-focused model
-  model: "qwen2.5-coder:32b"
+  # List of models in priority order (first available is used)
+  # Each host will use the first model from this list that it has available
+  # This allows graceful fallback when preferred models aren't available
+  models:
+    - "NVIDIA-Nemotron-3-Nano-30B-A3B-BF16"
+    - "qwen2.5-coder:32b"
+    # - "qwen2.5-coder:14b"    # Fallback if 32b not available
+    # - "codellama:34b"        # Another fallback option
   
   # Request timeout in seconds
   # Increase if you get timeouts with large files or slow models
@@ -26,9 +46,10 @@ ollama:
 
   # Interval in seconds to print /api/ps stats while a model request is running.
   # Set to 0 to disable live GPU utilization updates (recommended - too verbose).
+  # Note: Only works with Ollama backend
   ps_monitor_interval: 0
 
-  # Optional: control Ollama's internal batching for better GPU utilization
+  # Batching configuration (primarily for Ollama backend)
   # Set num_batch to a fixed value to force a specific micro-batch size.
   # Leave num_batch null and enable adaptive to let Angry AI scale batch size
   # based on prompt length.
@@ -39,15 +60,29 @@ ollama:
     max_chars: 60000         # prompt length that maps to max_num_batch
     min_num_batch: 2         # minimum batch size when adaptive is enabled
     max_num_batch: 12        # maximum batch size Angry AI will request
-    max_parallel_requests: 4 # cap on simultaneous Ollama requests
+    max_parallel_requests: 4 # cap on simultaneous LLM requests across all hosts
 
-  # Additional per-request options forwarded directly to Ollama's API.
-  # Useful for num_ctx, num_gpu, repeat penalties, etc.
+  # Additional per-request options forwarded directly to the LLM API.
+  # For Ollama: num_ctx, num_gpu, repeat penalties, etc.
+  # For vLLM: top_p, presence_penalty, frequency_penalty, etc.
   # Example:
   # options:
   #   num_ctx: 8192
-  #   num_thread: 8
+  #   top_p: 0.95
   options: {}
+
+# =============================================================================
+# Legacy Ollama Configuration (DEPRECATED - use 'llm' section above)
+# =============================================================================
+# This section is kept for backward compatibility. If both 'llm' and 'ollama'
+# sections exist, 'llm' takes precedence. New configurations should use 'llm'.
+#
+# ollama:
+#   url: "http://localhost:11434"
+#   model: "qwen2.5-coder:32b"
+#   timeout: 600
+#   max_tokens: 4096
+#   temperature: 0.1
 
 # Source tree configuration
 source:

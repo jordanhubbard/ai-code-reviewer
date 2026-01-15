@@ -3403,22 +3403,23 @@ Examples:
         print("=" * 70 + "\n")
         logger.warning("Beads CLI not found - continuing without beads integration")
     
-    from ollama_client import create_client_from_config, OllamaError
+    from llm_client import create_client_from_config, LLMError, LLMConnectionError
     from build_executor import create_executor_from_config
     
     try:
-        logger.info("Connecting to Ollama server...")
-        ollama = create_client_from_config(config)
-        logger.info("Ollama connection validated successfully!")
+        logger.info("Connecting to LLM server(s)...")
+        llm_client = create_client_from_config(config)
+        logger.info("LLM connection validated successfully!")
         
         if args.validate_only:
-            print("\n✓ Ollama connection validated!")
-            print(f"  Server: {ollama.config.url}")
-            print(f"  Model: {ollama.config.model}")
-            print(f"  Available models: {', '.join(ollama.list_models())}")
+            print("\n✓ LLM connection validated!")
+            host_status = llm_client.get_host_status()
+            for host in host_status:
+                print(f"  Host: {host['url']} ({host['backend']}) -> model: {host['model']}")
+            print(f"  Available models: {', '.join(llm_client.list_models())}")
             sys.exit(0)
         
-    except OllamaError as e:
+    except LLMError as e:
         print(str(e), file=sys.stderr)
         sys.exit(1)
     
@@ -3507,7 +3508,7 @@ Examples:
     print(f"\n*** Source tree ready: {ready_msg}")
     
     loop = ReviewLoop(
-        ollama_client=ollama,
+        ollama_client=llm_client,
         build_executor=builder,
         source_root=source_root,
         persona_dir=persona_dir,

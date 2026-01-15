@@ -16,7 +16,7 @@ PYTHON?=	python3
 # All paths are relative to the Makefile
 
 # Phony targets
-.PHONY: all deps check-deps config-update validate run run-verbose test clean clean-all help
+.PHONY: all deps check-deps config-update validate run run-verbose test test-all release clean clean-all help
 
 # Default target
 all: help
@@ -100,9 +100,36 @@ validate: check-deps
 	@echo "Validating Ollama connection..."
 	$(PYTHON) reviewer.py --config config.yaml --validate-only
 
-# Run component self-tests
+# Run component self-tests (syntax check only, no server connection)
 test:
-	@echo "=== Testing Ollama Client ==="
+	@echo "=== Syntax Check: All Python Modules ==="
+	@$(PYTHON) -m py_compile ollama_client.py vllm_client.py llm_client.py \
+		build_executor.py reviewer.py chunker.py index_generator.py ops_logger.py \
+		scripts/config_update.py
+	@echo "✓ All modules pass syntax check"
+	@echo ""
+	@echo "=== Import Check: LLM Client ==="
+	@$(PYTHON) -c "from llm_client import create_client_from_config, MultiHostClient, LLMError; print('✓ llm_client imports OK')"
+	@echo ""
+	@echo "=== Import Check: Build Executor ==="
+	@$(PYTHON) -c "from build_executor import create_executor_from_config; print('✓ build_executor imports OK')"
+	@echo ""
+	@echo "=== Config Migration Test ==="
+	@$(PYTHON) -c "\
+import yaml; \
+from scripts.config_update import migrate_ollama_to_llm; \
+cfg = {'ollama': {'url': 'http://test:11434', 'model': 'test-model'}}; \
+migrate_ollama_to_llm(cfg); \
+assert 'llm' in cfg and 'ollama' not in cfg, 'Migration failed'; \
+assert 'NVIDIA-Nemotron-3-Nano-30B-A3B-BF16' in cfg['llm']['models'], 'Missing preferred model'; \
+print('✓ Config migration OK')"
+	@echo ""
+	@echo "All tests passed!"
+
+# Run full tests including server connectivity (requires running Ollama/vLLM)
+test-all: test
+	@echo ""
+	@echo "=== Testing Ollama Client (requires server) ==="
 	$(PYTHON) ollama_client.py
 	@echo ""
 	@echo "=== Testing Build Executor ==="
@@ -127,6 +154,55 @@ run: check-deps
 # Run with verbose logging
 run-verbose:
 	$(PYTHON) reviewer.py --config config.yaml -v
+
+#
+# Release target
+#
+
+# Create a new release: runs tests, tags, and pushes release via gh CLI
+# Bumps minor version (0.1 -> 0.2 -> 0.3, etc.) or starts at 0.1 if no previous release
+release: test
+	@echo ""
+	@echo "=== Creating New Release ==="
+	@# Check for uncommitted changes
+	@if [ -n "$$(git status --porcelain)" ]; then \
+		echo "ERROR: Uncommitted changes detected. Commit or stash them first."; \
+		git status --short; \
+		exit 1; \
+	fi
+	@# Check gh CLI is available and authenticated
+	@if ! command -v gh >/dev/null 2>&1; then \
+		echo "ERROR: gh CLI not found. Install from https://cli.github.com/"; \
+		exit 1; \
+	fi
+	@if ! gh auth status >/dev/null 2>&1; then \
+		echo "ERROR: gh CLI not authenticated. Run 'gh auth login' first."; \
+		exit 1; \
+	fi
+	@# Get latest release version and bump it
+	@LATEST=$$(gh release list --limit 1 --json tagName --jq '.[0].tagName // empty' 2>/dev/null | sed 's/^v//'); \
+	if [ -z "$$LATEST" ]; then \
+		NEW_VERSION="0.1"; \
+		echo "No previous release found. Starting at v$$NEW_VERSION"; \
+	else \
+		MAJOR=$$(echo "$$LATEST" | cut -d. -f1); \
+		MINOR=$$(echo "$$LATEST" | cut -d. -f2); \
+		NEW_MINOR=$$((MINOR + 1)); \
+		NEW_VERSION="$$MAJOR.$$NEW_MINOR"; \
+		echo "Previous release: v$$LATEST -> New release: v$$NEW_VERSION"; \
+	fi; \
+	echo ""; \
+	echo "Creating tag v$$NEW_VERSION..."; \
+	git tag -a "v$$NEW_VERSION" -m "Release v$$NEW_VERSION"; \
+	echo "Pushing tag to origin..."; \
+	git push origin "v$$NEW_VERSION"; \
+	echo "Creating GitHub release..."; \
+	gh release create "v$$NEW_VERSION" \
+		--title "v$$NEW_VERSION" \
+		--generate-notes; \
+	echo ""; \
+	echo "✓ Release v$$NEW_VERSION created successfully!"; \
+	echo "  View at: $$(gh release view v$$NEW_VERSION --json url --jq '.url')"
 
 #
 # Cleanup targets
@@ -166,7 +242,11 @@ help:
 	@echo "Usage:"
 	@echo "  make run          Start the review loop (auto-checks dependencies)"
 	@echo "  make run-verbose  Run with verbose logging"
-	@echo "  make test         Run component self-tests"
+	@echo "  make test         Run syntax and import tests (no server required)"
+	@echo "  make test-all     Run all tests including server connectivity"
+	@echo ""
+	@echo "Release:"
+	@echo "  make release      Run tests, tag, and create GitHub release (bumps version)"
 	@echo ""
 	@echo "Cleanup:"
 	@echo "  make clean        Remove logs and Python cache"
