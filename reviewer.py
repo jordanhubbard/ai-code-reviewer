@@ -62,14 +62,104 @@ CODE_BLOCK_RE = re.compile(r"```(\w*)\n(.*?)```", re.DOTALL)
 
 
 def load_yaml_config(config_path: Path) -> Dict[str, Any]:
-    """Load YAML configuration file."""
+    """Load YAML configuration file with friendly error messages."""
     try:
         import yaml
-        with open(config_path, 'r') as f:
-            return yaml.safe_load(f)
     except ImportError:
         logger.warning("PyYAML not installed, using basic parser (install with: pip install pyyaml)")
         return _basic_yaml_parse(config_path)
+    
+    try:
+        with open(config_path, 'r') as f:
+            content = f.read()
+    except FileNotFoundError:
+        print(f"\n{'='*60}")
+        print("ERROR: Configuration file not found")
+        print(f"{'='*60}")
+        print(f"File: {config_path}")
+        print(f"\nRun: cp config.yaml.defaults config.yaml")
+        print(f"{'='*60}\n")
+        sys.exit(1)
+    except Exception as e:
+        print(f"\n{'='*60}")
+        print("ERROR: Cannot read configuration file")
+        print(f"{'='*60}")
+        print(f"File: {config_path}")
+        print(f"Error: {e}")
+        print(f"{'='*60}\n")
+        sys.exit(1)
+    
+    try:
+        return yaml.safe_load(content)
+    except yaml.scanner.ScannerError as e:
+        _print_yaml_error(config_path, content, e)
+        sys.exit(1)
+    except yaml.parser.ParserError as e:
+        _print_yaml_error(config_path, content, e)
+        sys.exit(1)
+    except yaml.YAMLError as e:
+        _print_yaml_error(config_path, content, e)
+        sys.exit(1)
+
+
+def _print_yaml_error(config_path: Path, content: str, error: Exception) -> None:
+    """Print a friendly YAML error message with context."""
+    print(f"\n{'='*60}")
+    print("ERROR: Invalid YAML in configuration file")
+    print(f"{'='*60}")
+    print(f"File: {config_path}")
+    print(f"\n{error}")
+    
+    # Try to extract line number from error
+    error_str = str(error)
+    line_num = None
+    
+    # Look for "line X" pattern in error message
+    import re
+    line_match = re.search(r'line (\d+)', error_str)
+    if line_match:
+        line_num = int(line_match.group(1))
+    
+    # Check for common issues
+    lines = content.split('\n')
+    issues_found = []
+    
+    # Check for tabs (most common issue)
+    for i, line in enumerate(lines, 1):
+        if '\t' in line:
+            col = line.index('\t') + 1
+            issues_found.append(f"  Line {i}, col {col}: Tab character found (use spaces instead)")
+    
+    if issues_found:
+        print(f"\n{'='*60}")
+        print("ISSUES DETECTED:")
+        print(f"{'='*60}")
+        for issue in issues_found[:5]:  # Show first 5 issues
+            print(issue)
+        if len(issues_found) > 5:
+            print(f"  ... and {len(issues_found) - 5} more")
+    
+    # Show context around the error line
+    if line_num and 1 <= line_num <= len(lines):
+        print(f"\n{'='*60}")
+        print(f"CONTEXT (around line {line_num}):")
+        print(f"{'='*60}")
+        start = max(0, line_num - 3)
+        end = min(len(lines), line_num + 2)
+        for i in range(start, end):
+            marker = ">>>" if i == line_num - 1 else "   "
+            # Show tabs visibly
+            display_line = lines[i].replace('\t', '→→→→')
+            print(f"{marker} {i+1:4d} | {display_line}")
+    
+    print(f"\n{'='*60}")
+    print("FIX:")
+    print(f"{'='*60}")
+    print("  1. Open the file in your editor")
+    print("  2. Replace all tabs with spaces (YAML requires spaces)")
+    print("  3. Check indentation is consistent (2 spaces recommended)")
+    print(f"\n  Quick fix: sed -i 's/\\t/  /g' {config_path}")
+    print(f"{'='*60}\n")
 
 
 def _basic_yaml_parse(config_path: Path) -> Dict[str, Any]:
