@@ -387,8 +387,8 @@ def create_client_from_config(config_dict: Dict[str, Any]) -> MultiHostClient:
     elif isinstance(hosts, str):
         hosts = [hosts]
     elif not hosts:
-        # Default to localhost
-        hosts = ['http://localhost:11434']
+        # Default to localhost with both vLLM (preferred) and Ollama (fallback)
+        hosts = ['http://localhost:8000', 'http://localhost:11434']
     
     # Parse models (comma-separated string or list)
     models = llm_config.get('models', [])
@@ -474,8 +474,20 @@ def create_client_from_config(config_dict: Dict[str, Any]) -> MultiHostClient:
 
 def _convert_legacy_config(ollama_config: Dict[str, Any]) -> Dict[str, Any]:
     """Convert legacy 'ollama' config section to new 'llm' format."""
+    import re
+    
+    # Parse URL to create both vLLM (port 8000) and Ollama (port 11434) entries
+    old_url = ollama_config.get('url', 'http://localhost:11434')
+    url_match = re.match(r'(https?://[^:/]+)(:\d+)?(/.*)?', old_url)
+    if url_match:
+        base_host = url_match.group(1)
+        # vLLM first (preferred), Ollama second (fallback)
+        hosts = [f"{base_host}:8000", f"{base_host}:11434"]
+    else:
+        hosts = [old_url]
+    
     return {
-        'hosts': [ollama_config.get('url', 'http://localhost:11434')],
+        'hosts': hosts,
         'models': ['NVIDIA-Nemotron-3-Nano-30B-A3B-BF16', ollama_config.get('model', 'qwen2.5-coder:32b')],
         'timeout': ollama_config.get('timeout', 300),
         'max_tokens': ollama_config.get('max_tokens', 4096),

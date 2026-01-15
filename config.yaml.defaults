@@ -20,10 +20,17 @@ llm:
   # List of LLM server URLs (at least one required)
   # Requests are distributed round-robin across all available hosts
   # Each host is probed at startup: vLLM API first, then Ollama API
+  #
+  # IMPORTANT: vLLM and Ollama use different ports!
+  #   - vLLM default port: 8000 (OpenAI-compatible API)
+  #   - Ollama default port: 11434
+  #
+  # List vLLM hosts FIRST (preferred), then Ollama hosts (fallback):
   hosts:
-    - "http://localhost:11434"
-    # - "http://gpu-server-2:11434"
-    # - "http://gpu-server-3:8000"  # vLLM typically uses port 8000
+    - "http://localhost:8000"      # vLLM server (tried first)
+    - "http://localhost:11434"     # Ollama server (fallback)
+    # - "http://gpu-server-2:8000"   # Additional vLLM server
+    # - "http://gpu-server-2:11434"  # Additional Ollama server
   
   # List of models in priority order (first available is used)
   # Each host will use the first model from this list that it has available
