@@ -42,6 +42,7 @@ class VLLMConfig:
     max_tokens: int = 4096
     temperature: float = 0.1
     extra_options: Dict[str, Any] = field(default_factory=dict)
+    max_model_len: Optional[int] = None  # Model's context length (auto-detected)
 
 
 class VLLMClient:
@@ -200,29 +201,42 @@ class VLLMClient:
                 f"Cannot list models on vLLM server at {self.base_url}: {e}"
             ) from e
         
-        available_models = [m.get('id', '') for m in response.get('data', [])]
+        model_data = response.get('data', [])
+        available_models = [m.get('id', '') for m in model_data]
         model_name = self.config.model
         
+        def _set_model_context_length(model_info: Dict) -> None:
+            """Extract and store model's context length if available."""
+            max_model_len = model_info.get('max_model_len')
+            if max_model_len:
+                self.config.max_model_len = int(max_model_len)
+                logger.info(f"Model context length: {self.config.max_model_len} tokens")
+        
         # Check for exact match first
-        if model_name in available_models:
-            logger.info(f"Model '{model_name}' found (exact match)")
-            return
+        for model_info in model_data:
+            if model_info.get('id') == model_name:
+                logger.info(f"Model '{model_name}' found (exact match)")
+                _set_model_context_length(model_info)
+                return
         
         # Check for case-insensitive match
         model_lower = model_name.lower()
-        for avail in available_models:
+        for model_info in model_data:
+            avail = model_info.get('id', '')
             if avail.lower() == model_lower:
                 logger.info(f"Model '{model_name}' found as '{avail}' (case-insensitive match)")
-                # Update config to use the actual model name
                 self.config.model = avail
+                _set_model_context_length(model_info)
                 return
         
         # Check for partial match (vLLM sometimes uses full paths)
-        for avail in available_models:
+        for model_info in model_data:
+            avail = model_info.get('id', '')
             avail_base = avail.split('/')[-1].lower()
             if avail_base == model_lower or model_lower in avail.lower():
                 logger.info(f"Model '{model_name}' found as '{avail}' (partial match)")
                 self.config.model = avail
+                _set_model_context_length(model_info)
                 return
         
         # Model not found - provide helpful error
@@ -250,6 +264,71 @@ class VLLMClient:
         
         raise VLLMModelNotFoundError(error_msg)
     
+    def _estimate_tokens(self, text: str) -> int:
+        """
+        Estimate token count for text using a simple heuristic.
+        
+        This is a rough estimate (4 chars per token on average).
+        For more accuracy, you'd use the actual tokenizer, but this
+        avoids the dependency and is good enough for context management.
+        """
+        return len(text) // 4
+    
+    def _calculate_max_tokens(
+        self,
+        messages: Optional[List[Dict[str, Any]]] = None,
+        prompt: Optional[str] = None,
+        requested_max_tokens: Optional[int] = None
+    ) -> int:
+        """
+        Calculate appropriate max_tokens based on input size and model limits.
+        
+        Args:
+            messages: Chat messages (for chat completions)
+            prompt: Raw prompt (for completions)
+            requested_max_tokens: User-requested max tokens
+            
+        Returns:
+            Appropriate max_tokens value that won't exceed model limits
+        """
+        # Use configured max_tokens as default
+        max_tokens = requested_max_tokens or self.config.max_tokens
+        
+        # If we don't know the model's context length, use the requested value
+        if not self.config.max_model_len:
+            return max_tokens
+        
+        # Estimate input tokens
+        if messages:
+            input_text = ''.join(
+                msg.get('content', '') for msg in messages
+            )
+        elif prompt:
+            input_text = prompt
+        else:
+            return max_tokens
+        
+        estimated_input_tokens = self._estimate_tokens(input_text)
+        
+        # Calculate available tokens (leave 5% margin for tokenizer variance)
+        safety_margin = int(self.config.max_model_len * 0.05)
+        available_tokens = self.config.max_model_len - estimated_input_tokens - safety_margin
+        
+        # Ensure at least some tokens for output
+        min_output_tokens = 256
+        available_tokens = max(min_output_tokens, available_tokens)
+        
+        # Use the smaller of requested and available
+        final_max_tokens = min(max_tokens, available_tokens)
+        
+        if final_max_tokens < max_tokens:
+            logger.info(
+                f"Adjusted max_tokens from {max_tokens} to {final_max_tokens} "
+                f"(input ~{estimated_input_tokens} tokens, model limit {self.config.max_model_len})"
+            )
+        
+        return final_max_tokens
+    
     def chat(
         self, 
         messages: List[Dict[str, Any]],
@@ -267,10 +346,15 @@ class VLLMClient:
         Returns:
             Assistant's response text
         """
+        effective_max_tokens = self._calculate_max_tokens(
+            messages=messages,
+            requested_max_tokens=max_tokens
+        )
+        
         data = {
             "model": self.config.model,
             "messages": messages,
-            "max_tokens": max_tokens or self.config.max_tokens,
+            "max_tokens": effective_max_tokens,
             "temperature": temperature if temperature is not None else self.config.temperature,
             "stream": True,
             **self.config.extra_options,
@@ -308,11 +392,16 @@ class VLLMClient:
         Returns:
             Generated text
         """
+        effective_max_tokens = self._calculate_max_tokens(
+            prompt=prompt,
+            requested_max_tokens=max_tokens
+        )
+        
         # vLLM supports /v1/completions for raw text generation
         data = {
             "model": self.config.model,
             "prompt": prompt,
-            "max_tokens": max_tokens or self.config.max_tokens,
+            "max_tokens": effective_max_tokens,
             "temperature": temperature if temperature is not None else self.config.temperature,
             "stream": False,
             **self.config.extra_options,

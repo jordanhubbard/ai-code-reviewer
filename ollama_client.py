@@ -59,6 +59,7 @@ class OllamaConfig:
     extra_options: Dict[str, Any] = field(default_factory=dict)
     ps_monitor_interval: float = 0.0
     max_parallel_requests: int = 1
+    num_ctx: Optional[int] = None  # Model's context length (auto-detected)
 
 
 class OllamaClient:
@@ -432,6 +433,91 @@ class OllamaClient:
             raise OllamaModelNotFoundError(error_msg)
         
         logger.info(f"Model '{model_name}' is available (exact match verified)")
+        
+        # Try to get model's context length
+        self._fetch_model_context_length()
+    
+    def _fetch_model_context_length(self) -> None:
+        """Fetch model details to get context length (num_ctx)."""
+        try:
+            data = {"name": self.config.model}
+            response = self._make_request("/api/show", method="POST", data=data, timeout=30)
+            
+            # Extract num_ctx from model_info.parameters or modelfile
+            model_info = response.get('model_info', {})
+            parameters = response.get('parameters', '')
+            
+            # First try model_info (structured data)
+            for key, value in model_info.items():
+                if 'context' in key.lower() or key == 'num_ctx':
+                    try:
+                        self.config.num_ctx = int(value)
+                        logger.info(f"Model context length from model_info: {self.config.num_ctx} tokens")
+                        return
+                    except (ValueError, TypeError):
+                        pass
+            
+            # Try parsing parameters string (e.g., "num_ctx 4096")
+            if parameters:
+                import re
+                match = re.search(r'num_ctx\s+(\d+)', parameters)
+                if match:
+                    self.config.num_ctx = int(match.group(1))
+                    logger.info(f"Model context length from parameters: {self.config.num_ctx} tokens")
+                    return
+            
+            logger.debug("Could not determine model context length, will use defaults")
+            
+        except Exception as e:
+            logger.debug(f"Failed to fetch model info: {e}")
+    
+    def _estimate_tokens(self, text: str) -> int:
+        """Estimate token count using a simple heuristic (4 chars per token)."""
+        return len(text) // 4
+    
+    def _calculate_max_tokens(
+        self,
+        messages: Optional[List[Dict[str, Any]]] = None,
+        prompt: Optional[str] = None,
+        requested_max_tokens: Optional[int] = None
+    ) -> int:
+        """
+        Calculate appropriate max_tokens based on input size and model limits.
+        
+        Returns:
+            Appropriate max_tokens value that won't exceed model limits
+        """
+        max_tokens = requested_max_tokens or self.config.max_tokens
+        
+        if not self.config.num_ctx:
+            return max_tokens
+        
+        # Estimate input tokens
+        if messages:
+            input_text = ''.join(msg.get('content', '') for msg in messages)
+        elif prompt:
+            input_text = prompt
+        else:
+            return max_tokens
+        
+        estimated_input_tokens = self._estimate_tokens(input_text)
+        
+        # Calculate available tokens (leave 5% margin)
+        safety_margin = int(self.config.num_ctx * 0.05)
+        available_tokens = self.config.num_ctx - estimated_input_tokens - safety_margin
+        
+        # Ensure at least some tokens for output
+        available_tokens = max(256, available_tokens)
+        
+        final_max_tokens = min(max_tokens, available_tokens)
+        
+        if final_max_tokens < max_tokens:
+            logger.info(
+                f"Adjusted max_tokens from {max_tokens} to {final_max_tokens} "
+                f"(input ~{estimated_input_tokens} tokens, model limit {self.config.num_ctx})"
+            )
+        
+        return final_max_tokens
     
     def _validate_handshake(self) -> None:
         """
@@ -487,7 +573,10 @@ class OllamaClient:
         Returns:
             Generated text
         """
-        effective_max_tokens = max_tokens or self.config.max_tokens
+        effective_max_tokens = self._calculate_max_tokens(
+            prompt=prompt,
+            requested_max_tokens=max_tokens
+        )
         option_payload = dict(self.config.extra_options)
         option_payload["num_predict"] = effective_max_tokens
         option_payload["temperature"] = (
@@ -520,7 +609,10 @@ class OllamaClient:
         Returns:
             Assistant's response text
         """
-        effective_max_tokens = max_tokens or self.config.max_tokens
+        effective_max_tokens = self._calculate_max_tokens(
+            messages=messages,
+            requested_max_tokens=max_tokens
+        )
         option_payload = dict(self.config.extra_options)
         option_payload["num_predict"] = effective_max_tokens
         option_payload["temperature"] = (
