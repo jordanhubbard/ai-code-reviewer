@@ -16,7 +16,7 @@ PYTHON?=	python3
 # All paths are relative to the Makefile
 
 # Phony targets
-.PHONY: all deps check-deps config-update validate run run-verbose test test-all release clean clean-all help
+.PHONY: all deps check-deps config-init config-update validate run run-verbose test test-all release clean clean-all help
 
 # Default target
 all: help
@@ -75,17 +75,17 @@ deps:
 	$(PYTHON) -m pip install --user -r requirements.txt
 	@echo "Done. Dependencies installed."
 
+# Interactive configuration setup
+# Creates config.yaml with user prompts, validates hosts, shows defaults
+config-init:
+	@./scripts/config-init.sh
+
 # Update config.yaml with new defaults from config.yaml.defaults
-# If config.yaml doesn't exist, creates it from defaults
+# If config.yaml doesn't exist, runs interactive setup instead
 config-update:
 	@if [ ! -f config.yaml ]; then \
-		echo "Creating config.yaml from defaults..."; \
-		cp config.yaml.defaults config.yaml; \
-		echo ""; \
-		echo "*** config.yaml created - do not forget to customize it! ***"; \
-		echo "    At minimum, set your Ollama server URL:"; \
-		echo "      ollama.url: \"http://your-ollama-server:11434\""; \
-		echo ""; \
+		echo "No config.yaml found. Running interactive setup..."; \
+		./scripts/config-init.sh; \
 	else \
 		echo "Updating config.yaml with new defaults..."; \
 		$(PYTHON) scripts/config_update.py; \
@@ -141,10 +141,15 @@ test-all: test
 # Run targets
 #
 
-# Run the review loop (checks dependencies first, auto-updates config if defaults are newer)
+# Run the review loop (checks dependencies first, auto-creates config if missing)
 run: check-deps
-	@# Auto-update config.yaml if defaults are newer
-	@if [ -f config.yaml ] && [ -f config.yaml.defaults ] && [ config.yaml.defaults -nt config.yaml ]; then \
+	@# Create config.yaml interactively if it doesn't exist
+	@if [ ! -f config.yaml ]; then \
+		echo ""; \
+		echo "*** No config.yaml found - running interactive setup..."; \
+		echo ""; \
+		./scripts/config-init.sh; \
+	elif [ -f config.yaml.defaults ] && [ config.yaml.defaults -nt config.yaml ]; then \
 		echo "*** config.yaml.defaults is newer than config.yaml"; \
 		echo "*** Running config-update to merge new settings..."; \
 		$(MAKE) config-update; \
@@ -235,9 +240,9 @@ help:
 	@echo ""
 	@echo "Setup:"
 	@echo "  make check-deps     Check/install Python3, pip, and PyYAML (auto-runs on 'make run')"
-	@echo "  make config-update  Create or update config.yaml with new defaults"
-	@echo "  vim config.yaml     Configure Ollama server URL and model"
-	@echo "  make validate       Test connection to Ollama server"
+	@echo "  make config-init    Interactive setup wizard (creates/updates config.yaml)"
+	@echo "  make config-update  Merge new defaults into existing config.yaml"
+	@echo "  make validate       Test connection to LLM server"
 	@echo ""
 	@echo "Usage:"
 	@echo "  make run          Start the review loop (auto-checks dependencies)"
@@ -258,9 +263,11 @@ help:
 	@echo ""
 	@echo "Requirements:"
 	@echo "  - Python 3.8+ with PyYAML (auto-installed by check-deps)"
-	@echo "  - Network access to Ollama server"
+	@echo "  - Network access to vLLM or Ollama server"
 	@echo "  - Source code at source.root (default: ../)"
 	@echo "  - Working build command (configured in config.yaml)"
+	@echo ""
+	@echo "First time? Just run 'make run' - it will guide you through setup!"
 	@echo ""
 	@echo "Works with: C/C++ (make/cmake), Rust, Go, Python, Node.js, etc."
 	@echo "Just configure your build command in config.yaml!"
