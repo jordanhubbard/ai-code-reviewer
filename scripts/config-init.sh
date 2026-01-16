@@ -177,6 +177,227 @@ validate_host() {
     return 1
 }
 
+# Query available models from a host
+# Stores results in AVAILABLE_MODELS array
+query_host_models() {
+    local url="$1"
+    local base_url="${url%/}"
+    AVAILABLE_MODELS=()
+    
+    # Try vLLM first (port 8000)
+    local vllm_response
+    vllm_response=$(curl -s --connect-timeout 5 "$base_url:8000/v1/models" 2>/dev/null)
+    if [[ -n "$vllm_response" && "$vllm_response" == *'"data"'* ]]; then
+        # Parse JSON to extract model IDs
+        local models
+        models=$(echo "$vllm_response" | grep -o '"id"[[:space:]]*:[[:space:]]*"[^"]*"' | sed 's/"id"[[:space:]]*:[[:space:]]*"//;s/"$//')
+        while IFS= read -r model; do
+            [[ -n "$model" ]] && AVAILABLE_MODELS+=("$model")
+        done <<< "$models"
+        return 0
+    fi
+    
+    # Try Ollama (port 11434)
+    local ollama_response
+    ollama_response=$(curl -s --connect-timeout 5 "$base_url:11434/api/tags" 2>/dev/null)
+    if [[ -n "$ollama_response" && "$ollama_response" == *'"models"'* ]]; then
+        # Parse JSON to extract model names
+        local models
+        models=$(echo "$ollama_response" | grep -o '"name"[[:space:]]*:[[:space:]]*"[^"]*"' | sed 's/"name"[[:space:]]*:[[:space:]]*"//;s/"$//')
+        while IFS= read -r model; do
+            [[ -n "$model" ]] && AVAILABLE_MODELS+=("$model")
+        done <<< "$models"
+        return 0
+    fi
+    
+    # Try with explicit port if specified
+    if [[ "$url" =~ :[0-9]+$ ]]; then
+        vllm_response=$(curl -s --connect-timeout 5 "$base_url/v1/models" 2>/dev/null)
+        if [[ -n "$vllm_response" && "$vllm_response" == *'"data"'* ]]; then
+            local models
+            models=$(echo "$vllm_response" | grep -o '"id"[[:space:]]*:[[:space:]]*"[^"]*"' | sed 's/"id"[[:space:]]*:[[:space:]]*"//;s/"$//')
+            while IFS= read -r model; do
+                [[ -n "$model" ]] && AVAILABLE_MODELS+=("$model")
+            done <<< "$models"
+            return 0
+        fi
+        
+        ollama_response=$(curl -s --connect-timeout 5 "$base_url/api/tags" 2>/dev/null)
+        if [[ -n "$ollama_response" && "$ollama_response" == *'"models"'* ]]; then
+            local models
+            models=$(echo "$ollama_response" | grep -o '"name"[[:space:]]*:[[:space:]]*"[^"]*"' | sed 's/"name"[[:space:]]*:[[:space:]]*"//;s/"$//')
+            while IFS= read -r model; do
+                [[ -n "$model" ]] && AVAILABLE_MODELS+=("$model")
+            done <<< "$models"
+            return 0
+        fi
+    fi
+    
+    return 1
+}
+
+# Check if a model exists on any of the configured hosts
+# Returns 0 if found, 1 if not found
+check_model_exists() {
+    local model="$1"
+    shift
+    local hosts=("$@")
+    
+    for host in "${hosts[@]}"; do
+        query_host_models "$host"
+        for available in "${AVAILABLE_MODELS[@]}"; do
+            # Exact match
+            if [[ "$available" == "$model" ]]; then
+                return 0
+            fi
+            # Case-insensitive match
+            if [[ "${available,,}" == "${model,,}" ]]; then
+                return 0
+            fi
+            # Partial match (model name without tag matches)
+            local model_base="${model%%:*}"
+            local avail_base="${available%%:*}"
+            if [[ "${avail_base,,}" == "${model_base,,}" ]]; then
+                return 0
+            fi
+        done
+    done
+    return 1
+}
+
+# Show available models on all hosts
+show_available_models() {
+    local hosts=("$@")
+    local all_models=()
+    
+    echo ""
+    echo -e "${CYAN}Available models on your servers:${NC}"
+    
+    for host in "${hosts[@]}"; do
+        query_host_models "$host"
+        if [[ ${#AVAILABLE_MODELS[@]} -gt 0 ]]; then
+            echo -e "  ${BLUE}$host:${NC}"
+            for model in "${AVAILABLE_MODELS[@]}"; do
+                echo "    - $model"
+                # Add to all_models if not already there
+                local found=0
+                for m in "${all_models[@]}"; do
+                    [[ "$m" == "$model" ]] && found=1 && break
+                done
+                [[ $found -eq 0 ]] && all_models+=("$model")
+            done
+        else
+            echo -e "  ${BLUE}$host:${NC} ${YELLOW}(could not query models)${NC}"
+        fi
+    done
+    echo ""
+}
+
+# Read and validate models with interactive selection
+read_models() {
+    local -n result=$1
+    local -n defaults=$2
+    local -n hosts_ref=$3
+    local temp_models=()
+    local input
+    local count=0
+    
+    print_section "LLM Models"
+    echo "Select models to use (in priority order)."
+    echo "The first available model on each host will be used."
+    echo ""
+    
+    # Show what's available on the servers
+    show_available_models "${hosts_ref[@]}"
+    
+    echo -e "Enter models one at a time. Type ${YELLOW}done${NC} when finished."
+    echo -e "You can:"
+    echo -e "  - Press Enter to accept the suggested default"
+    echo -e "  - Type a model name (tab completion not available)"
+    echo -e "  - Type ${YELLOW}list${NC} to see available models again"
+    echo ""
+    
+    while true; do
+        count=$((count + 1))
+        local default=""
+        if [[ $count -le ${#defaults[@]} ]]; then
+            default="${defaults[$((count-1))]}"
+        fi
+        
+        local prompt_suffix=""
+        if [[ $count -gt ${#defaults[@]} ]]; then
+            prompt_suffix=" (or 'done')"
+        fi
+        
+        if [[ -n "$default" ]]; then
+            read -e -p "  Model [$count]$prompt_suffix: " -i "$default" input
+        else
+            read -e -p "  Model [$count]$prompt_suffix: " input
+        fi
+        
+        # Check for special commands
+        if [[ "${input,,}" == "done" ]] || [[ -z "$input" && $count -gt ${#defaults[@]} ]]; then
+            break
+        fi
+        
+        if [[ "${input,,}" == "list" ]]; then
+            show_available_models "${hosts_ref[@]}"
+            count=$((count - 1))  # Don't increment counter
+            continue
+        fi
+        
+        # Use default if empty
+        if [[ -z "$input" && -n "$default" ]]; then
+            input="$default"
+        fi
+        
+        if [[ -n "$input" ]]; then
+            # Validate model exists on at least one host
+            echo -n "    Checking if '$input' exists... "
+            if check_model_exists "$input" "${hosts_ref[@]}"; then
+                echo -e "${GREEN}found${NC}"
+                temp_models+=("$input")
+            else
+                echo -e "${YELLOW}not found${NC}"
+                echo ""
+                print_warning "Model '$input' was not found on any configured host."
+                echo ""
+                echo "This could mean:"
+                echo "  - The model name is misspelled"
+                echo "  - The model hasn't been loaded on the server yet"
+                echo "  - You're planning to load it later"
+                echo ""
+                show_available_models "${hosts_ref[@]}"
+                echo -e "Add '$input' anyway? (y/N/r to re-enter): "
+                read -r add_anyway
+                case "${add_anyway,,}" in
+                    y)
+                        temp_models+=("$input")
+                        print_warning "Added '$input' (not validated)"
+                        ;;
+                    r)
+                        count=$((count - 1))  # Re-prompt for this slot
+                        echo "Re-enter model name:"
+                        ;;
+                    *)
+                        count=$((count - 1))  # Re-prompt for this slot
+                        echo "Skipped. Enter a different model:"
+                        ;;
+                esac
+            fi
+        fi
+    done
+    
+    if [[ ${#temp_models[@]} -eq 0 ]]; then
+        # Use all defaults if nothing entered
+        echo ""
+        print_warning "No models entered. Using defaults."
+        result=("${defaults[@]}")
+    else
+        result=("${temp_models[@]}")
+    fi
+}
+
 # Read and validate hosts
 read_hosts() {
     local -n result=$1
@@ -450,12 +671,8 @@ main() {
         # Step 1: Hosts
         read_hosts HOSTS DEFAULT_HOSTS
         
-        # Step 2: Models
-        print_section "LLM Models"
-        echo "Enter the models to use (in priority order)."
-        echo "The first available model on each host will be used."
-        echo ""
-        read_array "Models:" DEFAULT_MODELS MODELS
+        # Step 2: Models (with validation against hosts)
+        read_models MODELS DEFAULT_MODELS HOSTS
         
         # Step 3: LLM Settings
         print_section "LLM Settings"
