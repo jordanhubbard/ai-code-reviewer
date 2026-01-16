@@ -191,30 +191,64 @@ class VLLMClient:
     
     def _validate_model(self) -> None:
         """Validate that the requested model is available on the server."""
-        logger.info(f"Checking if model '{self.config.model}' is available...")
+        logger.info(f"Checking if model '{self.config.model}' is available on vLLM...")
         
-        response = self._make_request("/v1/models")
+        try:
+            response = self._make_request("/v1/models")
+        except VLLMConnectionError as e:
+            raise VLLMModelNotFoundError(
+                f"Cannot list models on vLLM server at {self.base_url}: {e}"
+            ) from e
+        
         available_models = [m.get('id', '') for m in response.get('data', [])]
-        
         model_name = self.config.model
         
-        # Check for exact match or prefix match (vLLM sometimes uses full paths)
-        found = model_name in available_models
-        if not found:
-            # Try matching by suffix (model name without path)
-            for avail in available_models:
-                if avail.endswith(model_name) or model_name.endswith(avail.split('/')[-1]):
-                    found = True
-                    break
+        # Check for exact match first
+        if model_name in available_models:
+            logger.info(f"Model '{model_name}' found (exact match)")
+            return
         
-        if not found:
-            model_list = '\n  - '.join(available_models) if available_models else "(no models loaded)"
-            raise VLLMModelNotFoundError(
-                f"Model '{model_name}' not found on vLLM server.\n"
-                f"Available models:\n  - {model_list}"
+        # Check for case-insensitive match
+        model_lower = model_name.lower()
+        for avail in available_models:
+            if avail.lower() == model_lower:
+                logger.info(f"Model '{model_name}' found as '{avail}' (case-insensitive match)")
+                # Update config to use the actual model name
+                self.config.model = avail
+                return
+        
+        # Check for partial match (vLLM sometimes uses full paths)
+        for avail in available_models:
+            avail_base = avail.split('/')[-1].lower()
+            if avail_base == model_lower or model_lower in avail.lower():
+                logger.info(f"Model '{model_name}' found as '{avail}' (partial match)")
+                self.config.model = avail
+                return
+        
+        # Model not found - provide helpful error
+        if available_models:
+            model_list = '\n    - '.join(available_models)
+            error_msg = (
+                f"\n{'='*60}\n"
+                f"Model '{model_name}' not found on vLLM server\n"
+                f"{'='*60}\n"
+                f"Server: {self.base_url}\n\n"
+                f"Available models on this server:\n    - {model_list}\n\n"
+                f"To fix, update config.yaml llm.models to use one of the above.\n"
+                f"{'='*60}"
+            )
+        else:
+            error_msg = (
+                f"\n{'='*60}\n"
+                f"No models loaded on vLLM server\n"
+                f"{'='*60}\n"
+                f"Server: {self.base_url}\n\n"
+                f"The vLLM server is running but has no models loaded.\n"
+                f"Check the vLLM server configuration and logs.\n"
+                f"{'='*60}"
             )
         
-        logger.info(f"Model '{model_name}' is available")
+        raise VLLMModelNotFoundError(error_msg)
     
     def chat(
         self, 

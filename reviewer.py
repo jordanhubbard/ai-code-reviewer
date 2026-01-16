@@ -2951,7 +2951,7 @@ Output ONLY the lesson entry, nothing else."""
             except Exception as e:
                 error_msg = str(e)
                 if "timed out" in error_msg.lower() or "timeout" in error_msg.lower():
-                    logger.error(f"Ollama timeout after {self.ollama.config.timeout}s")
+                    logger.error(f"LLM timeout after {self.ollama.config.timeout}s")
                     self.ops.ai_timeout(self.ollama.config.timeout, f"Step {step}")
                     print(f"\n{'='*60}")
                     print("ERROR: Request timed out")
@@ -2959,12 +2959,22 @@ Output ONLY the lesson entry, nothing else."""
                     print(f"The model took longer than {self.ollama.config.timeout}s to respond.")
                     print("This usually happens with large files (1000+ lines).")
                     print("\nSolutions:")
-                    print(f"1. Increase timeout in config.yaml: ollama.timeout (currently {self.ollama.config.timeout}s)")
+                    print(f"1. Increase timeout in config.yaml: llm.timeout (currently {self.ollama.config.timeout}s)")
                     print("2. Review smaller files first")
                     print("3. Break large files into sections")
                     print('='*60)
+                elif "does not exist" in error_msg.lower() or "not found" in error_msg.lower():
+                    logger.error(f"LLM model error: {e}")
+                    self.ops.ai_error(error_msg)
+                    print(f"\n{'='*60}")
+                    print("ERROR: Model not found on server")
+                    print('='*60)
+                    print(f"{error_msg}")
+                    print("\nTo see available models, check your LLM server.")
+                    print("Then update config.yaml llm.models with valid model names.")
+                    print('='*60)
                 else:
-                    logger.error(f"Ollama error: {e}")
+                    logger.error(f"LLM error: {e}")
                     self.ops.ai_error(error_msg)
                 break
             
