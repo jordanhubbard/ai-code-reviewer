@@ -1577,6 +1577,233 @@ RULES:
 Respond with analysis followed by a single ACTION line.
 """
     
+    def _review_single_file(self, file_path: str) -> List[Dict[str, Any]]:
+        """
+        Review a single file and return proposed edits.
+        
+        This method creates its own conversation context for parallel review.
+        
+        Args:
+            file_path: Relative path to the file from source root
+            
+        Returns:
+            List of edit dictionaries with 'file_path', 'old_text', 'new_text'
+        """
+        path = self.source_root / file_path
+        if not path.exists():
+            logger.warning(f"Parallel review: file not found: {file_path}")
+            return []
+        
+        # Skip non-code files
+        suffix = path.suffix.lower()
+        if suffix in MANPAGE_SUFFIXES:
+            logger.debug(f"Parallel review: skipping manpage {file_path}")
+            return []
+        
+        # Read the file content
+        try:
+            content = path.read_text(encoding='utf-8', errors='replace')
+        except Exception as e:
+            logger.warning(f"Parallel review: failed to read {file_path}: {e}")
+            return []
+        
+        # Truncate very large files for parallel review
+        if len(content) > 50000:
+            content = content[:50000] + "\n\n[... TRUNCATED for parallel review ...]"
+        
+        # Build a focused prompt for this single file
+        system_prompt = """You are a code reviewer for FreeBSD source code.
+Review the file and suggest specific edits to fix issues like:
+- Security vulnerabilities (buffer overflows, unsafe functions)
+- Replace atoi/atol with strtonum for better error handling
+- Memory leaks and resource management
+- Error handling improvements
+- Code correctness issues
+
+IMPORTANT: Only suggest edits if there are REAL issues to fix.
+If the code is already correct (e.g., already uses strtonum), say "NO_EDITS_NEEDED".
+
+For each edit, use this EXACT format:
+
+EDIT:
+FILE: <path>
+OLD:
+<<<
+exact text to replace (copy from file)
+>>>
+NEW:
+<<<
+replacement text
+>>>
+
+Include 3-5 lines of context in OLD blocks for uniqueness.
+Use TABS for indentation (FreeBSD style).
+You may suggest multiple edits."""
+
+        user_prompt = f"""Review this file and suggest edits:
+
+FILE: {file_path}
+
+```c
+{content}
+```
+
+Analyze the code and provide EDIT blocks for any issues found.
+If no changes needed, respond with just: NO_EDITS_NEEDED"""
+
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt}
+        ]
+        
+        try:
+            logger.info(f"Parallel review: sending {file_path} to LLM")
+            response = self.ollama.chat(messages)
+            logger.info(f"Parallel review: received response for {file_path}")
+        except Exception as e:
+            logger.error(f"Parallel review: LLM error for {file_path}: {e}")
+            return []
+        
+        # Parse edits from response
+        edits = []
+        if "NO_EDITS_NEEDED" in response:
+            logger.debug(f"Parallel review: no edits needed for {file_path}")
+            return []
+        
+        # Parse EDIT blocks
+        edit_pattern = re.compile(
+            r'EDIT:\s*\n'
+            r'FILE:\s*([^\n]+)\s*\n'
+            r'OLD:\s*\n<<<\s*\n(.*?)\n>>>\s*\n'
+            r'NEW:\s*\n<<<\s*\n(.*?)\n>>>',
+            re.DOTALL
+        )
+        
+        for match in edit_pattern.finditer(response):
+            edit_file = match.group(1).strip()
+            old_text = match.group(2).strip()
+            new_text = match.group(3).strip()
+            
+            # Validate the edit
+            if old_text and new_text and old_text != new_text:
+                edits.append({
+                    'file_path': edit_file if edit_file else file_path,
+                    'old_text': old_text,
+                    'new_text': new_text
+                })
+                logger.info(f"Parallel review: found edit for {edit_file or file_path}")
+        
+        # Also try the standard ACTION: EDIT_FILE format
+        action_pattern = re.compile(
+            r'ACTION:\s*EDIT_FILE\s+([^\n]+)\s*\n'
+            r'OLD:\s*\n<<<\s*\n(.*?)\n>>>\s*\n'
+            r'NEW:\s*\n<<<\s*\n(.*?)\n>>>',
+            re.DOTALL | re.IGNORECASE
+        )
+        
+        for match in action_pattern.finditer(response):
+            edit_file = match.group(1).strip()
+            old_text = match.group(2).strip()
+            new_text = match.group(3).strip()
+            
+            if old_text and new_text and old_text != new_text:
+                # Avoid duplicates
+                is_dup = any(
+                    e['old_text'] == old_text and e['new_text'] == new_text
+                    for e in edits
+                )
+                if not is_dup:
+                    edits.append({
+                        'file_path': edit_file if edit_file else file_path,
+                        'old_text': old_text,
+                        'new_text': new_text
+                    })
+        
+        return edits
+    
+    def _parallel_review_directory(self, directory: str, files: List[str]) -> List[Dict[str, Any]]:
+        """
+        Review multiple files in parallel and collect proposed edits.
+        
+        Args:
+            directory: Current directory being reviewed
+            files: List of file paths to review
+            
+        Returns:
+            List of all proposed edits from all files
+        """
+        if not files:
+            return []
+        
+        all_edits = []
+        workers = min(self.max_parallel_files, len(files))
+        
+        print(f"\n*** Parallel review: {len(files)} files with {workers} workers")
+        logger.info(f"Starting parallel review of {len(files)} files with {workers} workers")
+        
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            # Submit all file review tasks
+            future_to_file = {
+                executor.submit(self._review_single_file, f): f
+                for f in files
+            }
+            
+            # Collect results as they complete
+            completed = 0
+            for future in as_completed(future_to_file):
+                file_path = future_to_file[future]
+                completed += 1
+                try:
+                    edits = future.result()
+                    if edits:
+                        all_edits.extend(edits)
+                        print(f"    [{completed}/{len(files)}] {file_path}: {len(edits)} edit(s)")
+                    else:
+                        print(f"    [{completed}/{len(files)}] {file_path}: no changes")
+                except Exception as e:
+                    logger.error(f"Parallel review failed for {file_path}: {e}")
+                    print(f"    [{completed}/{len(files)}] {file_path}: ERROR - {e}")
+        
+        print(f"*** Parallel review complete: {len(all_edits)} total edits proposed")
+        logger.info(f"Parallel review complete: {len(all_edits)} edits from {len(files)} files")
+        
+        return all_edits
+    
+    def _apply_parallel_edits(self, edits: List[Dict[str, Any]]) -> Tuple[int, int, List[str]]:
+        """
+        Apply edits collected from parallel review.
+        
+        Args:
+            edits: List of edit dictionaries
+            
+        Returns:
+            Tuple of (successful_edits, failed_edits, changed_files)
+        """
+        successful = 0
+        failed = 0
+        changed_files = []
+        
+        for edit in edits:
+            file_path = edit['file_path']
+            old_text = edit['old_text']
+            new_text = edit['new_text']
+            
+            path = self._resolve_path(file_path)
+            
+            with self._edit_lock if self._edit_lock else threading.Lock():
+                success, msg, diff = self.editor.edit_file(path, old_text, new_text)
+            
+            if success:
+                successful += 1
+                if file_path not in changed_files:
+                    changed_files.append(file_path)
+                logger.info(f"Applied edit to {file_path}")
+            else:
+                failed += 1
+                logger.warning(f"Failed to apply edit to {file_path}: {msg}")
+        
+        return successful, failed, changed_files
+    
     def _log_exchange(self, step: int, request: str, response: str) -> None:
         """Log conversation exchange to file."""
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -2202,6 +2429,47 @@ Output ONLY the lesson entry, nothing else."""
                     result += "\nNext attempt will auto-skip this directory."
                 else:
                     result += f"\n{remaining} attempt(s) remain before auto-skip."
+            
+            # Parallel review mode: automatically review all files in parallel
+            if self._parallel_mode and files_in_dir:
+                # Filter to only .c and .h files for parallel review (skip docs)
+                code_files = [f for f in files_in_dir 
+                              if f.endswith(('.c', '.h', '.cc', '.cpp', '.rs', '.go'))]
+                
+                if code_files:
+                    result += f"\n\n*** PARALLEL REVIEW MODE ***\n"
+                    result += f"Reviewing {len(code_files)} code files concurrently...\n"
+                    
+                    # Run parallel review
+                    edits = self._parallel_review_directory(directory, code_files)
+                    
+                    if edits:
+                        # Apply the edits
+                        successful, failed, changed = self._apply_parallel_edits(edits)
+                        
+                        result += f"\n*** Parallel review results:\n"
+                        result += f"    Edits proposed: {len(edits)}\n"
+                        result += f"    Successfully applied: {successful}\n"
+                        result += f"    Failed to apply: {failed}\n"
+                        
+                        if changed:
+                            result += f"    Files modified: {', '.join(changed)}\n"
+                            self.session.pending_changes = True
+                            self.session.changed_files.extend(changed)
+                        
+                        # Mark files as reviewed
+                        for f in code_files:
+                            self.session.visited_files_in_directory.add(f)
+                        self.session.files_reviewed_in_directory = len(code_files)
+                        
+                        result += f"\nAll files reviewed. Run BUILD to validate changes.\n"
+                        result += f"ACTION: BUILD\n"
+                    else:
+                        result += f"\n*** Parallel review found no issues in {len(code_files)} files.\n"
+                        for f in code_files:
+                            self.session.visited_files_in_directory.add(f)
+                        self.session.files_reviewed_in_directory = len(code_files)
+                        result += f"Directory review complete. Move to next directory.\n"
             
             return result
         
