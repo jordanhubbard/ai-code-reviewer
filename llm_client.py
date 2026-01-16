@@ -124,7 +124,7 @@ class MultiHostClient:
         self._vllm_index = 0
         self._ollama_index = 0
         self._host_lock = threading.Lock()
-        self._concurrency_sem = threading.Semaphore(max(1, config.max_parallel_requests))
+        self._dynamic_parallelism = (config.max_parallel_requests == 0)
         
         # Initialize all hosts, separating by backend type
         self._initialize_hosts()
@@ -136,11 +136,80 @@ class MultiHostClient:
                 "\n".join(f"  - {h}" for h in config.hosts)
             )
         
+        # Determine parallelism: dynamic (0) or static (1+)
+        if self._dynamic_parallelism:
+            # Query hosts for recommended parallelism
+            recommended = self._query_recommended_parallelism()
+            self._effective_max_parallel = recommended
+            self._concurrency_sem = threading.Semaphore(recommended)
+            logger.info(
+                f"Dynamic parallelism: server recommends {recommended} concurrent requests"
+            )
+            print(f"*** Dynamic parallelism: {recommended} concurrent LLM requests (from server metrics)")
+        else:
+            self._effective_max_parallel = config.max_parallel_requests
+            self._concurrency_sem = threading.Semaphore(config.max_parallel_requests)
+            
+            # Check if static value differs significantly from recommendation
+            try:
+                recommended = self._query_recommended_parallelism()
+                if abs(recommended - config.max_parallel_requests) >= 2:
+                    print(f"\n*** WARNING: LLM parallelism mismatch")
+                    print(f"    Config specifies: {config.max_parallel_requests} concurrent requests")
+                    print(f"    Server recommends: {recommended} (based on GPU capacity)")
+                    if recommended > config.max_parallel_requests:
+                        print(f"    Consider setting max_parallel_requests: 0 for better throughput")
+                    else:
+                        print(f"    Consider setting max_parallel_requests: 0 to avoid overload")
+                    print()
+            except Exception:
+                pass
+        
         logger.info(
             f"MultiHostClient initialized: {len(self._vllm_hosts)} vLLM hosts (preferred), "
             f"{len(self._ollama_hosts)} Ollama hosts (fallback), "
-            f"max_parallel={config.max_parallel_requests}"
+            f"max_parallel={self._effective_max_parallel}"
         )
+    
+    def _query_recommended_parallelism(self) -> int:
+        """
+        Query all hosts to determine recommended parallelism.
+        
+        Called during initialization to set dynamic parallelism.
+        
+        Returns:
+            Recommended number of concurrent requests (minimum 2)
+        """
+        total_capacity = 0
+        
+        # Query vLLM hosts
+        for host in self._vllm_hosts:
+            try:
+                metrics = host.client.get_server_metrics()
+                capacity = metrics.get('available_capacity', 1)
+                total_capacity += capacity
+                logger.debug(f"vLLM host {host.url}: capacity={capacity}")
+            except Exception as e:
+                logger.debug(f"Could not get metrics from {host.url}: {e}")
+                total_capacity += 2  # Assume some capacity
+        
+        # Query Ollama hosts
+        for host in self._ollama_hosts:
+            try:
+                metrics = host.client.get_server_metrics()
+                capacity = metrics.get('available_capacity', 1)
+                total_capacity += capacity
+                logger.debug(f"Ollama host {host.url}: capacity={capacity}")
+            except Exception as e:
+                logger.debug(f"Could not get metrics from {host.url}: {e}")
+                total_capacity += 2  # Assume some capacity
+        
+        # Ensure reasonable bounds
+        # Minimum of 2 for any parallelism, max of 16 to avoid overwhelming
+        recommended = max(2, min(total_capacity, 16))
+        
+        logger.info(f"Total recommended parallelism across {len(self._vllm_hosts) + len(self._ollama_hosts)} hosts: {recommended}")
+        return recommended
     
     def _initialize_hosts(self) -> None:
         """Initialize connections to all hosts, detecting backend and model."""
@@ -335,7 +404,7 @@ class MultiHostClient:
         if not acquired:
             raise LLMConnectionError(
                 f"Timed out waiting for available slot "
-                f"({self.config.max_parallel_requests} max parallel requests)"
+                f"({self._effective_max_parallel} max parallel requests)"
             )
         
         try:
@@ -366,7 +435,7 @@ class MultiHostClient:
         if not acquired:
             raise LLMConnectionError(
                 f"Timed out waiting for available slot "
-                f"({self.config.max_parallel_requests} max parallel requests)"
+                f"({self._effective_max_parallel} max parallel requests)"
             )
         
         try:
@@ -572,14 +641,14 @@ def create_client_from_config(config_dict: Dict[str, Any]) -> MultiHostClient:
             except (TypeError, ValueError):
                 num_batch = None
     
-    # Max parallel requests
+    # Max parallel requests (0 = dynamic from server metrics)
     if env_parallel:
         try:
             max_parallel = int(env_parallel)
         except ValueError:
-            max_parallel = _coerce_int(batching_cfg.get('max_parallel_requests', 4), 4)
+            max_parallel = _coerce_int(batching_cfg.get('max_parallel_requests', 0), 0)
     else:
-        max_parallel = _coerce_int(batching_cfg.get('max_parallel_requests', 4), 4)
+        max_parallel = _coerce_int(batching_cfg.get('max_parallel_requests', 0), 0)
     
     extra_options = llm_config.get('options', {})
     if not isinstance(extra_options, dict):
@@ -591,7 +660,7 @@ def create_client_from_config(config_dict: Dict[str, Any]) -> MultiHostClient:
         timeout=llm_config.get('timeout', 300),
         max_tokens=llm_config.get('max_tokens', 4096),
         temperature=llm_config.get('temperature', 0.1),
-        max_parallel_requests=max(1, max_parallel),
+        max_parallel_requests=max_parallel,  # 0 = dynamic, 1+ = static
         num_batch=num_batch,
         adaptive_batching=_coerce_bool(batching_cfg.get('adaptive'), False) if num_batch is None else False,
         adaptive_batch_min_chars=_coerce_int(batching_cfg.get('min_chars', 8000), 8000),
