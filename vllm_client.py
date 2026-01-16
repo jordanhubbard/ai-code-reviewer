@@ -333,16 +333,37 @@ class VLLMClient:
     @classmethod
     def probe_server(cls, url: str, timeout: int = 5) -> bool:
         """
-        Probe if a URL is running a vLLM server.
+        Probe if a URL is running a vLLM server (not Ollama).
+        
+        Both vLLM and Ollama support /v1/models (OpenAI-compatible),
+        but only Ollama has /api/tags. So we check for Ollama first
+        and return False if it looks like Ollama.
         
         Args:
             url: Base URL to probe
             timeout: Connection timeout
             
         Returns:
-            True if vLLM server detected, False otherwise
+            True if vLLM server detected (not Ollama), False otherwise
         """
         url = url.rstrip('/')
+        
+        # First, check if this is an Ollama server (has /api/tags)
+        try:
+            ollama_request = Request(
+                f"{url}/api/tags",
+                headers={"Accept": "application/json"},
+                method="GET"
+            )
+            with urlopen(ollama_request, timeout=timeout) as response:
+                data = json.loads(response.read().decode('utf-8'))
+                if 'models' in data:
+                    # This is Ollama, not vLLM
+                    return False
+        except Exception:
+            pass  # Not Ollama, continue to check for vLLM
+        
+        # Now check for vLLM's /v1/models endpoint
         try:
             request = Request(
                 f"{url}/v1/models",

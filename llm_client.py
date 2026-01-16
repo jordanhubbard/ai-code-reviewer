@@ -146,17 +146,64 @@ class MultiHostClient:
         """Initialize connections to all hosts, detecting backend and model."""
         for url in self.config.hosts:
             url = url.rstrip('/')
-            host_config = self._probe_and_connect(url)
-            if host_config:
-                # Separate hosts by backend type for priority routing
-                if host_config.backend == 'vllm':
-                    self._vllm_hosts.append(host_config)
-                else:
-                    self._ollama_hosts.append(host_config)
-                logger.info(
-                    f"Host {url}: {host_config.backend} backend, "
-                    f"model={host_config.model}"
-                )
+            
+            # Expand URLs without ports to try both vLLM (8000) and Ollama (11434)
+            urls_to_try = self._expand_host_url(url)
+            
+            for try_url in urls_to_try:
+                host_config = self._probe_and_connect(try_url)
+                if host_config:
+                    # Separate hosts by backend type for priority routing
+                    if host_config.backend == 'vllm':
+                        self._vllm_hosts.append(host_config)
+                    else:
+                        self._ollama_hosts.append(host_config)
+                    logger.info(
+                        f"Host {try_url}: {host_config.backend} backend, "
+                        f"model={host_config.model}"
+                    )
+    
+    def _expand_host_url(self, url: str) -> List[str]:
+        """
+        Expand a host URL to try multiple ports if no port specified.
+        
+        If the URL has no port (e.g., http://myserver), expands to:
+          - http://myserver:8000 (vLLM default, tried first)
+          - http://myserver:11434 (Ollama default, tried second)
+        
+        If the URL already has a port, returns it unchanged.
+        
+        Args:
+            url: Host URL, with or without port
+            
+        Returns:
+            List of URLs to try
+        """
+        import re
+        
+        # Check if URL already has a port
+        # Match: http(s)://host:port or http(s)://host:port/path
+        port_pattern = re.compile(r'^(https?://[^/:]+):(\d+)(.*)$')
+        if port_pattern.match(url):
+            # URL already has a port, use as-is
+            return [url]
+        
+        # Extract base URL (scheme + host)
+        base_pattern = re.compile(r'^(https?://[^/:]+)(.*)$')
+        match = base_pattern.match(url)
+        if not match:
+            # Doesn't look like a valid URL, return as-is
+            return [url]
+        
+        base_host = match.group(1)  # e.g., "http://myserver"
+        path = match.group(2)       # e.g., "" or "/v1"
+        
+        # Expand to both default ports (vLLM first, Ollama second)
+        logger.info(f"Expanding {url} to try vLLM (:8000) and Ollama (:11434) ports")
+        return [
+            f"{base_host}:8000{path}",    # vLLM default port
+            f"{base_host}:11434{path}",   # Ollama default port
+        ]
     
     def _probe_and_connect(self, url: str) -> Optional[HostConfig]:
         """
@@ -387,8 +434,8 @@ def create_client_from_config(config_dict: Dict[str, Any]) -> MultiHostClient:
     elif isinstance(hosts, str):
         hosts = [hosts]
     elif not hosts:
-        # Default to localhost with both vLLM (preferred) and Ollama (fallback)
-        hosts = ['http://localhost:8000', 'http://localhost:11434']
+        # Default to localhost (port auto-expansion will try :8000 then :11434)
+        hosts = ['http://localhost']
     
     # Parse models (comma-separated string or list)
     models = llm_config.get('models', [])
@@ -476,13 +523,13 @@ def _convert_legacy_config(ollama_config: Dict[str, Any]) -> Dict[str, Any]:
     """Convert legacy 'ollama' config section to new 'llm' format."""
     import re
     
-    # Parse URL to create both vLLM (port 8000) and Ollama (port 11434) entries
+    # Extract just the host without port - port auto-expansion handles the rest
     old_url = ollama_config.get('url', 'http://localhost:11434')
     url_match = re.match(r'(https?://[^:/]+)(:\d+)?(/.*)?', old_url)
     if url_match:
         base_host = url_match.group(1)
-        # vLLM first (preferred), Ollama second (fallback)
-        hosts = [f"{base_host}:8000", f"{base_host}:11434"]
+        # Just use base host - _expand_host_url will try :8000 then :11434
+        hosts = [base_host]
     else:
         hosts = [old_url]
     

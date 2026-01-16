@@ -30,19 +30,17 @@ def migrate_ollama_to_llm(config):
     
     ollama = config['ollama']
     
-    # Get the base URL and extract host/port
+    # Get the base URL and extract host (port is now auto-expanded by llm_client)
     old_url = ollama.get('url', 'http://localhost:11434')
     
-    # Parse URL to create both vLLM (port 8000) and Ollama (port 11434) entries
-    # vLLM should be listed first (preferred), Ollama second (fallback)
+    # Extract just the host without port - llm_client will auto-expand to try
+    # both vLLM (:8000) and Ollama (:11434) ports automatically
     import re
     url_match = re.match(r'(https?://[^:/]+)(:\d+)?(/.*)?', old_url)
     if url_match:
         base_host = url_match.group(1)  # e.g., "http://10.11.100.116"
-        # Create both vLLM and Ollama host entries
-        vllm_url = f"{base_host}:8000"      # vLLM default port
-        ollama_url = f"{base_host}:11434"   # Ollama default port
-        hosts = [vllm_url, ollama_url]
+        # Just use the base host - port auto-expansion handles the rest
+        hosts = [base_host]
     else:
         # Fallback if URL parsing fails
         hosts = [old_url]
@@ -124,8 +122,7 @@ def main():
     migrated = migrate_ollama_to_llm(config)
     if migrated:
         print("  Migrated 'ollama' section to new 'llm' format")
-        print("    - Created vLLM host entry (port 8000, preferred)")
-        print("    - Created Ollama host entry (port 11434, fallback)")
+        print("    - Converted url -> hosts (port auto-expansion tries :8000 then :11434)")
         print("    - Converted model -> models (array with priority fallback)")
         print("    - Added NVIDIA-Nemotron-3-Nano-30B-A3B-BF16 as preferred model")
     
