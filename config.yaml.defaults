@@ -95,7 +95,12 @@ llm:
     max_chars: 60000         # prompt length that maps to max_num_batch
     min_num_batch: 2         # minimum batch size when adaptive is enabled
     max_num_batch: 12        # maximum batch size Angry AI will request
-    max_parallel_requests: 4 # cap on simultaneous LLM requests across all hosts
+    # Maximum parallel LLM requests across all hosts
+    # Set to 0 for DYNAMIC mode: automatically determined from server metrics
+    #   (queries vLLM /metrics or Ollama /api/ps for KV cache usage)
+    # Set to 1+ for STATIC mode: fixed cap on concurrent requests
+    #   (will warn if this differs significantly from server-recommended value)
+    max_parallel_requests: 0
 
   # Additional per-request options forwarded directly to the LLM API.
   # For Ollama: num_ctx, num_gpu, repeat penalties, etc.
@@ -188,13 +193,15 @@ review:
   # A typical directory needs 50-100 iterations (read files, edit, build)
   max_iterations_per_directory: 200
   
-  # Parallel file processing (EXPERIMENTAL)
-  # Process multiple files concurrently for faster reviews
-  # Set to 1 for sequential processing (safest)
-  # Set to 2-4 for parallel processing (faster but more complex)
-  # Note: Builds are always sequential per directory regardless of this setting
-  # DEFAULT: 2 (moderate parallelism for testing)
-  max_parallel_files: 2
+  # Parallel file processing
+  # Controls how many files are reviewed concurrently within a directory.
+  # Set to 0 for DYNAMIC mode: automatically determined from server metrics
+  #   (queries vLLM /metrics or Ollama /api/ps for GPU/KV cache capacity)
+  # Set to 1 for SEQUENTIAL mode: review files one at a time (safest)
+  # Set to 2+ for STATIC parallel mode: fixed number of concurrent reviews
+  #   (will warn at startup if this differs from server-recommended value)
+  # Note: Builds are always sequential regardless of this setting
+  max_parallel_files: 0
   
   # Maximum commits to revert during pre-flight sanity check recovery
   # If source doesn't build at startup, pre-flight reverts commits until it does

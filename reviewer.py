@@ -1184,12 +1184,49 @@ class ReviewLoop:
         self.history: List[Dict[str, str]] = []
         
         # Parallel processing support
-        self._edit_lock = threading.Lock() if max_parallel_files > 1 else None
-        self._parallel_mode = max_parallel_files > 1
+        # max_parallel_files: 0 = dynamic (from server), 1 = sequential, 2+ = static parallel
+        self._dynamic_parallelism = (max_parallel_files == 0)
+        self._edit_lock = threading.Lock()  # Always have lock for safety
         
-        if self._parallel_mode:
-            logger.info(f"Parallel file processing enabled: max_workers={max_parallel_files}")
-            print(f"*** Parallel mode: {max_parallel_files} concurrent file reviews")
+        if self._dynamic_parallelism:
+            # Query server for recommended parallelism
+            try:
+                recommended = self.ollama.get_recommended_parallelism(max_parallel=8)
+                self.max_parallel_files = recommended
+                self._parallel_mode = recommended > 1
+                print(f"*** Dynamic parallelism: server recommends {recommended} concurrent reviews")
+                logger.info(f"Dynamic parallelism enabled: {recommended} workers from server metrics")
+            except Exception as e:
+                # Fall back to conservative default
+                self.max_parallel_files = 2
+                self._parallel_mode = True
+                print(f"*** Dynamic parallelism: server metrics unavailable, using default (2)")
+                logger.warning(f"Could not get server metrics for dynamic parallelism: {e}")
+        else:
+            self._parallel_mode = max_parallel_files > 1
+            
+            # Check if static value differs from server recommendation
+            if self._parallel_mode:
+                try:
+                    recommended = self.ollama.get_recommended_parallelism(max_parallel=8)
+                    if abs(recommended - max_parallel_files) >= 2:
+                        print(f"\n*** WARNING: Parallelism mismatch")
+                        print(f"    Config specifies: {max_parallel_files} concurrent reviews")
+                        print(f"    Server recommends: {recommended} (based on GPU/KV cache capacity)")
+                        if recommended > max_parallel_files:
+                            print(f"    You may be under-utilizing your GPU. Consider setting max_parallel_files: 0")
+                        else:
+                            print(f"    You may be over-loading your GPU. Consider setting max_parallel_files: 0")
+                        print()
+                except Exception:
+                    pass  # Can't get recommendation, skip warning
+            
+            if self._parallel_mode:
+                logger.info(f"Static parallel mode: {max_parallel_files} workers (from config)")
+                print(f"*** Parallel mode: {max_parallel_files} concurrent file reviews (static)")
+            else:
+                logger.info("Sequential mode: 1 file at a time")
+                print("*** Sequential mode: reviewing files one at a time")
         
         self._init_conversation()
     
@@ -1739,15 +1776,19 @@ If no changes needed, respond with just: NO_EDITS_NEEDED"""
         
         all_edits = []
         
-        # Get dynamic parallelism recommendation from server metrics
-        try:
-            recommended = self.ollama.get_recommended_parallelism(self.max_parallel_files)
-            workers = min(recommended, len(files))
-            print(f"\n*** Dynamic parallelism: server recommends {recommended} workers (max={self.max_parallel_files})")
-        except Exception as e:
-            # Fall back to configured max if metrics unavailable
+        # Determine worker count based on mode
+        if self._dynamic_parallelism:
+            # Re-check server metrics for current capacity (may have changed)
+            try:
+                recommended = self.ollama.get_recommended_parallelism(max_parallel=8)
+                workers = min(recommended, len(files))
+                print(f"\n*** Dynamic parallelism: server capacity = {recommended} workers")
+            except Exception as e:
+                workers = min(self.max_parallel_files, len(files))
+                logger.debug(f"Could not refresh server metrics: {e}")
+        else:
+            # Static mode - use configured value
             workers = min(self.max_parallel_files, len(files))
-            logger.debug(f"Could not get dynamic parallelism: {e}")
         
         print(f"*** Parallel review: {len(files)} files with {workers} workers")
         logger.info(f"Starting parallel review of {len(files)} files with {workers} workers")
