@@ -445,7 +445,7 @@ def create_client_from_config(config_dict: Dict[str, Any]) -> MultiHostClient:
         models = [models]
     elif not models:
         # Default models in priority order (must match config.yaml.defaults)
-        models = ['NVIDIA-Nemotron-3-Nano-30B-A3B-BF16', 'qwen2.5-coder:32b']
+        models = ['nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16', 'qwen2.5-coder:32b']
     
     # Parse batching config
     batching_cfg = llm_config.get('batching', {})
@@ -535,7 +535,7 @@ def _convert_legacy_config(ollama_config: Dict[str, Any]) -> Dict[str, Any]:
     
     return {
         'hosts': hosts,
-        'models': ['NVIDIA-Nemotron-3-Nano-30B-A3B-BF16', ollama_config.get('model', 'qwen2.5-coder:32b')],
+        'models': ['nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16', ollama_config.get('model', 'qwen2.5-coder:32b')],
         'timeout': ollama_config.get('timeout', 300),
         'max_tokens': ollama_config.get('max_tokens', 4096),
         'temperature': ollama_config.get('temperature', 0.1),

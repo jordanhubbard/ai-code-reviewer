@@ -64,10 +64,10 @@ llm:
   #      on each host before configuring this list.
   #
   models:
-    - "NVIDIA-Nemotron-3-Nano-30B-A3B-BF16"  # Preferred for vLLM
-    - "qwen2.5-coder:32b"                     # Good Ollama fallback
-    # - "qwen2.5-coder:14b"                   # Smaller fallback
-    # - "codellama:34b"                       # Alternative
+    - "nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16"  # Preferred for vLLM (HuggingFace name)
+    - "qwen2.5-coder:32b"                           # Good Ollama fallback
+    # - "qwen2.5-coder:14b"                         # Smaller fallback
+    # - "codellama:34b"                             # Alternative
   
   # Request timeout in seconds
   # Increase if you get timeouts with large files or slow models

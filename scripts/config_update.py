@@ -48,7 +48,7 @@ def migrate_ollama_to_llm(config):
     models = [ollama.get('model', 'qwen2.5-coder:32b')]
     
     # Add new preferred model if not already present
-    preferred_model = 'NVIDIA-Nemotron-3-Nano-30B-A3B-BF16'
+    preferred_model = 'nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16'
     if preferred_model not in models:
         models.insert(0, preferred_model)
     
@@ -124,7 +124,7 @@ def main():
         print("  Migrated 'ollama' section to new 'llm' format")
         print("    - Converted url -> hosts (port auto-expansion tries :8000 then :11434)")
         print("    - Converted model -> models (array with priority fallback)")
-        print("    - Added NVIDIA-Nemotron-3-Nano-30B-A3B-BF16 as preferred model")
+        print("    - Added nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16 as preferred model")
     
     added, updated = merge_dicts(defaults, config)
     
