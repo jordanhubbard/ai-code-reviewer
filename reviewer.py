@@ -1725,6 +1725,8 @@ If no changes needed, respond with just: NO_EDITS_NEEDED"""
         """
         Review multiple files in parallel and collect proposed edits.
         
+        Uses dynamic parallelism based on server capacity metrics when available.
+        
         Args:
             directory: Current directory being reviewed
             files: List of file paths to review
@@ -1736,9 +1738,18 @@ If no changes needed, respond with just: NO_EDITS_NEEDED"""
             return []
         
         all_edits = []
-        workers = min(self.max_parallel_files, len(files))
         
-        print(f"\n*** Parallel review: {len(files)} files with {workers} workers")
+        # Get dynamic parallelism recommendation from server metrics
+        try:
+            recommended = self.ollama.get_recommended_parallelism(self.max_parallel_files)
+            workers = min(recommended, len(files))
+            print(f"\n*** Dynamic parallelism: server recommends {recommended} workers (max={self.max_parallel_files})")
+        except Exception as e:
+            # Fall back to configured max if metrics unavailable
+            workers = min(self.max_parallel_files, len(files))
+            logger.debug(f"Could not get dynamic parallelism: {e}")
+        
+        print(f"*** Parallel review: {len(files)} files with {workers} workers")
         logger.info(f"Starting parallel review of {len(files)} files with {workers} workers")
         
         with ThreadPoolExecutor(max_workers=workers) as executor:

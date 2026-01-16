@@ -419,6 +419,115 @@ class VLLMClient:
         response = self._make_request("/v1/models")
         return [m.get('id', '') for m in response.get('data', [])]
     
+    def get_server_metrics(self) -> Dict[str, Any]:
+        """
+        Fetch server metrics from vLLM's /metrics endpoint.
+        
+        Returns dict with:
+            - kv_cache_usage: float (0.0-1.0, percentage of KV cache used)
+            - requests_running: int (number of requests currently running)
+            - requests_waiting: int (number of requests waiting in queue)
+            - gpu_cache_usage: float (0.0-1.0, GPU KV cache utilization)
+            - available_capacity: int (estimated additional parallel requests)
+        """
+        metrics = {
+            'kv_cache_usage': 0.0,
+            'requests_running': 0,
+            'requests_waiting': 0,
+            'gpu_cache_usage': 0.0,
+            'available_capacity': 1,
+        }
+        
+        try:
+            # vLLM exposes Prometheus metrics at /metrics
+            url = f"{self.base_url}/metrics"
+            request = Request(url, headers={"Accept": "text/plain"}, method="GET")
+            
+            with urlopen(request, timeout=10) as response:
+                text = response.read().decode('utf-8')
+                
+                # Parse Prometheus format metrics
+                for line in text.split('\n'):
+                    if line.startswith('#'):
+                        continue
+                    
+                    # vllm:gpu_cache_usage_perc or vllm:kv_cache_usage_perc
+                    if 'kv_cache_usage_perc' in line or 'gpu_cache_usage_perc' in line:
+                        try:
+                            value = float(line.split()[-1])
+                            metrics['kv_cache_usage'] = value
+                            metrics['gpu_cache_usage'] = value
+                        except (ValueError, IndexError):
+                            pass
+                    
+                    # vllm:num_requests_running
+                    elif 'num_requests_running' in line and not line.startswith('#'):
+                        try:
+                            value = int(float(line.split()[-1]))
+                            metrics['requests_running'] = value
+                        except (ValueError, IndexError):
+                            pass
+                    
+                    # vllm:num_requests_waiting
+                    elif 'num_requests_waiting' in line and not line.startswith('#'):
+                        try:
+                            value = int(float(line.split()[-1]))
+                            metrics['requests_waiting'] = value
+                        except (ValueError, IndexError):
+                            pass
+                
+                # Calculate available capacity based on KV cache usage
+                # Rule of thumb: each request uses roughly 5-15% of KV cache
+                # depending on context size. We use 10% as a conservative estimate.
+                kv_free = 1.0 - metrics['kv_cache_usage']
+                estimated_slots = max(1, int(kv_free / 0.10))
+                # Subtract already waiting requests
+                metrics['available_capacity'] = max(1, estimated_slots - metrics['requests_waiting'])
+                
+                logger.debug(
+                    f"vLLM metrics: KV cache {metrics['kv_cache_usage']:.1%}, "
+                    f"running={metrics['requests_running']}, waiting={metrics['requests_waiting']}, "
+                    f"capacity={metrics['available_capacity']}"
+                )
+                
+        except Exception as e:
+            logger.debug(f"Failed to fetch vLLM metrics: {e}")
+            # Return defaults - assume some capacity available
+            metrics['available_capacity'] = 2
+        
+        return metrics
+    
+    def get_recommended_parallelism(self, max_parallel: int = 8) -> int:
+        """
+        Get recommended number of parallel requests based on server metrics.
+        
+        Args:
+            max_parallel: Maximum parallelism cap
+            
+        Returns:
+            Recommended number of parallel requests (1 to max_parallel)
+        """
+        metrics = self.get_server_metrics()
+        
+        # Start with available capacity
+        recommended = metrics['available_capacity']
+        
+        # If KV cache is heavily used (>70%), be conservative
+        if metrics['kv_cache_usage'] > 0.7:
+            recommended = min(recommended, 2)
+        elif metrics['kv_cache_usage'] > 0.5:
+            recommended = min(recommended, 4)
+        
+        # If there are waiting requests, don't add more
+        if metrics['requests_waiting'] > 0:
+            recommended = max(1, recommended - metrics['requests_waiting'])
+        
+        # Clamp to bounds
+        recommended = max(1, min(recommended, max_parallel))
+        
+        logger.info(f"Recommended parallelism: {recommended} (KV cache: {metrics['kv_cache_usage']:.1%})")
+        return recommended
+    
     @classmethod
     def probe_server(cls, url: str, timeout: int = 5) -> bool:
         """

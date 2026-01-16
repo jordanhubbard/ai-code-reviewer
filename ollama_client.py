@@ -653,6 +653,101 @@ class OllamaClient:
         """
         response = self._make_request("/api/tags")
         return [m['name'] for m in response.get('models', [])]
+    
+    def get_server_metrics(self) -> Dict[str, Any]:
+        """
+        Fetch server metrics from Ollama's /api/ps endpoint.
+        
+        Returns dict with:
+            - vram_used: int (bytes of VRAM used by loaded models)
+            - vram_total: int (estimated total VRAM, 0 if unknown)
+            - models_loaded: int (number of models in memory)
+            - context_length: int (context length of current model)
+            - available_capacity: int (estimated additional parallel requests)
+        """
+        metrics = {
+            'vram_used': 0,
+            'vram_total': 0,
+            'models_loaded': 0,
+            'context_length': self.config.num_ctx or 4096,
+            'available_capacity': 1,
+        }
+        
+        try:
+            response = self._make_request("/api/ps", timeout=10)
+            models = response.get('models', [])
+            
+            metrics['models_loaded'] = len(models)
+            
+            for model in models:
+                # size_vram is the GPU memory used by this model
+                vram = model.get('size_vram', 0)
+                if vram:
+                    metrics['vram_used'] += vram
+                
+                # Get context length if available
+                ctx = model.get('context_length', 0)
+                if ctx:
+                    metrics['context_length'] = ctx
+            
+            # Estimate capacity based on VRAM usage
+            # This is rough - Ollama doesn't expose total VRAM directly
+            # But we can infer from the model size and typical GPU sizes
+            if metrics['vram_used'] > 0:
+                # Assume common GPU sizes: 8GB, 12GB, 16GB, 24GB, 48GB, 80GB
+                # Estimate based on what fraction of VRAM is used
+                vram_gb = metrics['vram_used'] / (1024**3)
+                
+                # Conservative estimate: if model uses X GB, assume GPU has ~2X GB
+                # This gives us room for 1-2 parallel requests
+                estimated_total = metrics['vram_used'] * 2
+                vram_free_ratio = 1.0 - (metrics['vram_used'] / estimated_total)
+                
+                # Each additional request needs roughly 10-20% more VRAM for KV cache
+                # depending on context size
+                estimated_slots = max(1, int(vram_free_ratio / 0.15))
+                metrics['available_capacity'] = min(estimated_slots, 4)  # Cap at 4 for Ollama
+            else:
+                # No VRAM info, assume single GPU with some capacity
+                metrics['available_capacity'] = 2
+            
+            logger.debug(
+                f"Ollama metrics: VRAM used={metrics['vram_used']/(1024**3):.1f}GB, "
+                f"models={metrics['models_loaded']}, capacity={metrics['available_capacity']}"
+            )
+            
+        except Exception as e:
+            logger.debug(f"Failed to fetch Ollama metrics: {e}")
+            metrics['available_capacity'] = 2
+        
+        return metrics
+    
+    def get_recommended_parallelism(self, max_parallel: int = 4) -> int:
+        """
+        Get recommended number of parallel requests based on server metrics.
+        
+        Args:
+            max_parallel: Maximum parallelism cap (default 4 for Ollama)
+            
+        Returns:
+            Recommended number of parallel requests (1 to max_parallel)
+        """
+        metrics = self.get_server_metrics()
+        
+        # Ollama is generally less efficient with parallel requests than vLLM
+        # So we're more conservative here
+        recommended = min(metrics['available_capacity'], max_parallel)
+        
+        # If context length is very large, reduce parallelism
+        if metrics['context_length'] > 32000:
+            recommended = min(recommended, 2)
+        elif metrics['context_length'] > 16000:
+            recommended = min(recommended, 3)
+        
+        recommended = max(1, recommended)
+        
+        logger.info(f"Recommended parallelism: {recommended} (context: {metrics['context_length']})")
+        return recommended
 
 
 def create_client_from_config(config_dict: Dict[str, Any]) -> OllamaClient:

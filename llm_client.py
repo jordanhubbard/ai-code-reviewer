@@ -397,6 +397,92 @@ class MultiHostClient:
                 'available': True,
             })
         return status
+    
+    def get_server_metrics(self) -> Dict[str, Any]:
+        """
+        Get aggregated server metrics from all hosts.
+        
+        Returns combined metrics from vLLM and Ollama backends.
+        """
+        metrics = {
+            'total_capacity': 0,
+            'kv_cache_usage': 0.0,
+            'requests_running': 0,
+            'requests_waiting': 0,
+            'hosts': []
+        }
+        
+        # Prefer vLLM hosts for metrics (more detailed)
+        for host in self._vllm_hosts:
+            try:
+                host_metrics = host.client.get_server_metrics()
+                metrics['hosts'].append({
+                    'url': host.url,
+                    'backend': 'vllm',
+                    **host_metrics
+                })
+                metrics['total_capacity'] += host_metrics.get('available_capacity', 1)
+                metrics['kv_cache_usage'] = max(
+                    metrics['kv_cache_usage'], 
+                    host_metrics.get('kv_cache_usage', 0)
+                )
+                metrics['requests_running'] += host_metrics.get('requests_running', 0)
+                metrics['requests_waiting'] += host_metrics.get('requests_waiting', 0)
+            except Exception as e:
+                logger.debug(f"Failed to get metrics from vLLM host {host.url}: {e}")
+        
+        # Also check Ollama hosts
+        for host in self._ollama_hosts:
+            try:
+                host_metrics = host.client.get_server_metrics()
+                metrics['hosts'].append({
+                    'url': host.url,
+                    'backend': 'ollama',
+                    **host_metrics
+                })
+                metrics['total_capacity'] += host_metrics.get('available_capacity', 1)
+            except Exception as e:
+                logger.debug(f"Failed to get metrics from Ollama host {host.url}: {e}")
+        
+        # Ensure at least 1 capacity
+        metrics['total_capacity'] = max(1, metrics['total_capacity'])
+        
+        return metrics
+    
+    def get_recommended_parallelism(self, max_parallel: int = 8) -> int:
+        """
+        Get recommended number of parallel requests based on server metrics.
+        
+        Queries all configured hosts and returns a recommendation based on
+        their combined capacity.
+        
+        Args:
+            max_parallel: Maximum parallelism cap from config
+            
+        Returns:
+            Recommended number of parallel requests (1 to max_parallel)
+        """
+        metrics = self.get_server_metrics()
+        
+        # Use total capacity across all hosts, but cap at max_parallel
+        recommended = min(metrics['total_capacity'], max_parallel)
+        
+        # If any host has high KV cache usage, be conservative
+        if metrics['kv_cache_usage'] > 0.7:
+            recommended = min(recommended, max(2, max_parallel // 2))
+        
+        # If there are waiting requests across hosts, reduce parallelism
+        if metrics['requests_waiting'] > 2:
+            recommended = max(1, recommended - 1)
+        
+        recommended = max(1, recommended)
+        
+        logger.info(
+            f"Recommended parallelism: {recommended} "
+            f"(capacity={metrics['total_capacity']}, KV={metrics['kv_cache_usage']:.0%})"
+        )
+        
+        return recommended
 
 
 def create_client_from_config(config_dict: Dict[str, Any]) -> MultiHostClient:
