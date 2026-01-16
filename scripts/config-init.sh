@@ -593,6 +593,20 @@ display_config() {
     echo ""
 }
 
+# Validate YAML syntax using Python
+validate_yaml() {
+    local file="$1"
+    if command -v python3 >/dev/null 2>&1; then
+        if python3 -c "import yaml; yaml.safe_load(open('$file'))" 2>/dev/null; then
+            return 0
+        else
+            return 1
+        fi
+    fi
+    # If no python3, skip validation
+    return 0
+}
+
 # Generate the config.yaml file
 generate_config() {
     local hosts_yaml=""
@@ -604,6 +618,12 @@ generate_config() {
     for model in "${MODELS[@]}"; do
         models_yaml+="    - \"$model\"\n"
     done
+    
+    # Backup existing config.yaml if it exists
+    if [[ -f "$CONFIG_FILE" ]]; then
+        cp "$CONFIG_FILE" "${CONFIG_FILE}.bak"
+        print_success "Backed up existing config to ${CONFIG_FILE}.bak"
+    fi
     
     cat > "$CONFIG_FILE" << EOF
 # AI Code Reviewer Configuration
@@ -705,12 +725,33 @@ main() {
             s|"")
                 generate_config
                 echo ""
-                print_success "Configuration saved to $CONFIG_FILE"
+                
+                # Validate the generated YAML
+                echo -n "Validating YAML syntax... "
+                if validate_yaml "$CONFIG_FILE"; then
+                    echo -e "${GREEN}OK${NC}"
+                    print_success "Configuration saved to $CONFIG_FILE"
+                    if [[ -f "${CONFIG_FILE}.bak" ]]; then
+                        echo -e "  (Previous config backed up to ${CYAN}config.yaml.bak${NC})"
+                    fi
+                else
+                    echo -e "${RED}FAILED${NC}"
+                    print_error "Generated config.yaml has invalid YAML syntax!"
+                    if [[ -f "${CONFIG_FILE}.bak" ]]; then
+                        echo ""
+                        echo "Restoring from backup..."
+                        mv "${CONFIG_FILE}.bak" "$CONFIG_FILE"
+                        print_warning "Restored previous config.yaml from backup"
+                        echo ""
+                        echo "This is likely a bug in config-init.sh. Please report it."
+                    fi
+                    exit 1
+                fi
+                
                 echo ""
                 echo "Next steps:"
-                echo "  1. Review the generated config.yaml"
-                echo "  2. Run 'make validate' to test the connection"
-                echo "  3. Run 'make run' to start reviewing"
+                echo "  1. Run 'make validate' to test the LLM connection"
+                echo "  2. Run 'make run' to start reviewing"
                 echo ""
                 exit 0
                 ;;
