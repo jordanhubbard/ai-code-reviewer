@@ -5,47 +5,69 @@
 # Works with ANY codebase - just configure your build command
 
 # =============================================================================
-# LLM Server Configuration (NEW - supports vLLM + Ollama with multi-host)
+# LLM Server Configuration
 # =============================================================================
-# The 'llm' section supports multiple hosts and models for increased throughput.
-# For each host, vLLM is tried first (OpenAI-compatible API), then Ollama.
-# Models are tried in priority order until one is found on the server.
+# Supports both vLLM and Ollama backends with automatic detection.
+# Multiple hosts enable round-robin load balancing for higher throughput.
+# Multiple models provide fallback if preferred model isn't available.
 #
-# Benefits:
-#   - Round-robin load balancing across multiple GPU servers
-#   - Automatic backend detection (vLLM preferred, Ollama fallback)
-#   - Model priority list for graceful fallback
+# KEY FEATURES:
+#   - vLLM preferred over Ollama (faster inference)
+#   - Automatic port expansion (just specify hostname)
+#   - Model fallback chain (tries models in order until one works)
+#   - Round-robin across multiple GPU servers
 #
 llm:
-  # List of LLM server URLs (at least one required)
-  # Requests are distributed round-robin across all available hosts
-  # Each host is probed at startup: vLLM API first, then Ollama API
+  # -------------------------------------------------------------------------
+  # HOSTS: LLM server URLs
+  # -------------------------------------------------------------------------
+  # Just list your server hostnames - ports are handled automatically!
   #
-  # PORT AUTO-EXPANSION: If you omit the port, BOTH default ports are tried:
-  #   - :8000 (vLLM default, tried first)
-  #   - :11434 (Ollama default, tried second)
+  # AUTOMATIC PORT EXPANSION:
+  #   "http://gpu-server" expands to try:
+  #     1. http://gpu-server:8000  (vLLM default)
+  #     2. http://gpu-server:11434 (Ollama default)
   #
-  # This means you can simply list a host once without a port, and the system
-  # will automatically try vLLM first, then fall back to Ollama:
-  #   - "http://gpu-server"  ->  tries :8000 then :11434
+  # The system probes each expanded URL and uses the first working backend.
+  # vLLM is preferred over Ollama when both are available.
   #
-  # Or you can explicitly specify ports if your servers use non-default ports:
-  #   - "http://gpu-server:8000"   # Only try vLLM on port 8000
-  #   - "http://gpu-server:11434"  # Only try Ollama on port 11434
+  # EXAMPLES:
+  #   Single server (most common):
+  #     hosts:
+  #       - "http://gpu-server"
+  #
+  #   Multiple servers for load balancing:
+  #     hosts:
+  #       - "http://gpu-server-1"
+  #       - "http://gpu-server-2"
+  #       - "http://gpu-server-3"
+  #
+  #   Explicit ports (if using non-standard ports):
+  #     hosts:
+  #       - "http://gpu-server:9000"  # Custom vLLM port
+  #       - "http://gpu-server:12345" # Custom Ollama port
   #
   hosts:
-    - "http://localhost"           # Auto-expands to try :8000 then :11434
-    # - "http://gpu-server-2"      # Another server (auto-expands)
-    # - "http://custom:9000"       # Explicit port (no expansion)
+    - "http://localhost"
   
-  # List of models in priority order (first available is used)
-  # Each host will use the first model from this list that it has available
-  # This allows graceful fallback when preferred models aren't available
+  # -------------------------------------------------------------------------
+  # MODELS: Ordered list of models to try (first available wins)
+  # -------------------------------------------------------------------------
+  # Each host will use the first model from this list that it has loaded.
+  # This allows graceful fallback when preferred models aren't available.
+  #
+  # Model names depend on your backend:
+  #   - vLLM: Usually the HuggingFace model path or custom name
+  #   - Ollama: Use "ollama list" to see available models (name:tag format)
+  #
+  # TIP: Run the tool with --validate-only to see which models are available
+  #      on each host before configuring this list.
+  #
   models:
-    - "NVIDIA-Nemotron-3-Nano-30B-A3B-BF16"
-    - "qwen2.5-coder:32b"
-    # - "qwen2.5-coder:14b"    # Fallback if 32b not available
-    # - "codellama:34b"        # Another fallback option
+    - "NVIDIA-Nemotron-3-Nano-30B-A3B-BF16"  # Preferred for vLLM
+    - "qwen2.5-coder:32b"                     # Good Ollama fallback
+    # - "qwen2.5-coder:14b"                   # Smaller fallback
+    # - "codellama:34b"                       # Alternative
   
   # Request timeout in seconds
   # Increase if you get timeouts with large files or slow models
