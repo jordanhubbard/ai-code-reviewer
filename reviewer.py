@@ -4112,6 +4112,17 @@ def preflight_sanity_check(
     Returns:
         True if source builds (or was fixed by reverting), False if unfixable
     """
+    try:
+        tool_root = Path(__file__).resolve().parent
+        BeadsManager(source_root, tool_root=tool_root, git_helper=git)
+    except BeadsMigrationError as exc:
+        print("\nERROR: Beads migration failed")
+        print("-" * 70)
+        print(str(exc))
+        print("\nAborting: beads data cannot be safely migrated to the source tree.")
+        print("-" * 70)
+        return False
+
     print("\n" + "=" * 70)
     print("PRE-FLIGHT SANITY CHECK")
     print("=" * 70)
