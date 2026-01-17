@@ -760,6 +760,61 @@ class BeadsManager:
             return True
         return any(beads_dir.glob('*.jsonl'))
 
+    def _read_issue_prefix_from_config(self, root: Path) -> Optional[str]:
+        config_path = root / '.beads' / 'config.yaml'
+        if not config_path.exists():
+            return None
+        try:
+            content = config_path.read_text(encoding='utf-8')
+        except Exception:
+            return None
+        for line in content.splitlines():
+            stripped = line.strip()
+            if stripped.startswith('issue_prefix:'):
+                _, _, value = stripped.partition(':')
+                prefix = value.strip().strip('"').strip("'")
+                if prefix:
+                    return prefix
+        return None
+
+    def _infer_issue_prefix_from_jsonl(self, root: Path) -> Optional[str]:
+        jsonl_path = root / '.beads' / 'issues.jsonl'
+        if not jsonl_path.exists():
+            return None
+        try:
+            with jsonl_path.open('r', encoding='utf-8') as handle:
+                for line in handle:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        payload = json.loads(line)
+                    except json.JSONDecodeError:
+                        payload = None
+                    issue_id = None
+                    if isinstance(payload, dict):
+                        issue_id = payload.get('id') or payload.get('issue_id')
+                    if not issue_id:
+                        match = re.search(r'"id"\s*:\s*"([^"]+)"', line)
+                        if match:
+                            issue_id = match.group(1)
+                    if issue_id:
+                        prefix_match = re.match(r'^([A-Za-z0-9]+)[-_]', issue_id)
+                        if prefix_match:
+                            return prefix_match.group(1)
+        except Exception:
+            return None
+        return None
+
+    def _determine_issue_prefix(self, root: Path) -> str:
+        prefix = self._read_issue_prefix_from_config(root)
+        if prefix:
+            return prefix
+        prefix = self._infer_issue_prefix_from_jsonl(root)
+        if prefix:
+            return prefix
+        return root.name
+
     def _run_doctor_fix(self, root: Path, source: Optional[str] = None) -> None:
         args = ['doctor', '--fix', '--yes']
         if source:
@@ -781,7 +836,18 @@ class BeadsManager:
             raise BeadsMigrationError(
                 f"No beads database or JSONL found in {beads_dir}; cannot migrate."
             )
-        print(f"*** Beads database missing in {root}; rebuilding from JSONL...")
+        prefix = self._determine_issue_prefix(root)
+        print(f"*** Beads database missing in {root}; initializing with prefix '{prefix}'...")
+        init = self._run_bd_command(
+            ['init', '--from-jsonl', '--prefix', prefix],
+            cwd=root,
+            timeout=300,
+        )
+        if init.returncode != 0:
+            raise BeadsMigrationError(
+                "bd init failed while rebuilding from JSONL; cannot migrate. "
+                f"stderr: {init.stderr.strip()}"
+            )
         self._run_doctor_fix(root, source='jsonl')
         if not self._beads_db_exists(root):
             raise BeadsMigrationError(
