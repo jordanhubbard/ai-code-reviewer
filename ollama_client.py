@@ -848,6 +848,10 @@ def create_client_from_config(config_dict: Dict[str, Any]) -> OllamaClient:
 if __name__ == "__main__":
     # Self-test: validate connection to a local Ollama server
     logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
+
+    if os.environ.get('OLLAMA_SELFTEST', '').lower() not in {'1', 'true', 'yes'}:
+        print("Ollama self-test skipped (set OLLAMA_SELFTEST=1 to run).")
+        sys.exit(0)
     
     print("Testing Ollama client...")
     default_url = os.environ.get('ANGRY_AI_OLLAMA_URL') or os.environ.get('OLLAMA_URL') or "http://localhost:11434"

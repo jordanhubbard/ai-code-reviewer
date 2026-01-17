@@ -36,7 +36,7 @@ from difflib import SequenceMatcher
 
 from index_generator import generate_index
 from build_executor import BuildResult
-from chunker import CFileChunker, format_chunk_for_review
+from chunker import get_chunker, format_chunk_for_review
 from dataclasses import dataclass, field
 from ops_logger import OpsLogger, create_logger_from_config
 from pathlib import Path
@@ -60,6 +60,7 @@ MANPAGE_SUFFIXES = {'.1', '.2', '.3', '.4', '.5', '.6', '.7', '.8', '.9', '.mdoc
 
 # Used to collapse large code blocks in console output while keeping logs intact
 CODE_BLOCK_RE = re.compile(r"```(\w*)\n(.*?)```", re.DOTALL)
+COMMIT_PREFIX = "[ai-code-reviewer] "
 
 
 def load_yaml_config(config_path: Path) -> Dict[str, Any]:
@@ -557,6 +558,18 @@ class GitHelper:
         """Stage all changes."""
         code, _ = self._run(['add', '-A'])
         return code == 0
+
+    def ensure_commit_prefix(self, message: str) -> str:
+        """Ensure commit messages are prefixed for traceability."""
+        trimmed = (message or "").strip("\n")
+        if not trimmed.strip():
+            return f"{COMMIT_PREFIX}Update"
+        lines = trimmed.splitlines()
+        first_line = lines[0].strip()
+        if first_line.lower().startswith(COMMIT_PREFIX.lower()):
+            return trimmed
+        lines[0] = f"{COMMIT_PREFIX}{first_line}"
+        return "\n".join(lines)
     
     def commit(self, message: str, skip_secret_scan: bool = False) -> Tuple[bool, str]:
         """
@@ -569,6 +582,7 @@ class GitHelper:
         Returns:
             Tuple of (success, output/error_message)
         """
+        message = self.ensure_commit_prefix(message)
         # Scan staged changes for potential secrets before committing
         if not skip_secret_scan:
             staged_diff = self.diff_staged()
@@ -656,19 +670,138 @@ class GitHelper:
 class BeadsManager:
     """Lightweight wrapper around the bd CLI for directory tracking."""
 
-    def __init__(self, repo_root: Path, bd_cmd: Optional[str] = None):
+    def __init__(self, repo_root: Path, git_helper: Optional['GitHelper'] = None, bd_cmd: Optional[str] = None):
         self.repo_root = repo_root
+        self.git_helper = git_helper
         self.bd_cmd = bd_cmd or shutil.which(os.environ.get('BD_CMD', 'bd'))
-        self.enabled = self.bd_cmd is not None and (self.repo_root / '.beads').exists()
         self.issues: Dict[str, Dict[str, Any]] = {}
         self.wrong_source_tree = False
-        if self.enabled:
-            self._load_existing_issues()
-            # Check if loaded issues reference directories outside our source tree
-            if self.issues:
-                self.wrong_source_tree = self._check_for_wrong_source_tree()
-        else:
-            logger.info("Beads integration disabled (bd command or .beads missing)")
+        
+        # Check if bd command is available
+        if not self.bd_cmd:
+            logger.info("Beads integration disabled (bd command not found)")
+            self.enabled = False
+            return
+        
+        # Auto-initialize beads if .beads doesn't exist
+        if not (self.repo_root / '.beads').exists():
+            logger.info("Beads not initialized in source tree, initializing automatically...")
+            print("*** Initializing beads issue tracker in source tree...")
+            if self._initialize_beads():
+                logger.info("Beads initialized successfully")
+                print("*** Beads initialized and committed successfully")
+            else:
+                logger.warning("Failed to initialize beads, integration disabled")
+                print("*** WARNING: Failed to initialize beads, integration disabled")
+                self.enabled = False
+                return
+        
+        self.enabled = True
+        self._load_existing_issues()
+        
+        # Check if loaded issues reference directories outside our source tree
+        if self.issues:
+            self.wrong_source_tree = self._check_for_wrong_source_tree()
+    
+    def _initialize_beads(self) -> bool:
+        """
+        Initialize beads in the source tree and auto-commit any files created.
+        Returns True if successful, False otherwise.
+        """
+        if not self.bd_cmd:
+            return False
+        
+        try:
+            # Get current git status to detect new files
+            initial_status = None
+            if self.git_helper:
+                try:
+                    initial_status = self.git_helper.run_git(['status', '--porcelain'])
+                except Exception:
+                    pass
+            
+            # Run bd init
+            logger.info(f"Running: bd init in {self.repo_root}")
+            result = subprocess.run(
+                [self.bd_cmd, 'init'],
+                cwd=str(self.repo_root),
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            
+            if result.returncode != 0:
+                logger.error(f"bd init failed: {result.stderr.strip()}")
+                return False
+            
+            logger.info(f"bd init output: {result.stdout.strip()}")
+            
+            # Check if .beads directory was created
+            if not (self.repo_root / '.beads').exists():
+                logger.error(".beads directory not created by bd init")
+                return False
+            
+            # Auto-commit any new files created by bd init
+            if self.git_helper:
+                try:
+                    new_status = self.git_helper.run_git(['status', '--porcelain'])
+                    
+                    # Find newly added/modified files (excluding .beads/ itself)
+                    files_to_commit = []
+                    initial_files = set()
+                    if initial_status:
+                        for line in initial_status.split('\n'):
+                            if line.strip() and len(line) > 3:
+                                initial_files.add(line[3:].strip())
+                    
+                    for line in new_status.split('\n'):
+                        if not line.strip():
+                            continue
+                        if len(line) < 3:
+                            continue
+                        status = line[:2]
+                        filepath = line[3:].strip()
+                        
+                        # Skip .beads/ directory itself (it's gitignored)
+                        if filepath.startswith('.beads/'):
+                            continue
+                        
+                        # Look for new or modified files
+                        if status in ['??', ' M', 'M ', 'MM', 'A ', 'AM']:
+                            # Only commit files that didn't exist before bd init
+                            if filepath not in initial_files:
+                                files_to_commit.append(filepath)
+                    
+                    if files_to_commit:
+                        logger.info(f"Auto-committing beads integration files: {files_to_commit}")
+                        
+                        # Add files
+                        self.git_helper.run_git(['add'] + files_to_commit)
+                        
+                        # Commit with clear message
+                        commit_msg = (
+                            "Initialize beads issue tracking integration\n\n"
+                            "Auto-generated by ai-code-reviewer tool.\n"
+                            "Beads (bd) is used internally for tracking code review progress."
+                        )
+                        commit_msg = self.git_helper.ensure_commit_prefix(commit_msg)
+                        self.git_helper.run_git(['commit', '-m', commit_msg])
+                        logger.info("Beads integration files committed successfully")
+                    else:
+                        logger.info("No new files created by bd init (or .gitignore already present)")
+                        
+                except Exception as exc:
+                    logger.warning(f"Failed to auto-commit beads files: {exc}")
+                    # Don't fail initialization just because commit failed
+            
+            return True
+            
+        except subprocess.TimeoutExpired:
+            logger.error("bd init timed out")
+            return False
+        except Exception as exc:
+            logger.error(f"Error initializing beads: {exc}")
+            return False
 
     def _run_bd(self, args: List[str]) -> Optional[str]:
         if not self.enabled or not self.bd_cmd:
@@ -1145,14 +1278,10 @@ class ReviewLoop:
         self.editor = FileEditor(self.git)
         self.parser = ActionParser()
         
-        # Initialize chunker with config values (with sensible defaults)
-        chunk_size = review_config.get('chunk_size', 250)
-        chunk_threshold = review_config.get('chunk_threshold', 400)
-        self.chunker = CFileChunker(
-            max_chunk_lines=chunk_size, 
-            small_file_threshold=chunk_threshold
-        )
-        logger.info(f"File chunker: threshold={chunk_threshold} lines, chunk_size={chunk_size} lines")
+        # Store chunker config values (with sensible defaults)
+        self.chunk_size = review_config.get('chunk_size', 250)
+        self.chunk_threshold = review_config.get('chunk_threshold', 400)
+        logger.info(f"File chunker: threshold={self.chunk_threshold} lines, chunk_size={self.chunk_size} lines")
         
         self.session = ReviewSession(
             session_id=datetime.datetime.now().strftime("%Y%m%d_%H%M%S"),
@@ -1340,7 +1469,7 @@ class ReviewLoop:
 
     def _init_beads_manager(self) -> Optional[BeadsManager]:
         try:
-            manager = BeadsManager(self.source_root)
+            manager = BeadsManager(self.source_root, git_helper=self.git)
             if not manager.enabled:
                 print("*** Beads integration disabled (bd unavailable)")
                 return None
@@ -2158,7 +2287,7 @@ Diff:
 ```
 
 Write a commit message following these rules:
-1. First line: "{component}: <short summary>" (50 chars max total)
+1. First line: "[ai-code-reviewer] {component}: <short summary>" (72 chars max total)
 2. Blank line
 3. Body: explain WHAT changed and WHY (wrap at 72 chars)
 4. Focus on the security/correctness fixes, not style changes
@@ -2166,7 +2295,7 @@ Write a commit message following these rules:
 6. This commit covers ALL changes in the {component} directory
 
 Example format:
-cpuset: Replace atoi() with strtonum() for safe integer parsing
+[ai-code-reviewer] cpuset: Replace atoi() with strtonum()
 
 - atoi() doesn't detect overflow or invalid input
 - strtonum() provides proper bounds checking and error reporting
@@ -2185,10 +2314,12 @@ Output ONLY the commit message, no other text."""
         
         # If we got a reasonable message, use it; otherwise fall back
         if message and len(message) > 10:
+            message = self.git.ensure_commit_prefix(message)
             print(f"*** Commit message:\n{message}\n")
             return message
         else:
-            return f"{component}: Code review fixes\n\nFiles: {files_list}"
+            fallback = f"{component}: Code review fixes\n\nFiles: {files_list}"
+            return self.git.ensure_commit_prefix(fallback)
     
     def _record_lesson(self, error_report: str, failed_fix_attempt: str = "") -> None:
         """Record a lesson learned from a build failure to LESSONS.md."""
@@ -2827,10 +2958,11 @@ Output ONLY the lesson entry, nothing else."""
                 )
                 return msg
 
-            # Check if file should be chunked
-            if self.chunker.should_chunk(path):
+            # Check if file should be chunked (get appropriate chunker for file type)
+            chunker = get_chunker(path, self.chunk_size, self.chunk_threshold)
+            if chunker.should_chunk(path):
                 # Start chunked review
-                self.current_chunks = self.chunker.chunk_file(path)
+                self.current_chunks = chunker.chunk_file(path)
                 self.current_chunk_index = 0
                 self.chunked_file_path = path
                 

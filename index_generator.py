@@ -16,7 +16,7 @@ The index file (REVIEW-INDEX.md) contains:
 import os
 from pathlib import Path
 from dataclasses import dataclass, field
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Iterator
 from datetime import datetime
 import re
 
@@ -42,6 +42,13 @@ REVIEWABLE_SUFFIXES = {
 REVIEWABLE_SPECIAL_FILES = {
     'Makefile', 'Makefile.inc', 'BSDmakefile', 'README', 'README.md'
 }
+
+
+class DirectoryEntryMap(dict):
+    """Dictionary of DirectoryEntry keyed by path, iterates over values."""
+
+    def __iter__(self) -> Iterator['DirectoryEntry']:
+        return iter(self.values())
 
 
 class ReviewIndex:
@@ -74,7 +81,7 @@ class ReviewIndex:
         # Check for legacy index location and migrate
         self._migrate_legacy_index()
         
-        self.entries: Dict[str, DirectoryEntry] = {}
+        self.entries: DirectoryEntryMap = DirectoryEntryMap()
         self.current_position: Optional[str] = None
     
     def _migrate_legacy_index(self) -> None:
@@ -106,7 +113,7 @@ class ReviewIndex:
             existing_status = {e.path: (e.status, e.reviewed_date, e.notes) 
                              for e in self.entries.values()}
         
-        self.entries = {}
+        self.entries = DirectoryEntryMap()
         
         for top_dir in self.TOP_DIRS:
             top_path = self.source_root / top_dir
@@ -116,7 +123,7 @@ class ReviewIndex:
             self._scan_directory(top_path, top_dir, existing_status)
         
         # Sort entries
-        self.entries = dict(sorted(self.entries.items()))
+        self.entries = DirectoryEntryMap(dict(sorted(self.entries.items())))
     
     def _scan_directory(self, path: Path, prefix: str, 
                         existing_status: Dict) -> None:
