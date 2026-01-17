@@ -746,6 +746,49 @@ class BeadsManager:
         except Exception:
             return False
 
+    def _beads_db_exists(self, root: Path) -> bool:
+        beads_dir = root / '.beads'
+        if not beads_dir.exists() or not beads_dir.is_dir():
+            return False
+        return any(beads_dir.glob('*.db'))
+
+    def _beads_jsonl_exists(self, root: Path) -> bool:
+        beads_dir = root / '.beads'
+        if not beads_dir.exists() or not beads_dir.is_dir():
+            return False
+        if (beads_dir / 'issues.jsonl').exists():
+            return True
+        return any(beads_dir.glob('*.jsonl'))
+
+    def _run_doctor_fix(self, root: Path, source: Optional[str] = None) -> None:
+        args = ['doctor', '--fix', '--yes']
+        if source:
+            args.extend(['--source', source])
+        doctor = self._run_bd_command(args, cwd=root, timeout=300)
+        if doctor.returncode != 0:
+            raise BeadsMigrationError(
+                f"bd doctor failed for {root}; stderr: {doctor.stderr.strip()}"
+            )
+
+    def _ensure_beads_db(self, root: Path) -> bool:
+        """Ensure a beads database exists for the given root. Returns True if doctor ran."""
+        beads_dir = root / '.beads'
+        if not beads_dir.exists() or not beads_dir.is_dir():
+            return False
+        if self._beads_db_exists(root):
+            return False
+        if not self._beads_jsonl_exists(root):
+            raise BeadsMigrationError(
+                f"No beads database or JSONL found in {beads_dir}; cannot migrate."
+            )
+        print(f"*** Beads database missing in {root}; rebuilding from JSONL...")
+        self._run_doctor_fix(root, source='jsonl')
+        if not self._beads_db_exists(root):
+            raise BeadsMigrationError(
+                f"bd doctor did not create a database in {beads_dir}; cannot migrate."
+            )
+        return True
+
     def _move_beads_directory(self, source_beads: Path, dest_beads: Path) -> None:
         print("*** Moving beads data to source tree root...")
         try:
@@ -755,12 +798,9 @@ class BeadsManager:
                 f"Failed to move .beads from {source_beads} to {dest_beads}: {exc}"
             ) from exc
 
-        doctor = self._run_bd_command(['doctor', '--fix', '--yes'], cwd=self.repo_root)
-        if doctor.returncode != 0:
-            raise BeadsMigrationError(
-                "bd doctor failed after moving .beads; cannot re-base beads to new location. "
-                f"stderr: {doctor.stderr.strip()}"
-            )
+        ran_doctor = self._ensure_beads_db(self.repo_root)
+        if not ran_doctor:
+            self._run_doctor_fix(self.repo_root)
 
     def _migrate_beads_issues(self, from_root: Path, to_root: Path) -> None:
         if not self._bd_supports_migrate_issues():
@@ -768,6 +808,10 @@ class BeadsManager:
                 "Beads migration required but 'bd migrate issues' is not available. "
                 "Upgrade bd or migrate beads manually."
             )
+
+        self._ensure_beads_db(from_root)
+        if (to_root / '.beads').exists():
+            self._ensure_beads_db(to_root)
 
         result = self._run_bd_command(
             [
