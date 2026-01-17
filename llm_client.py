@@ -124,6 +124,8 @@ class MultiHostClient:
         self._vllm_index = 0
         self._ollama_index = 0
         self._host_lock = threading.Lock()
+        self._concurrency_lock = threading.Lock()
+        self._pending_limit_reduction = 0
         self._dynamic_parallelism = (config.max_parallel_requests == 0)
         
         # Initialize all hosts, separating by backend type
@@ -170,6 +172,78 @@ class MultiHostClient:
             f"{len(self._ollama_hosts)} Ollama hosts (fallback), "
             f"max_parallel={self._effective_max_parallel}"
         )
+
+    def _total_hosts(self) -> int:
+        return len(self._vllm_hosts) + len(self._ollama_hosts)
+
+    def _set_concurrency_limit(self, new_limit: int) -> None:
+        new_limit = max(1, int(new_limit))
+        with self._concurrency_lock:
+            if new_limit == self._effective_max_parallel:
+                return
+            if new_limit < self._effective_max_parallel:
+                reduction = self._effective_max_parallel - new_limit
+                self._pending_limit_reduction += reduction
+                # Drain available permits to reduce capacity immediately.
+                for _ in range(reduction):
+                    acquired = self._concurrency_sem.acquire(blocking=False)
+                    if acquired:
+                        self._pending_limit_reduction -= 1
+                    else:
+                        break
+            else:
+                increase = new_limit - self._effective_max_parallel
+                # If we're reducing capacity later, offset that first.
+                if self._pending_limit_reduction > 0:
+                    offset = min(increase, self._pending_limit_reduction)
+                    self._pending_limit_reduction -= offset
+                    increase -= offset
+                for _ in range(increase):
+                    self._concurrency_sem.release()
+            self._effective_max_parallel = new_limit
+
+    def _release_slot(self) -> None:
+        with self._concurrency_lock:
+            if self._pending_limit_reduction > 0:
+                self._pending_limit_reduction -= 1
+                return
+        self._concurrency_sem.release()
+
+    def _is_host_failure(self, exc: Exception) -> bool:
+        if isinstance(exc, (OllamaConnectionError, VLLMConnectionError, TimeoutError, ConnectionError)):
+            return True
+        message = str(exc).lower()
+        indicators = [
+            'timed out', 'timeout', 'unreachable', 'connection refused',
+            'connection reset', 'cannot connect', 'failed to connect'
+        ]
+        return any(token in message for token in indicators)
+
+    def _mark_host_unhealthy(self, host: HostConfig, reason: Exception) -> None:
+        with self._host_lock:
+            before = self._total_hosts()
+            if host.backend == 'vllm':
+                self._vllm_hosts = [h for h in self._vllm_hosts if h is not host]
+                if self._vllm_index >= len(self._vllm_hosts):
+                    self._vllm_index = 0
+            else:
+                self._ollama_hosts = [h for h in self._ollama_hosts if h is not host]
+                if self._ollama_index >= len(self._ollama_hosts):
+                    self._ollama_index = 0
+            after = self._total_hosts()
+        logger.warning(
+            f"Host {host.url} marked unhealthy ({host.backend}): {reason}. "
+            f"Remaining hosts: {after}"
+        )
+        if after == 0:
+            return
+        if before != after:
+            if self._dynamic_parallelism:
+                new_limit = self._query_recommended_parallelism()
+            else:
+                ratio = after / max(1, before)
+                new_limit = max(1, int(round(self._effective_max_parallel * ratio)))
+            self._set_concurrency_limit(new_limit)
     
     def _query_recommended_parallelism(self) -> int:
         """
@@ -373,6 +447,8 @@ class MultiHostClient:
         Ollama hosts if no vLLM hosts are available.
         """
         with self._host_lock:
+            if not self._vllm_hosts and not self._ollama_hosts:
+                raise LLMConnectionError("No reachable hosts remain")
             # Prefer vLLM hosts
             if self._vllm_hosts:
                 host = self._vllm_hosts[self._vllm_index]
@@ -408,11 +484,26 @@ class MultiHostClient:
             )
         
         try:
-            host = self._get_next_host()
-            logger.debug(f"Routing chat request to {host.url} ({host.backend})")
-            return host.client.chat(messages, max_tokens, temperature)
+            last_error: Optional[Exception] = None
+            attempts = 0
+            max_attempts = max(1, self._total_hosts())
+            while attempts < max_attempts:
+                host = self._get_next_host()
+                attempts += 1
+                try:
+                    logger.debug(f"Routing chat request to {host.url} ({host.backend})")
+                    return host.client.chat(messages, max_tokens, temperature)
+                except Exception as exc:
+                    if self._is_host_failure(exc):
+                        last_error = exc
+                        self._mark_host_unhealthy(host, exc)
+                        if self._total_hosts() == 0:
+                            break
+                        continue
+                    raise
+            raise LLMConnectionError("All hosts failed while handling chat request") from last_error
         finally:
-            self._concurrency_sem.release()
+            self._release_slot()
     
     def generate(
         self,
@@ -439,11 +530,26 @@ class MultiHostClient:
             )
         
         try:
-            host = self._get_next_host()
-            logger.debug(f"Routing generate request to {host.url} ({host.backend})")
-            return host.client.generate(prompt, max_tokens, temperature)
+            last_error: Optional[Exception] = None
+            attempts = 0
+            max_attempts = max(1, self._total_hosts())
+            while attempts < max_attempts:
+                host = self._get_next_host()
+                attempts += 1
+                try:
+                    logger.debug(f"Routing generate request to {host.url} ({host.backend})")
+                    return host.client.generate(prompt, max_tokens, temperature)
+                except Exception as exc:
+                    if self._is_host_failure(exc):
+                        last_error = exc
+                        self._mark_host_unhealthy(host, exc)
+                        if self._total_hosts() == 0:
+                            break
+                        continue
+                    raise
+            raise LLMConnectionError("All hosts failed while handling generate request") from last_error
         finally:
-            self._concurrency_sem.release()
+            self._release_slot()
     
     def list_models(self) -> List[str]:
         """List all models available across all hosts."""
