@@ -11,12 +11,15 @@
 
 # Python interpreter (FreeBSD typically has python3)
 PYTHON?=	python3
+VENV?=		.venv
+VENV_PY=	$(VENV)/bin/python
+VENV_PIP=	$(VENV_PY) -m pip
 
 # No directory variables needed - make runs from Makefile location
 # All paths are relative to the Makefile
 
 # Phony targets
-.PHONY: all deps check-deps config-init config-update validate run run-verbose test test-all release clean clean-all help
+.PHONY: all venv deps check-deps config-init config-update validate run run-verbose test test-all release clean clean-all help
 
 # Default target
 all: help
@@ -25,29 +28,36 @@ all: help
 # Setup targets
 #
 
+# Create project-local virtual environment
+venv:
+	@echo "Ensuring virtual environment at $(VENV)..."
+	@if [ ! -d "$(VENV)" ]; then \
+		echo "Creating virtual environment..."; \
+		$(PYTHON) -m venv "$(VENV)"; \
+	fi
+	@# Ensure pip is available inside the venv
+	@if ! $(VENV_PY) -m pip --version >/dev/null 2>&1; then \
+		echo "Bootstrapping pip in venv..."; \
+		$(VENV_PY) -m ensurepip --upgrade; \
+	fi
+
 # Check and install system dependencies (Python3, pip, pyyaml, beads)
 check-deps:
 	@echo "Checking dependencies..."
 	@# Check for python3
-	@if ! command -v python3 >/dev/null 2>&1; then \
+	@if ! command -v $(PYTHON) >/dev/null 2>&1; then \
 		echo "Python3 not found. Installing..."; \
 		sudo pkg install -y python3; \
 	else \
-		echo "✓ Python3 found: $$(python3 --version)"; \
+		echo "✓ Python3 found: $$($(PYTHON) --version)"; \
 	fi
-	@# Check for pip
-	@if ! python3 -m pip --version >/dev/null 2>&1; then \
-		echo "pip not found. Installing..."; \
-		sudo pkg install -y py311-pip; \
+	@$(MAKE) venv
+	@# Check for pyyaml in venv
+	@if ! $(VENV_PY) -c "import yaml" >/dev/null 2>&1; then \
+		echo "PyYAML not found in venv. Installing..."; \
+		$(VENV_PIP) install -r requirements.txt; \
 	else \
-		echo "✓ pip found: $$(python3 -m pip --version)"; \
-	fi
-	@# Check for pyyaml
-	@if ! python3 -c "import yaml" >/dev/null 2>&1; then \
-		echo "PyYAML not found. Installing..."; \
-		sudo pip install pyyaml; \
-	else \
-		echo "✓ PyYAML found"; \
+		echo "✓ PyYAML found in venv"; \
 	fi
 	@# Check for beads (bd)
 	@if ! command -v bd >/dev/null 2>&1; then \
@@ -70,10 +80,10 @@ check-deps:
 
 # Install Python dependencies (just PyYAML - no torch/GPU stuff)
 # Legacy target - use check-deps instead
-deps:
-	@echo "Installing Python dependencies..."
-	$(PYTHON) -m pip install --user -r requirements.txt
-	@echo "Done. Dependencies installed."
+deps: venv
+	@echo "Installing Python dependencies in $(VENV)..."
+	$(VENV_PIP) install -r requirements.txt
+	@echo "Done. Dependencies installed in $(VENV)."
 
 # Interactive configuration setup
 # Creates config.yaml with user prompts, validates hosts, shows defaults
@@ -82,13 +92,13 @@ config-init:
 
 # Update config.yaml with new defaults from config.yaml.defaults
 # If config.yaml doesn't exist, runs interactive setup instead
-config-update:
+config-update: check-deps
 	@if [ ! -f config.yaml ]; then \
 		echo "No config.yaml found. Running interactive setup..."; \
 		./scripts/config-init.sh; \
 	else \
 		echo "Updating config.yaml with new defaults..."; \
-		$(PYTHON) scripts/config_update.py; \
+		$(VENV_PY) scripts/config_update.py; \
 	fi
 
 #
@@ -98,24 +108,24 @@ config-update:
 # Validate Ollama connection and model availability
 validate: check-deps
 	@echo "Validating Ollama connection..."
-	$(PYTHON) reviewer.py --config config.yaml --validate-only
+	$(VENV_PY) reviewer.py --config config.yaml --validate-only
 
 # Run component self-tests (syntax check only, no server connection)
-test:
+test: check-deps
 	@echo "=== Syntax Check: All Python Modules ==="
-	@$(PYTHON) -m py_compile ollama_client.py vllm_client.py llm_client.py \
+	@$(VENV_PY) -m py_compile ollama_client.py vllm_client.py llm_client.py \
 		build_executor.py reviewer.py chunker.py index_generator.py ops_logger.py \
 		scripts/config_update.py
 	@echo "✓ All modules pass syntax check"
 	@echo ""
 	@echo "=== Import Check: LLM Client ==="
-	@$(PYTHON) -c "from llm_client import create_client_from_config, MultiHostClient, LLMError; print('✓ llm_client imports OK')"
+	@$(VENV_PY) -c "from llm_client import create_client_from_config, MultiHostClient, LLMError; print('✓ llm_client imports OK')"
 	@echo ""
 	@echo "=== Import Check: Build Executor ==="
-	@$(PYTHON) -c "from build_executor import create_executor_from_config; print('✓ build_executor imports OK')"
+	@$(VENV_PY) -c "from build_executor import create_executor_from_config; print('✓ build_executor imports OK')"
 	@echo ""
 	@echo "=== Config Migration Test ==="
-	@$(PYTHON) -c "\
+	@$(VENV_PY) -c "\
 import yaml; \
 from scripts.config_update import migrate_ollama_to_llm; \
 cfg = {'ollama': {'url': 'http://test:11434', 'model': 'test-model'}}; \
@@ -130,10 +140,10 @@ print('✓ Config migration OK')"
 test-all: test
 	@echo ""
 	@echo "=== Testing Ollama Client (requires server) ==="
-	$(PYTHON) ollama_client.py
+	$(VENV_PY) ollama_client.py
 	@echo ""
 	@echo "=== Testing Build Executor ==="
-	$(PYTHON) build_executor.py
+	$(VENV_PY) build_executor.py
 	@echo ""
 	@echo "All component tests passed!"
 
@@ -154,11 +164,11 @@ run: check-deps
 		echo "*** Running config-update to merge new settings..."; \
 		$(MAKE) config-update; \
 	fi
-	$(PYTHON) reviewer.py --config config.yaml
+	$(VENV_PY) reviewer.py --config config.yaml
 
 # Run with verbose logging
-run-verbose:
-	$(PYTHON) reviewer.py --config config.yaml -v
+run-verbose: check-deps
+	$(VENV_PY) reviewer.py --config config.yaml -v
 
 #
 # Release target
