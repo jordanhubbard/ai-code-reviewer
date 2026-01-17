@@ -1940,6 +1940,131 @@ If no changes needed, respond with just: NO_EDITS_NEEDED"""
         
         return successful, failed, changed_files
     
+    def _identify_failing_files(self, build_result: 'BuildResult') -> Set[str]:
+        """
+        Identify which changed files are causing build failures.
+        
+        Parses compiler errors to extract file paths and cross-references
+        with the list of files we've modified.
+        
+        Args:
+            build_result: BuildResult from the failed build
+            
+        Returns:
+            Set of file paths (relative to source root) that have errors
+        """
+        failing_files = set()
+        
+        for error in build_result.errors:
+            if error.severity == 'error' and error.file_path:
+                # Normalize path - may be absolute or relative
+                error_path = Path(error.file_path)
+                
+                # Try to make it relative to source root
+                try:
+                    if error_path.is_absolute():
+                        rel_path = str(error_path.relative_to(self.source_root))
+                    else:
+                        rel_path = str(error_path)
+                except ValueError:
+                    rel_path = str(error_path)
+                
+                # Check if this is one of our changed files
+                for changed_file in self.session.changed_files:
+                    if changed_file == rel_path or changed_file.endswith('/' + rel_path) or rel_path.endswith('/' + changed_file):
+                        failing_files.add(changed_file)
+                        break
+                    # Also check by filename only (for errors that don't include full path)
+                    if Path(changed_file).name == Path(rel_path).name:
+                        failing_files.add(changed_file)
+                        break
+        
+        return failing_files
+    
+    def _selective_revert_and_commit(self, build_result: 'BuildResult') -> Tuple[List[str], List[str], str]:
+        """
+        Selectively revert only failing files, keep and commit successful changes.
+        
+        This is smarter than reverting everything - we identify which files
+        caused build errors, revert only those, and commit the rest.
+        
+        Args:
+            build_result: BuildResult from the failed build
+            
+        Returns:
+            Tuple of (reverted_files, committed_files, commit_message)
+        """
+        failing_files = self._identify_failing_files(build_result)
+        all_changed = set(self.session.changed_files)
+        
+        # Files that built successfully
+        successful_files = all_changed - failing_files
+        
+        reverted_files = []
+        committed_files = []
+        commit_message = ""
+        
+        print(f"\n*** Selective revert: {len(failing_files)} failing, {len(successful_files)} successful")
+        
+        # Revert only the failing files
+        if failing_files:
+            print("*** Reverting failing files:")
+            for file_path in failing_files:
+                full_path = self.source_root / file_path
+                if full_path.exists():
+                    code, output = self.git._run(['checkout', str(full_path)])
+                    if code == 0:
+                        print(f"    Reverted: {file_path}")
+                        reverted_files.append(file_path)
+                    else:
+                        print(f"    WARNING: Could not revert {file_path}: {output}")
+            
+            # Record lessons for the failed files
+            error_report = build_result.get_error_report()
+            self._record_lesson(error_report, failed_fix_attempt=", ".join(reverted_files))
+        
+        # Commit successful files if any
+        if successful_files:
+            print("*** Committing successful changes:")
+            for file_path in successful_files:
+                print(f"    Keeping: {file_path}")
+                committed_files.append(file_path)
+            
+            # Stage successful files
+            for file_path in successful_files:
+                self.git.add(str(self.source_root / file_path))
+            
+            # Generate commit message
+            dirs_affected = set(str(Path(f).parent) for f in successful_files)
+            commit_message = self._generate_commit_message(list(successful_files))
+            
+            # Commit
+            success, output = self.git.commit(commit_message)
+            if success:
+                self.git.push()
+                print(f"*** Committed {len(successful_files)} successful changes")
+                
+                # Update review summary for successful directories
+                for dir_path in dirs_affected:
+                    self._update_review_summary(
+                        [f for f in successful_files if f.startswith(dir_path)],
+                        commit_message,
+                        dir_path
+                    )
+                    # Mark directory complete in index if all its files succeeded
+                    dir_files = [f for f in all_changed if f.startswith(dir_path)]
+                    if all(f in successful_files for f in dir_files):
+                        self.index.mark_complete(dir_path)
+                        self._beads_mark_complete(dir_path)
+            else:
+                print(f"*** Commit failed: {output}")
+        
+        # Update session state
+        self.session.changed_files = list(reverted_files)  # Only failing files remain "changed" but reverted
+        self.session.pending_changes = len(reverted_files) > 0
+        
+        return reverted_files, committed_files, commit_message
+    
     def _log_exchange(self, step: int, request: str, response: str) -> None:
         """Log conversation exchange to file."""
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -2985,7 +3110,7 @@ Output ONLY the lesson entry, nothing else."""
                     return f"BUILD_SUCCESS but commit/push failed: {output}\n" \
                            "Please commit manually."
             else:
-                # Build failed - REVERT changes and record lesson learned
+                # Build failed - use SELECTIVE REVERT to keep good changes
                 self.session.build_failures += 1
                 
                 # Log build failure
@@ -2996,52 +3121,63 @@ Output ONLY the lesson entry, nothing else."""
                     error_summary=result.errors[0].message if result.errors else None,
                 )
                 
-                # Get error report before reverting
+                print("\n*** BUILD FAILED - Analyzing which files caused errors...")
+                
+                # Use selective revert - only revert failing files, commit successful ones
+                reverted_files, committed_files, commit_msg = self._selective_revert_and_commit(result)
+                
+                # Get error report for AI context
                 error_report = result.get_error_report()
-                reverted_files = list(self.session.changed_files)
                 
-                # REVERT all changes - this is cheaper than trying to fix
-                print("\n*** BUILD FAILED - Reverting changes...")
-                for file_path in self.session.changed_files:
-                    full_path = self.source_root / file_path
-                    if full_path.exists():
-                        code, output = self.git._run(['checkout', str(full_path)])
-                        if code == 0:
-                            print(f"    Reverted: {file_path}")
-                        else:
-                            print(f"    WARNING: Could not revert {file_path}: {output}")
-                
-                # Clear pending changes state
-                self.session.pending_changes = False
-                self.session.changed_files = []
-                
-                # Record lesson learned from the failure
-                print("*** Recording lesson learned...")
-                self._record_lesson(error_report, failed_fix_attempt=", ".join(reverted_files))
-                if self.session.current_directory:
-                    self._beads_mark_open(self.session.current_directory)
+                # Mark directories with reverted files as needing retry
+                reverted_dirs = set(str(Path(f).parent) for f in reverted_files)
+                for dir_path in reverted_dirs:
+                    self._beads_mark_open(dir_path)
                 
                 # Commit and push LESSONS.md so the AI has it in context
-                self.git.add(str(self.lessons_file))
-                success, output = self.git.commit(f"LESSON: Build failure in {current_dir} - reverted changes")
-                if success:
-                    self.git.push()
-                    print("*** LESSONS.md committed and pushed")
+                if reverted_files:
+                    self.git.add(str(self.lessons_file))
+                    success, output = self.git.commit(f"LESSON: Build failure - reverted {len(reverted_files)} file(s)")
+                    if success:
+                        self.git.push()
+                        print("*** LESSONS.md committed and pushed")
                 
                 # Build response for AI
                 error_response = f"BUILD_FAILED: Build errors detected\n\n"
-                error_response += f"REVERTED FILES:\n"
-                for f in reverted_files:
-                    error_response += f"  - {f}\n"
-                error_response += f"\nBUILD ERROR REPORT:\n{error_report}\n\n"
+                
+                if committed_files:
+                    error_response += f"*** PARTIAL SUCCESS ***\n"
+                    error_response += f"COMMITTED SUCCESSFULLY ({len(committed_files)} files):\n"
+                    for f in committed_files:
+                        error_response += f"  ✓ {f}\n"
+                    error_response += f"\n"
+                
+                if reverted_files:
+                    error_response += f"REVERTED DUE TO ERRORS ({len(reverted_files)} files):\n"
+                    for f in reverted_files:
+                        error_response += f"  ✗ {f}\n"
+                    error_response += f"\n"
+                
+                error_response += f"BUILD ERROR REPORT:\n{error_report}\n\n"
                 error_response += f"LESSON RECORDED: The failed approach has been documented in LESSONS.md.\n\n"
                 error_response += f"NEXT STEPS:\n"
-                error_response += f"1. The broken changes have been reverted automatically\n"
-                error_response += f"2. Re-read the file(s) you were trying to fix\n"
-                error_response += f"3. Try a DIFFERENT approach based on the error\n"
-                error_response += f"4. Make smaller, more targeted changes\n"
+                if committed_files:
+                    error_response += f"1. Good news: {len(committed_files)} file(s) were committed successfully!\n"
+                    error_response += f"2. Only {len(reverted_files)} file(s) need to be re-done\n"
+                else:
+                    error_response += f"1. All {len(reverted_files)} files were reverted\n"
+                error_response += f"3. Re-read the failing file(s) and try a DIFFERENT approach\n"
+                error_response += f"4. Check LESSONS.md to avoid repeating the same mistake\n"
                 error_response += f"5. BUILD again when ready\n\n"
-                error_response += f"You are still in: {self.session.current_directory}\n"
+                
+                # Suggest next action
+                next_dir = self.index.get_next_pending()
+                if reverted_files:
+                    error_response += f"REVERTED DIRECTORIES WILL BE RETRIED:\n"
+                    for d in reverted_dirs:
+                        error_response += f"  - {d}\n"
+                if next_dir and not reverted_files:
+                    error_response += f"\nNEXT: Use SET_SCOPE {next_dir}\n"
                 
                 return error_response
         
