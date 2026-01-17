@@ -1191,16 +1191,16 @@ class ReviewLoop:
         if self._dynamic_parallelism:
             # Query server for recommended parallelism
             try:
-                recommended = self.ollama.get_recommended_parallelism(max_parallel=8)
+                recommended = self.ollama.get_recommended_parallelism(max_parallel=16)
                 self.max_parallel_files = recommended
                 self._parallel_mode = recommended > 1
-                print(f"*** Dynamic parallelism: server recommends {recommended} concurrent reviews")
+                print(f"*** Dynamic parallelism: server capacity = {recommended} concurrent reviews")
                 logger.info(f"Dynamic parallelism enabled: {recommended} workers from server metrics")
             except Exception as e:
-                # Fall back to conservative default
-                self.max_parallel_files = 2
+                # Fall back to reasonable default
+                self.max_parallel_files = 8
                 self._parallel_mode = True
-                print(f"*** Dynamic parallelism: server metrics unavailable, using default (2)")
+                print(f"*** Dynamic parallelism: server metrics unavailable, using default (8)")
                 logger.warning(f"Could not get server metrics for dynamic parallelism: {e}")
         else:
             self._parallel_mode = max_parallel_files > 1
@@ -1208,7 +1208,7 @@ class ReviewLoop:
             # Check if static value differs from server recommendation
             if self._parallel_mode:
                 try:
-                    recommended = self.ollama.get_recommended_parallelism(max_parallel=8)
+                    recommended = self.ollama.get_recommended_parallelism(max_parallel=16)
                     if abs(recommended - max_parallel_files) >= 2:
                         print(f"\n*** WARNING: Parallelism mismatch")
                         print(f"    Config specifies: {max_parallel_files} concurrent reviews")
@@ -1780,9 +1780,11 @@ If no changes needed, respond with just: NO_EDITS_NEEDED"""
         if self._dynamic_parallelism:
             # Re-check server metrics for current capacity (may have changed)
             try:
-                recommended = self.ollama.get_recommended_parallelism(max_parallel=8)
+                recommended = self.ollama.get_recommended_parallelism(max_parallel=16)
                 workers = min(recommended, len(files))
-                print(f"\n*** Dynamic parallelism: server capacity = {recommended} workers")
+                if workers != self.max_parallel_files:
+                    print(f"\n*** Dynamic parallelism updated: {workers} workers (was {self.max_parallel_files})")
+                    self.max_parallel_files = workers
             except Exception as e:
                 workers = min(self.max_parallel_files, len(files))
                 logger.debug(f"Could not refresh server metrics: {e}")

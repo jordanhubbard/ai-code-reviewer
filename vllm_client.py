@@ -477,27 +477,42 @@ class VLLMClient:
                             pass
                 
                 # Calculate available capacity based on KV cache usage
-                # Rule of thumb: each request uses roughly 5-15% of KV cache
-                # depending on context size. We use 10% as a conservative estimate.
-                kv_free = 1.0 - metrics['kv_cache_usage']
-                estimated_slots = max(1, int(kv_free / 0.10))
+                # Empirical observation: each request uses ~2-3% KV cache for typical
+                # code review contexts. Be aggressive when KV cache is low.
+                kv_used = metrics['kv_cache_usage']
+                kv_free = 1.0 - kv_used
+                
+                if kv_used < 0.05:
+                    # Nearly empty - allow many concurrent requests
+                    # Start aggressive, the server will queue if needed
+                    estimated_slots = 16
+                elif kv_used < 0.30:
+                    # Light load - use ~3% per request estimate
+                    estimated_slots = max(8, int(kv_free / 0.03))
+                elif kv_used < 0.60:
+                    # Moderate load - use ~5% per request estimate
+                    estimated_slots = max(4, int(kv_free / 0.05))
+                else:
+                    # Heavy load - use ~10% per request estimate
+                    estimated_slots = max(2, int(kv_free / 0.10))
+                
                 # Subtract already waiting requests
                 metrics['available_capacity'] = max(1, estimated_slots - metrics['requests_waiting'])
                 
-                logger.debug(
-                    f"vLLM metrics: KV cache {metrics['kv_cache_usage']:.1%}, "
-                    f"running={metrics['requests_running']}, waiting={metrics['requests_waiting']}, "
-                    f"capacity={metrics['available_capacity']}"
+                logger.info(
+                    f"vLLM metrics: KV={kv_used:.1%}, running={metrics['requests_running']}, "
+                    f"waiting={metrics['requests_waiting']}, estimated_capacity={metrics['available_capacity']}"
                 )
                 
         except Exception as e:
             logger.debug(f"Failed to fetch vLLM metrics: {e}")
-            # Return defaults - assume some capacity available
-            metrics['available_capacity'] = 2
+            # Return defaults - assume good capacity available
+            # vLLM servers are typically powerful, be optimistic
+            metrics['available_capacity'] = 8
         
         return metrics
     
-    def get_recommended_parallelism(self, max_parallel: int = 8) -> int:
+    def get_recommended_parallelism(self, max_parallel: int = 16) -> int:
         """
         Get recommended number of parallel requests based on server metrics.
         
@@ -509,23 +524,20 @@ class VLLMClient:
         """
         metrics = self.get_server_metrics()
         
-        # Start with available capacity
+        # Start with available capacity from metrics
         recommended = metrics['available_capacity']
         
-        # If KV cache is heavily used (>70%), be conservative
-        if metrics['kv_cache_usage'] > 0.7:
-            recommended = min(recommended, 2)
-        elif metrics['kv_cache_usage'] > 0.5:
-            recommended = min(recommended, 4)
-        
-        # If there are waiting requests, don't add more
-        if metrics['requests_waiting'] > 0:
-            recommended = max(1, recommended - metrics['requests_waiting'])
+        # If there are waiting requests, back off a bit
+        if metrics['requests_waiting'] > 2:
+            recommended = max(2, recommended - metrics['requests_waiting'])
         
         # Clamp to bounds
         recommended = max(1, min(recommended, max_parallel))
         
-        logger.info(f"Recommended parallelism: {recommended} (KV cache: {metrics['kv_cache_usage']:.1%})")
+        logger.info(
+            f"vLLM recommended parallelism: {recommended} "
+            f"(KV={metrics['kv_cache_usage']:.1%}, running={metrics['requests_running']})"
+        )
         return recommended
     
     @classmethod

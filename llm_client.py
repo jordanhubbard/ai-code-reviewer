@@ -518,7 +518,7 @@ class MultiHostClient:
         
         return metrics
     
-    def get_recommended_parallelism(self, max_parallel: int = 8) -> int:
+    def get_recommended_parallelism(self, max_parallel: int = 16) -> int:
         """
         Get recommended number of parallel requests based on server metrics.
         
@@ -532,24 +532,29 @@ class MultiHostClient:
             Recommended number of parallel requests (1 to max_parallel)
         """
         metrics = self.get_server_metrics()
+        num_hosts = len(self._vllm_hosts) + len(self._ollama_hosts)
         
-        # Use total capacity across all hosts, but cap at max_parallel
-        recommended = min(metrics['total_capacity'], max_parallel)
+        # Use total capacity across all hosts
+        recommended = metrics['total_capacity']
         
-        # If any host has high KV cache usage, be conservative
-        if metrics['kv_cache_usage'] > 0.7:
-            recommended = min(recommended, max(2, max_parallel // 2))
+        # If there are many waiting requests across hosts, reduce parallelism
+        if metrics['requests_waiting'] > num_hosts * 2:
+            recommended = max(num_hosts, recommended - metrics['requests_waiting'])
         
-        # If there are waiting requests across hosts, reduce parallelism
-        if metrics['requests_waiting'] > 2:
-            recommended = max(1, recommended - 1)
+        # Cap at max_parallel
+        recommended = max(1, min(recommended, max_parallel))
         
-        recommended = max(1, recommended)
+        # Show per-host breakdown for diagnostics
+        host_info = []
+        for h in metrics.get('hosts', []):
+            host_info.append(f"{h.get('url', '?')}: KV={h.get('kv_cache_usage', 0):.1%}")
         
         logger.info(
-            f"Recommended parallelism: {recommended} "
-            f"(capacity={metrics['total_capacity']}, KV={metrics['kv_cache_usage']:.0%})"
+            f"Multi-host parallelism: {recommended} "
+            f"(total_capacity={metrics['total_capacity']}, hosts={num_hosts})"
         )
+        if host_info:
+            logger.info(f"  Per-host: {', '.join(host_info)}")
         
         return recommended
 
