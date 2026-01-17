@@ -1855,6 +1855,56 @@ If no changes needed, respond with just: NO_EDITS_NEEDED"""
         
         return all_edits
     
+    def _gather_additional_files_for_batch(self, current_dir: str, needed: int) -> List[str]:
+        """
+        Gather additional files from upcoming directories to fill a parallel batch.
+        
+        This improves GPU utilization when the current directory has few files.
+        Only reviews code files, and only from directories that haven't been reviewed.
+        
+        Args:
+            current_dir: Current directory being reviewed
+            needed: Number of additional files needed to fill the batch
+            
+        Returns:
+            List of additional file paths from upcoming directories
+        """
+        if needed <= 0:
+            return []
+        
+        additional_files = []
+        
+        # Get pending directories from the index
+        pending_dirs = []
+        for entry in self.index.entries:
+            if entry.status == 'pending' and entry.path != current_dir:
+                pending_dirs.append(entry.path)
+        
+        for upcoming_dir in pending_dirs:
+            if len(additional_files) >= needed:
+                break
+            
+            dir_path = self.source_root / upcoming_dir
+            if not dir_path.exists() or not dir_path.is_dir():
+                continue
+            
+            # Find code files in this directory
+            for item in sorted(dir_path.iterdir()):
+                if len(additional_files) >= needed:
+                    break
+                if not item.is_file() or item.name.startswith('.'):
+                    continue
+                suffix = item.suffix.lower()
+                if suffix in {'.c', '.h', '.cc', '.cpp', '.rs', '.go'}:
+                    rel_path = str(item.relative_to(self.source_root))
+                    additional_files.append(rel_path)
+                    logger.debug(f"Adding {rel_path} to batch from {upcoming_dir}")
+        
+        if additional_files:
+            logger.info(f"Batched {len(additional_files)} additional files from upcoming directories")
+        
+        return additional_files
+    
     def _apply_parallel_edits(self, edits: List[Dict[str, Any]]) -> Tuple[int, int, List[str]]:
         """
         Apply edits collected from parallel review.
@@ -2516,25 +2566,95 @@ Output ONLY the lesson entry, nothing else."""
                 else:
                     result += f"\n{remaining} attempt(s) remain before auto-skip."
             
+            # Check for cached edits from previous batch reviews
+            cached_edits_for_dir = []
+            if hasattr(self, '_cached_edits') and directory in self._cached_edits:
+                cached_edits_for_dir = self._cached_edits.pop(directory)
+                logger.info(f"Found {len(cached_edits_for_dir)} cached edits for {directory}")
+            
             # Parallel review mode: automatically review all files in parallel
             if self._parallel_mode and files_in_dir:
                 # Filter to only .c and .h files for parallel review (skip docs)
                 code_files = [f for f in files_in_dir 
                               if f.endswith(('.c', '.h', '.cc', '.cpp', '.rs', '.go'))]
                 
+                # If we have cached edits, use them instead of re-reviewing
+                if cached_edits_for_dir:
+                    result += f"\n\n*** USING CACHED REVIEW RESULTS ***\n"
+                    result += f"Found {len(cached_edits_for_dir)} pre-reviewed edits for this directory\n"
+                    
+                    # Apply cached edits
+                    successful, failed, changed = self._apply_parallel_edits(cached_edits_for_dir)
+                    
+                    result += f"\n*** Applied cached review results:\n"
+                    result += f"    Successfully applied: {successful}\n"
+                    result += f"    Failed to apply: {failed}\n"
+                    
+                    if changed:
+                        result += f"    Files modified: {', '.join(changed)}\n"
+                        self.session.pending_changes = True
+                        self.session.changed_files.extend(changed)
+                    
+                    for f in code_files:
+                        self.session.visited_files_in_directory.add(f)
+                    self.session.files_reviewed_in_directory = len(code_files)
+                    
+                    result += f"\nAll files from cache. Run BUILD to validate changes.\n"
+                    result += f"ACTION: BUILD\n"
+                    return result
+                
                 if code_files:
-                    result += f"\n\n*** PARALLEL REVIEW MODE ***\n"
-                    result += f"Reviewing {len(code_files)} code files concurrently...\n"
+                    # Check if we should batch with additional directories for better GPU utilization
+                    min_batch_size = self.max_parallel_files if self.max_parallel_files > 1 else 8
+                    files_to_review = list(code_files)  # Start with current directory
+                    
+                    # If current directory has few files, peek at upcoming directories
+                    if len(files_to_review) < min_batch_size:
+                        additional_files = self._gather_additional_files_for_batch(
+                            directory, 
+                            min_batch_size - len(files_to_review)
+                        )
+                        if additional_files:
+                            files_to_review.extend(additional_files)
+                            result += f"\n\n*** BATCHED PARALLEL REVIEW MODE ***\n"
+                            result += f"Batching {len(code_files)} files from {directory} + {len(additional_files)} from upcoming directories\n"
+                            result += f"Total: {len(files_to_review)} files for concurrent review...\n"
+                        else:
+                            result += f"\n\n*** PARALLEL REVIEW MODE ***\n"
+                            result += f"Reviewing {len(code_files)} code files concurrently...\n"
+                    else:
+                        result += f"\n\n*** PARALLEL REVIEW MODE ***\n"
+                        result += f"Reviewing {len(code_files)} code files concurrently...\n"
                     
                     # Run parallel review
-                    edits = self._parallel_review_directory(directory, code_files)
+                    edits = self._parallel_review_directory(directory, files_to_review)
                     
                     if edits:
-                        # Apply the edits
-                        successful, failed, changed = self._apply_parallel_edits(edits)
+                        # Separate edits: current directory vs batched from other directories
+                        current_dir_edits = [e for e in edits if e['file_path'].startswith(directory + '/') or 
+                                             '/' not in e['file_path'].replace(directory, '', 1).lstrip('/')]
+                        other_dir_edits = [e for e in edits if e not in current_dir_edits]
+                        
+                        # Cache edits from other directories for later
+                        if other_dir_edits:
+                            if not hasattr(self, '_cached_edits'):
+                                self._cached_edits = {}
+                            for edit in other_dir_edits:
+                                file_dir = str(Path(edit['file_path']).parent)
+                                if file_dir not in self._cached_edits:
+                                    self._cached_edits[file_dir] = []
+                                self._cached_edits[file_dir].append(edit)
+                            logger.info(f"Cached {len(other_dir_edits)} edits for later directories")
+                        
+                        # Apply only current directory's edits
+                        successful, failed, changed = self._apply_parallel_edits(current_dir_edits)
                         
                         result += f"\n*** Parallel review results:\n"
-                        result += f"    Edits proposed: {len(edits)}\n"
+                        result += f"    Edits proposed: {len(current_dir_edits)} for current dir"
+                        if other_dir_edits:
+                            result += f" ({len(other_dir_edits)} cached for later)\n"
+                        else:
+                            result += "\n"
                         result += f"    Successfully applied: {successful}\n"
                         result += f"    Failed to apply: {failed}\n"
                         
