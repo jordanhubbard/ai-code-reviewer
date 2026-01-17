@@ -27,10 +27,11 @@ import logging
 import os
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import threading
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, as_completed, Future
 from difflib import SequenceMatcher
 
 from index_generator import generate_index
@@ -1187,6 +1188,8 @@ class ReviewLoop:
         # max_parallel_files: 0 = dynamic (from server), 1 = sequential, 2+ = static parallel
         self._dynamic_parallelism = (max_parallel_files == 0)
         self._edit_lock = threading.Lock()  # Always have lock for safety
+        self._interrupted = False  # Set on Ctrl+C for graceful shutdown
+        self._active_futures: List[Future] = []  # Track in-flight requests
         
         if self._dynamic_parallelism:
             # Query server for recommended parallelism
@@ -1795,28 +1798,57 @@ If no changes needed, respond with just: NO_EDITS_NEEDED"""
         print(f"*** Parallel review: {len(files)} files with {workers} workers")
         logger.info(f"Starting parallel review of {len(files)} files with {workers} workers")
         
+        # Reset interrupt flag at start of parallel work
+        self._interrupted = False
+        
         with ThreadPoolExecutor(max_workers=workers) as executor:
             # Submit all file review tasks
             future_to_file = {
                 executor.submit(self._review_single_file, f): f
                 for f in files
             }
+            self._active_futures = list(future_to_file.keys())
             
             # Collect results as they complete
             completed = 0
-            for future in as_completed(future_to_file):
-                file_path = future_to_file[future]
-                completed += 1
-                try:
-                    edits = future.result()
-                    if edits:
-                        all_edits.extend(edits)
-                        print(f"    [{completed}/{len(files)}] {file_path}: {len(edits)} edit(s)")
-                    else:
-                        print(f"    [{completed}/{len(files)}] {file_path}: no changes")
-                except Exception as e:
-                    logger.error(f"Parallel review failed for {file_path}: {e}")
-                    print(f"    [{completed}/{len(files)}] {file_path}: ERROR - {e}")
+            cancelled = 0
+            try:
+                for future in as_completed(future_to_file):
+                    if self._interrupted:
+                        # Cancel remaining futures
+                        for f in future_to_file.keys():
+                            if not f.done():
+                                f.cancel()
+                                cancelled += 1
+                        break
+                    
+                    file_path = future_to_file[future]
+                    completed += 1
+                    try:
+                        edits = future.result()
+                        if edits:
+                            all_edits.extend(edits)
+                            print(f"    [{completed}/{len(files)}] {file_path}: {len(edits)} edit(s)")
+                        else:
+                            print(f"    [{completed}/{len(files)}] {file_path}: no changes")
+                    except Exception as e:
+                        logger.error(f"Parallel review failed for {file_path}: {e}")
+                        print(f"    [{completed}/{len(files)}] {file_path}: ERROR - {e}")
+            except KeyboardInterrupt:
+                print("\n*** Interrupt received - cancelling pending reviews...")
+                self._interrupted = True
+                for f in future_to_file.keys():
+                    if not f.done():
+                        f.cancel()
+                        cancelled += 1
+            finally:
+                self._active_futures = []
+        
+        if self._interrupted:
+            print(f"*** Parallel review interrupted: {completed} completed, {cancelled} cancelled")
+            print(f"*** No edits will be applied (interrupted before completion)")
+            logger.info(f"Parallel review interrupted: {completed}/{len(files)} completed, {cancelled} cancelled")
+            return []  # Return empty - don't apply partial edits
         
         print(f"*** Parallel review complete: {len(all_edits)} total edits proposed")
         logger.info(f"Parallel review complete: {len(all_edits)} edits from {len(files)} files")
@@ -3944,7 +3976,16 @@ Examples:
     try:
         loop.run()
     except KeyboardInterrupt:
-        logger.info("Interrupted by user")
+        print("\n")
+        print("*** Shutting down gracefully...")
+        # Mark interrupted to stop any parallel work
+        loop._interrupted = True
+        # Cancel any active futures
+        for future in loop._active_futures:
+            if not future.done():
+                future.cancel()
+        print("*** No partial edits applied - source tree unchanged")
+        logger.info("Interrupted by user - graceful shutdown")
         sys.exit(130)
 
 
