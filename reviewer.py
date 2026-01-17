@@ -2063,6 +2063,21 @@ If no changes needed, respond with just: NO_EDITS_NEEDED"""
         if "NO_EDITS_NEEDED" in response:
             logger.debug(f"Parallel review: no edits needed for {file_path}")
             return []
+
+        def _normalize_edit_path(candidate: str, default_path: str) -> str:
+            if not candidate:
+                return default_path
+            cleaned = candidate.strip().strip('`').strip('"').strip("'")
+            lowered = cleaned.lower()
+            placeholders = {
+                '<path>', '<file>', '<file_path>', '<filepath>', '<file path>',
+                'path', 'file', 'file_path', 'filepath'
+            }
+            if lowered in placeholders:
+                return default_path
+            if lowered.startswith('<') and lowered.endswith('>'):
+                return default_path
+            return cleaned
         
         # Parse EDIT blocks
         edit_pattern = re.compile(
@@ -2074,18 +2089,18 @@ If no changes needed, respond with just: NO_EDITS_NEEDED"""
         )
         
         for match in edit_pattern.finditer(response):
-            edit_file = match.group(1).strip()
+            edit_file = _normalize_edit_path(match.group(1).strip(), file_path)
             old_text = match.group(2).strip()
             new_text = match.group(3).strip()
             
             # Validate the edit
             if old_text and new_text and old_text != new_text:
                 edits.append({
-                    'file_path': edit_file if edit_file else file_path,
+                    'file_path': edit_file,
                     'old_text': old_text,
                     'new_text': new_text
                 })
-                logger.info(f"Parallel review: found edit for {edit_file or file_path}")
+                logger.info(f"Parallel review: found edit for {edit_file}")
         
         # Also try the standard ACTION: EDIT_FILE format
         action_pattern = re.compile(
@@ -2096,7 +2111,7 @@ If no changes needed, respond with just: NO_EDITS_NEEDED"""
         )
         
         for match in action_pattern.finditer(response):
-            edit_file = match.group(1).strip()
+            edit_file = _normalize_edit_path(match.group(1).strip(), file_path)
             old_text = match.group(2).strip()
             new_text = match.group(3).strip()
             
@@ -2108,7 +2123,7 @@ If no changes needed, respond with just: NO_EDITS_NEEDED"""
                 )
                 if not is_dup:
                     edits.append({
-                        'file_path': edit_file if edit_file else file_path,
+                        'file_path': edit_file,
                         'old_text': old_text,
                         'new_text': new_text
                     })
