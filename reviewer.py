@@ -667,11 +667,23 @@ class GitHelper:
         return success
 
 
+class BeadsMigrationError(RuntimeError):
+    """Raised when beads migration is required but cannot proceed safely."""
+
+
 class BeadsManager:
     """Lightweight wrapper around the bd CLI for directory tracking."""
 
-    def __init__(self, repo_root: Path, git_helper: Optional['GitHelper'] = None, bd_cmd: Optional[str] = None):
-        self.repo_root = repo_root
+    def __init__(
+        self,
+        source_root: Path,
+        tool_root: Optional[Path] = None,
+        git_helper: Optional['GitHelper'] = None,
+        bd_cmd: Optional[str] = None,
+    ):
+        self.source_root = source_root
+        self.tool_root = tool_root or Path(__file__).resolve().parent
+        self.repo_root = source_root
         self.git_helper = git_helper
         self.bd_cmd = bd_cmd or shutil.which(os.environ.get('BD_CMD', 'bd'))
         self.issues: Dict[str, Dict[str, Any]] = {}
@@ -683,6 +695,8 @@ class BeadsManager:
             self.enabled = False
             return
         
+        self._ensure_beads_location()
+
         # Auto-initialize beads if .beads doesn't exist
         if not (self.repo_root / '.beads').exists():
             logger.info("Beads not initialized in source tree, initializing automatically...")
@@ -703,6 +717,99 @@ class BeadsManager:
         if self.issues:
             self.wrong_source_tree = self._check_for_wrong_source_tree()
     
+    def _safe_resolve(self, path: Path) -> Path:
+        try:
+            return path.resolve()
+        except Exception:
+            return path
+
+    def _run_bd_command(
+        self,
+        args: List[str],
+        cwd: Optional[Path] = None,
+        timeout: int = 120,
+    ) -> subprocess.CompletedProcess:
+        if not self.bd_cmd:
+            raise BeadsMigrationError("bd command not available for beads migration")
+        return subprocess.run(
+            [self.bd_cmd] + args,
+            cwd=str(cwd or self.repo_root),
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+
+    def _bd_supports_migrate_issues(self) -> bool:
+        try:
+            result = self._run_bd_command(['migrate', 'issues', '--help'], cwd=self.tool_root, timeout=30)
+            return result.returncode == 0
+        except Exception:
+            return False
+
+    def _move_beads_directory(self, source_beads: Path, dest_beads: Path) -> None:
+        print("*** Moving beads data to source tree root...")
+        try:
+            shutil.move(str(source_beads), str(dest_beads))
+        except Exception as exc:
+            raise BeadsMigrationError(
+                f"Failed to move .beads from {source_beads} to {dest_beads}: {exc}"
+            ) from exc
+
+        doctor = self._run_bd_command(['doctor', '--fix', '--yes'], cwd=self.repo_root)
+        if doctor.returncode != 0:
+            raise BeadsMigrationError(
+                "bd doctor failed after moving .beads; cannot re-base beads to new location. "
+                f"stderr: {doctor.stderr.strip()}"
+            )
+
+    def _migrate_beads_issues(self, from_root: Path, to_root: Path) -> None:
+        if not self._bd_supports_migrate_issues():
+            raise BeadsMigrationError(
+                "Beads migration required but 'bd migrate issues' is not available. "
+                "Upgrade bd or migrate beads manually."
+            )
+
+        result = self._run_bd_command(
+            [
+                'migrate', 'issues',
+                '--from', str(from_root),
+                '--to', str(to_root),
+                '--status', 'all',
+                '--include', 'closure',
+                '--yes',
+            ],
+            cwd=self.tool_root,
+            timeout=300,
+        )
+        if result.returncode != 0:
+            raise BeadsMigrationError(
+                "bd migrate issues failed; cannot reconcile .beads in tool repo with source tree. "
+                f"stderr: {result.stderr.strip()}"
+            )
+
+    def _ensure_beads_location(self) -> None:
+        tool_root = self._safe_resolve(self.tool_root)
+        source_root = self._safe_resolve(self.source_root)
+
+        if tool_root == source_root:
+            return
+
+        tool_beads = tool_root / '.beads'
+        source_beads = source_root / '.beads'
+
+        if not tool_beads.exists():
+            return
+
+        if tool_beads.exists() and not tool_beads.is_dir():
+            raise BeadsMigrationError(f"Found non-directory .beads at {tool_beads}")
+        if source_beads.exists() and not source_beads.is_dir():
+            raise BeadsMigrationError(f"Found non-directory .beads at {source_beads}")
+
+        if source_beads.exists():
+            self._migrate_beads_issues(tool_root, source_root)
+        else:
+            self._move_beads_directory(tool_beads, source_beads)
+
     def _initialize_beads(self) -> bool:
         """
         Initialize beads in the source tree and auto-commit any files created.
@@ -1469,7 +1576,8 @@ class ReviewLoop:
 
     def _init_beads_manager(self) -> Optional[BeadsManager]:
         try:
-            manager = BeadsManager(self.source_root, git_helper=self.git)
+            tool_root = Path(__file__).resolve().parent
+            manager = BeadsManager(self.source_root, tool_root=tool_root, git_helper=self.git)
             if not manager.enabled:
                 print("*** Beads integration disabled (bd unavailable)")
                 return None
@@ -1502,6 +1610,13 @@ class ReviewLoop:
             else:
                 print("    Beads: all directories already tracked")
             return manager
+        except BeadsMigrationError as exc:
+            print("\nERROR: Beads migration failed")
+            print("-" * 70)
+            print(str(exc))
+            print("\nAborting: beads data cannot be safely migrated to the source tree.")
+            print("-" * 70)
+            raise SystemExit(1)
         except Exception as exc:
             print(f"*** WARNING: Unable to initialize beads manager: {exc}")
             logger.warning("Beads initialization failed", exc_info=exc)
