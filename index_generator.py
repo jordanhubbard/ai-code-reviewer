@@ -14,11 +14,29 @@ The index file (REVIEW-INDEX.md) contains:
 """
 
 import os
+import subprocess
 from pathlib import Path
 from dataclasses import dataclass, field
 from typing import List, Dict, Optional, Iterator
 from datetime import datetime
 import re
+
+
+def is_git_ignored(repo_root: Path, path: str) -> bool:
+    """Check if a path is ignored by .gitignore."""
+    # Always ignore .git directory
+    if path.startswith('.git/') or path == '.git' or '/.git/' in path:
+        return True
+    
+    try:
+        result = subprocess.run(
+            ['git', '-C', str(repo_root), 'check-ignore', '-q', path],
+            capture_output=True,
+            text=True
+        )
+        return result.returncode == 0
+    except Exception:
+        return False
 
 
 @dataclass
@@ -141,6 +159,10 @@ class ReviewIndex:
                 
                 rel_path = f"{prefix}/{item.name}"
                 
+                # Skip directories that are gitignored
+                if is_git_ignored(self.source_root, rel_path):
+                    continue
+                
                 c_files = []
                 h_files = []
                 reviewable_found = False
@@ -148,6 +170,12 @@ class ReviewIndex:
                     for child in item.iterdir():
                         if not child.is_file() or child.name.startswith('.'):
                             continue
+                        
+                        # Skip gitignored files
+                        child_rel = f"{rel_path}/{child.name}"
+                        if is_git_ignored(self.source_root, child_rel):
+                            continue
+                        
                         name = child.name
                         suffix = child.suffix.lower()
                         if name in REVIEWABLE_SPECIAL_FILES:

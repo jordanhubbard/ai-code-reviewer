@@ -621,6 +621,76 @@ class GitHelper:
         if output:
             return [f.strip() for f in output.split('\n') if f.strip()]
         return []
+    
+    def is_ignored(self, path: str) -> bool:
+        """
+        Check if a path is ignored by .gitignore.
+        
+        Args:
+            path: Relative path from repo root
+            
+        Returns:
+            True if the path is ignored, False otherwise
+        """
+        # Always ignore .git directory
+        if path.startswith('.git/') or path == '.git':
+            return True
+        
+        # Use git check-ignore to respect all gitignore rules
+        code, _ = self._run(['check-ignore', '-q', path])
+        return code == 0
+    
+    def list_tracked_files(self, directory: str = '.') -> List[str]:
+        """
+        List files in a directory that are tracked by git (respects .gitignore).
+        
+        Args:
+            directory: Directory to list, relative to repo root
+            
+        Returns:
+            List of file paths relative to repo root
+        """
+        # Use git ls-files to get only tracked/trackable files
+        code, output = self._run(['ls-files', '--cached', '--others', '--exclude-standard', directory])
+        if code == 0 and output:
+            return [f.strip() for f in output.split('\n') if f.strip()]
+        return []
+    
+    def list_unignored_files_in_dir(self, directory: str) -> List[str]:
+        """
+        List files in a directory that are not ignored by .gitignore.
+        
+        This is useful for discovering reviewable files while respecting
+        the project's .gitignore patterns.
+        
+        Args:
+            directory: Directory path relative to repo root
+            
+        Returns:
+            List of file paths relative to repo root
+        """
+        dir_path = self.repo_root / directory
+        if not dir_path.exists() or not dir_path.is_dir():
+            return []
+        
+        files = []
+        try:
+            for item in dir_path.iterdir():
+                if not item.is_file():
+                    continue
+                rel_path = str(item.relative_to(self.repo_root))
+                
+                # Always skip .git
+                if rel_path.startswith('.git/') or rel_path == '.git':
+                    continue
+                
+                # Check if ignored
+                if not self.is_ignored(rel_path):
+                    files.append(rel_path)
+        except PermissionError:
+            pass
+        
+        return sorted(files)
 
     def recover_repository(self) -> bool:
         """Attempt automatic recovery from corrupt git state."""
@@ -2257,15 +2327,21 @@ If no changes needed, respond with just: NO_EDITS_NEEDED"""
             if not dir_path.exists() or not dir_path.is_dir():
                 continue
             
-            # Find code files in this directory
+            # Find code files in this directory (respecting .gitignore)
             for item in sorted(dir_path.iterdir()):
                 if len(additional_files) >= needed:
                     break
                 if not item.is_file() or item.name.startswith('.'):
                     continue
+                
+                rel_path = str(item.relative_to(self.source_root))
+                
+                # Skip files ignored by .gitignore
+                if self.git.is_ignored(rel_path):
+                    continue
+                
                 suffix = item.suffix.lower()
                 if suffix in {'.c', '.h', '.cc', '.cpp', '.rs', '.go'}:
-                    rel_path = str(item.relative_to(self.source_root))
                     additional_files.append(rel_path)
                     logger.debug(f"Adding {rel_path} to batch from {upcoming_dir}")
         
@@ -2994,14 +3070,25 @@ Output ONLY the lesson entry, nothing else."""
             # Check for Makefile (indicates it's a proper source directory)
             has_makefile = (dir_path / 'Makefile').exists() or (dir_path / 'Makefile.inc').exists()
             
-            # Discover all reviewable files in directory
+            # Discover all reviewable files in directory (respecting .gitignore)
             files_in_dir = []
             for item in sorted(dir_path.iterdir()):
-                if not item.is_file() or item.name.startswith('.'):
+                if not item.is_file():
                     continue
+                # Skip hidden files and .git directory
+                if item.name.startswith('.'):
+                    continue
+                
+                rel_path = str(item.relative_to(self.source_root))
+                
+                # Skip files ignored by .gitignore
+                if self.git.is_ignored(rel_path):
+                    logger.debug(f"Skipping gitignored file: {rel_path}")
+                    continue
+                
                 suffix = item.suffix.lower()
                 if suffix in REVIEWABLE_SUFFIXES or item.name in REVIEWABLE_SPECIAL_FILES:
-                    files_in_dir.append(str(item.relative_to(self.source_root)))
+                    files_in_dir.append(rel_path)
             
             # Update session state
             self.session.current_directory = directory
