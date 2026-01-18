@@ -2543,15 +2543,17 @@ If no changes needed, respond with just: NO_EDITS_NEEDED"""
     def _resolve_path(self, path_str: str) -> Path:
         """Resolve a relative path within the source tree."""
         path = Path(path_str)
-        if path.is_absolute():
-            return path
-        resolved = (self.source_root / path).resolve()
-        
+        resolved = path.resolve() if path.is_absolute() else (self.source_root / path).resolve()
+
         try:
-            resolved.relative_to(self.source_root)
+            rel = resolved.relative_to(self.source_root)
         except ValueError:
             raise ValueError(f"Path escapes source root: {path_str}")
-        
+
+        # Never allow interacting with git metadata; it is easy for the AI to corrupt it.
+        if rel.parts and rel.parts[0] == '.git':
+            raise ValueError(f"Refusing to access git metadata: {rel}")
+
         return resolved
     
     def _ask_ai_simple(self, prompt: str) -> str:
@@ -3263,7 +3265,10 @@ Output ONLY the lesson entry, nothing else."""
             return result
         
         elif action_type == 'READ_FILE':
-            path = self._resolve_path(action.get('file_path', ''))
+            try:
+                path = self._resolve_path(action.get('file_path', ''))
+            except ValueError as e:
+                return f"READ_FILE_ERROR: {e}"
             if not path.exists():
                 return f"READ_FILE_ERROR: File not found: {path}\nTIP: Use FIND_FILE to locate files"
             
@@ -3336,7 +3341,10 @@ Output ONLY the lesson entry, nothing else."""
             return f"READ_FILE_RESULT for {path}:\n{warning}PROGRESS:\n{progress}\n\n```\n{content}\n```"
         
         elif action_type == 'LIST_DIR':
-            path = self._resolve_path(action.get('dir_path', ''))
+            try:
+                path = self._resolve_path(action.get('dir_path', ''))
+            except ValueError as e:
+                return f"LIST_DIR_ERROR: {e}"
             if not path.exists():
                 return f"LIST_DIR_ERROR: Directory not found: {path}"
             if not path.is_dir():
@@ -3345,7 +3353,10 @@ Output ONLY the lesson entry, nothing else."""
             return f"LIST_DIR_RESULT for {path}:\n```\n" + '\n'.join(items) + "\n```"
         
         elif action_type == 'EDIT_FILE':
-            path = self._resolve_path(action.get('file_path', ''))
+            try:
+                path = self._resolve_path(action.get('file_path', ''))
+            except ValueError as e:
+                return f"EDIT_FILE_ERROR: {e}"
             old_text = action.get('old_text', '')
             new_text = action.get('new_text', '')
             
@@ -3463,7 +3474,10 @@ Output ONLY the lesson entry, nothing else."""
                 return f"EDIT_FILE_ERROR: {message}{hint}"
         
         elif action_type == 'WRITE_FILE':
-            path = self._resolve_path(action.get('file_path', ''))
+            try:
+                path = self._resolve_path(action.get('file_path', ''))
+            except ValueError as e:
+                return f"WRITE_FILE_ERROR: {e}"
             content = action.get('content', '')
             
             if not content:
