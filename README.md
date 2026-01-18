@@ -1,4 +1,4 @@
-# Angry AI - Universal Code Reviewer
+# AI Code Reviewer
 
 **AI-powered code reviewer with build validation for ANY codebase**
 
@@ -16,7 +16,7 @@
 - ✅ **Scalable**: Function-by-function chunking handles files of any size
 - ✅ **Safe**: Tests every change with your build system
 - ✅ **Autonomous**: Runs for hours reviewing entire directories
-- ✅ **Smart**: Uses LLM (via Ollama) for intelligent analysis
+- ✅ **Smart**: Uses LLM via OpenAI-compatible vLLM and/or Ollama
 - ✅ **Parallel**: Optional concurrent file processing for faster reviews (experimental)
 - ✅ **Self-Healing**: Auto-detects loops, learns from build failures, files systemic issues
 - ✅ **Secure**: Scans commits for secrets before pushing
@@ -49,7 +49,16 @@ sudo apt install python3 python3-pip
 pip3 install pyyaml
 ```
 
-### 2. Set Up Ollama Server
+### 2. Set Up an LLM Server (vLLM or Ollama)
+
+#### Option A: vLLM (OpenAI-compatible, high performance)
+
+On a machine with GPU:
+```bash
+docker run -it --gpus all -p 8000:8000   --ipc=host --ulimit memlock=-1 --ulimit stack=67108864   -v ~/.cache/huggingface:/root/.cache/huggingface   nvcr.io/nvidia/vllm:25.12.post1-py3   vllm serve "nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16"     --trust-remote-code
+```
+
+#### Option B: Ollama
 
 On a machine with GPU:
 ```bash
@@ -66,16 +75,19 @@ OLLAMA_HOST=0.0.0.0:11434 ollama serve
 ### 3. Configure
 
 ```bash
-cd angry-ai
+cd ai-code-reviewer
 cp config.yaml.defaults config.yaml
 vim config.yaml
 ```
 
 **Edit config.yaml:**
 ```yaml
-ollama:
-  url: "http://your-ollama-server:11434"
-  model: "qwen2.5-coder:32b"
+llm:
+  hosts:
+    - "http://your-llm-server"  # vLLM (:8000) or Ollama (:11434)
+  models:
+    - "nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16"  # vLLM model name
+    - "qwen2.5-coder:32b"                           # Ollama fallback
 
 source:
   root: ".."  # Path to your source code
@@ -86,6 +98,8 @@ source:
   build_timeout: 600  # Seconds (10 minutes)
   pre_build_command: ""  # Optional setup command
 ```
+
+You can list **multiple hosts** (vLLM and/or Ollama) and **multiple models**; the tool probes each host and uses the first available model in order.
 
 ### 4. Run
 
@@ -196,7 +210,7 @@ Files over 800 lines are automatically chunked by function:
 ┌─────────────────────────────────────────────────────┐
 │ Your Machine (FreeBSD/Linux/macOS)                 │
 │ ┌─────────────────────────────────────────────────┐ │
-│ │ angry-ai/                                       │ │
+│ │ ai-code-reviewer/                               │ │
 │ │ ├─ reviewer.py        (main loop)              │ │
 │ │ ├─ ollama_client.py   (AI communication)       │ │
 │ │ ├─ build_executor.py  (runs YOUR build cmd)    │ │
@@ -208,9 +222,9 @@ Files over 800 lines are automatically chunked by function:
 └─────────────────────────────────────────────────────┘
           ↓                                            
 ┌─────────────────────────────────────────────────────┐
-│ Ollama Server (GPU machine, can be remote)         │
-│ ├─ qwen2.5-coder:32b (or any model)                │
-│ └─ Listens on 0.0.0.0:11434                        │
+│ LLM Server (vLLM or Ollama, can be remote)         │
+│ ├─ OpenAI-compatible vLLM on :8000                 │
+│ └─ Ollama on :11434 (or any model)                 │
 └─────────────────────────────────────────────────────┘
 ```
 
@@ -218,7 +232,7 @@ Files over 800 lines are automatically chunked by function:
 
 The tool supports multiple **review personalities** via the persona system.
 
-### Default: FreeBSD Angry AI
+### Default: FreeBSD Commit Blocker
 
 The default persona is **"The FreeBSD Commit Blocker"** - a ruthless security auditor that:
 - ✓ Battle-tested on FreeBSD source tree
@@ -267,12 +281,12 @@ Make it:
 This tool is **completely generic**. To use it with your project:
 
 ```bash
-# Option 1: Copy the angry-ai/ directory
-cp -r angry-ai /path/to/your/project/
+# Option 1: Copy the ai-code-reviewer/ directory
+cp -r ai-code-reviewer /path/to/your/project/
 
 # Option 2: Git submodule (if extracted to standalone repo)
 cd /path/to/your/project
-git submodule add https://github.com/you/angry-ai-reviewer.git reviewer
+git submodule add https://github.com/you/ai-code-reviewer.git reviewer
 cd reviewer
 cp config.yaml.defaults config.yaml
 vim config.yaml  # Set your build_command
@@ -282,7 +296,7 @@ make run
 ## Requirements
 
 - **Python 3.8+** with PyYAML
-- **Ollama server** (local or remote) with a code model
+- **LLM server** (OpenAI-compatible vLLM and/or Ollama) with a code model
 - **Your project's build system** (make, cmake, cargo, etc.)
 - **Git repository** (for tracking changes)
 

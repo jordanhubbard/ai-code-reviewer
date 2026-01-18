@@ -167,19 +167,8 @@ test-all: test
 #
 
 # Run the review loop (checks dependencies first, auto-creates config if missing)
-run: check-deps
-	@# Create config.yaml interactively if it doesn't exist
-	@if [ ! -f config.yaml ]; then \
-		echo ""; \
-		echo "*** No config.yaml found - running interactive setup..."; \
-		echo ""; \
-		./scripts/config-init.sh; \
-	elif [ -f config.yaml.defaults ] && [ config.yaml.defaults -nt config.yaml ]; then \
-		echo "*** config.yaml.defaults is newer than config.yaml"; \
-		echo "*** Running config-update to merge new settings..."; \
-		$(MAKE) config-update; \
-	fi
-	$(VENV_PY) reviewer.py --config config.yaml
+run:
+	@$(PYTHON) scripts/make_run.py
 
 # Run with verbose logging
 run-verbose: check-deps
