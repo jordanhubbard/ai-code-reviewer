@@ -14,6 +14,8 @@ PYTHON?=	python3
 VENV?=		.venv
 VENV_PY=	$(VENV)/bin/python
 VENV_PIP=	$(VENV_PY) -m pip
+PIP_FLAGS?=
+FREEBSD_PYYAML_PKG?=py311-pyyaml
 
 # No directory variables needed - make runs from Makefile location
 # All paths are relative to the Makefile
@@ -55,7 +57,22 @@ check-deps:
 	@# Check for pyyaml in venv
 	@if ! $(VENV_PY) -c "import yaml" >/dev/null 2>&1; then \
 		echo "PyYAML not found in venv. Installing..."; \
-		$(VENV_PIP) install -r requirements.txt; \
+		if ! $(VENV_PIP) install $(PIP_FLAGS) -r requirements.txt; then \
+			echo "pip install failed."; \
+			if command -v pkg >/dev/null 2>&1; then \
+				echo "Trying FreeBSD pkg install: $(FREEBSD_PYYAML_PKG)"; \
+				sudo pkg install -y $(FREEBSD_PYYAML_PKG); \
+				echo "Recreating venv with system-site-packages..."; \
+				rm -rf "$(VENV)"; \
+				$(PYTHON) -m venv --system-site-packages "$(VENV)"; \
+				$(MAKE) venv; \
+			else \
+				echo "pip install failed and pkg is unavailable."; \
+				echo "Set PIP_INDEX_URL or PIP_FIND_LINKS to a reachable mirror, or fix DNS."; \
+				exit 1; \
+			fi; \
+		fi; \
+		$(VENV_PY) -c "import yaml" >/dev/null 2>&1 || { echo "PyYAML still missing in venv."; exit 1; }; \
 	else \
 		echo "✓ PyYAML found in venv"; \
 	fi
@@ -80,9 +97,7 @@ check-deps:
 
 # Install Python dependencies (just PyYAML - no torch/GPU stuff)
 # Legacy target - use check-deps instead
-deps: venv
-	@echo "Installing Python dependencies in $(VENV)..."
-	$(VENV_PIP) install -r requirements.txt
+deps: check-deps
 	@echo "Done. Dependencies installed in $(VENV)."
 
 # Interactive configuration setup
