@@ -447,6 +447,33 @@ class GitHelper:
         safe_base = re.sub(r'[^A-Za-z0-9._/-]+', '-', base_branch or 'detached')
         return f'reviewer/{safe_base}-{timestamp}'
 
+    def _get_worktree_branch_paths(self) -> Dict[str, str]:
+        code, output = self._run(['worktree', 'list', '--porcelain'])
+        if code != 0 or not output:
+            return {}
+        entries: List[Dict[str, str]] = []
+        current: Dict[str, str] = {}
+        for line in output.splitlines():
+            if line.startswith('worktree '):
+                if current:
+                    entries.append(current)
+                current = {'path': line.split(' ', 1)[1].strip()}
+            elif line.startswith('branch '):
+                current['branch'] = line.split(' ', 1)[1].strip()
+        if current:
+            entries.append(current)
+        return {
+            entry['branch']: entry['path']
+            for entry in entries
+            if entry.get('branch') and entry.get('path')
+        }
+
+    def _get_worktree_path_for_branch(self, branch: str) -> Optional[str]:
+        if not branch:
+            return None
+        branch_ref = f'refs/heads/{branch}'
+        return self._get_worktree_branch_paths().get(branch_ref)
+
     def has_rebase_in_progress(self) -> bool:
         return any(self._path_exists(name) for name in ['rebase-apply', 'rebase-merge'])
 
@@ -507,19 +534,31 @@ class GitHelper:
         branch = self.get_current_branch()
         target_branch = preferred_branch or self.get_default_remote_branch()
         if branch == 'HEAD' or not branch:
-            code, output = self._run(['checkout', target_branch])
-            if code != 0:
-                if 'already used by worktree' in output:
-                    base_ref = self._resolve_branch_ref(target_branch) or 'HEAD'
-                    fallback_branch = self._make_fallback_branch(target_branch)
-                    code, output = self._run(['checkout', '-b', fallback_branch, base_ref])
-                    if code != 0:
-                        return False, f'Failed to checkout {target_branch}: {output}'
-                    actions.append(f'checked out {fallback_branch} (from {base_ref})')
-                else:
-                    return False, f'Failed to checkout {target_branch}: {output}'
+            worktree_path = self._get_worktree_path_for_branch(target_branch)
+            if worktree_path:
+                base_ref = self._resolve_branch_ref(target_branch) or 'HEAD'
+                fallback_branch = self._make_fallback_branch(target_branch)
+                code, output = self._run(['checkout', '-b', fallback_branch, base_ref])
+                if code != 0:
+                    return False, f'Failed to checkout {fallback_branch} from {base_ref}: {output}'
+                actions.append(
+                    f'checked out {fallback_branch} (branch in worktree at {worktree_path})'
+                )
             else:
-                actions.append(f'checked out {target_branch}')
+                code, output = self._run(['checkout', target_branch])
+                if code != 0:
+                    if ('already used by worktree' in output
+                            or 'already checked out at' in output):
+                        base_ref = self._resolve_branch_ref(target_branch) or 'HEAD'
+                        fallback_branch = self._make_fallback_branch(target_branch)
+                        code, output = self._run(['checkout', '-b', fallback_branch, base_ref])
+                        if code != 0:
+                            return False, f'Failed to checkout {fallback_branch} from {base_ref}: {output}'
+                        actions.append(f'checked out {fallback_branch} (from {base_ref})')
+                    else:
+                        return False, f'Failed to checkout {target_branch}: {output}'
+                else:
+                    actions.append(f'checked out {target_branch}')
         else:
             target_branch = branch
 
