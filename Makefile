@@ -143,14 +143,7 @@ test: check-deps
 	@$(VENV_PY) -m unittest discover -s tests -p "test_*.py"
 	@echo ""
 	@echo "=== Config Migration Test ==="
-	@$(VENV_PY) -c "\
-import yaml; \
-from scripts.config_update import migrate_ollama_to_llm; \
-cfg = {'ollama': {'url': 'http://test:11434', 'model': 'test-model'}}; \
-migrate_ollama_to_llm(cfg); \
-assert 'llm' in cfg and 'ollama' not in cfg, 'Migration failed'; \
-assert 'nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16' in cfg['llm']['models'], 'Missing preferred model'; \
-print('✓ Config migration OK')"
+	@$(VENV_PY) -c "import yaml; from scripts.config_update import migrate_ollama_to_llm; cfg = {'ollama': {'url': 'http://test:11434', 'model': 'test-model'}}; migrate_ollama_to_llm(cfg); assert 'llm' in cfg and 'ollama' not in cfg, 'Migration failed'; assert 'nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16' in cfg['llm']['models'], 'Missing preferred model'; print('✓ Config migration OK')"
 	@echo ""
 	@echo "All tests passed!"
 

@@ -474,6 +474,32 @@ class GitHelper:
         branch_ref = f'refs/heads/{branch}'
         return self._get_worktree_branch_paths().get(branch_ref)
 
+    def _tool_paths_for_checkout(self) -> List[str]:
+        return [
+            '.beads/',
+            '.ai-code-reviewer/',
+            '.angry-ai/',
+            'REVIEW-INDEX.md',
+        ]
+
+    def _should_stash_tool_paths(self, output: str) -> bool:
+        return 'untracked working tree files would be overwritten by checkout' in output
+
+    def _stash_tool_paths_for_checkout(self) -> Tuple[bool, Optional[str]]:
+        paths = self._tool_paths_for_checkout()
+        code, output = self._run([
+            'stash',
+            'push',
+            '--all',
+            '-m',
+            'reviewer-prep-tool-files',
+            '--',
+            *paths,
+        ])
+        if code != 0 and 'No local changes to save' not in output:
+            return False, f'Failed to stash tool files: {output}'
+        return True, 'stashed tool files'
+
     def has_rebase_in_progress(self) -> bool:
         return any(self._path_exists(name) for name in ['rebase-apply', 'rebase-merge'])
 
@@ -539,6 +565,12 @@ class GitHelper:
                 base_ref = self._resolve_branch_ref(target_branch) or 'HEAD'
                 fallback_branch = self._make_fallback_branch(target_branch)
                 code, output = self._run(['checkout', '-b', fallback_branch, base_ref])
+                if code != 0 and self._should_stash_tool_paths(output):
+                    ok, stash_msg = self._stash_tool_paths_for_checkout()
+                    if not ok:
+                        return False, stash_msg or f'Failed to stash tool files: {output}'
+                    actions.append(stash_msg)
+                    code, output = self._run(['checkout', '-b', fallback_branch, base_ref])
                 if code != 0:
                     return False, f'Failed to checkout {fallback_branch} from {base_ref}: {output}'
                 actions.append(
@@ -546,12 +578,24 @@ class GitHelper:
                 )
             else:
                 code, output = self._run(['checkout', target_branch])
+                if code != 0 and self._should_stash_tool_paths(output):
+                    ok, stash_msg = self._stash_tool_paths_for_checkout()
+                    if not ok:
+                        return False, stash_msg or f'Failed to stash tool files: {output}'
+                    actions.append(stash_msg)
+                    code, output = self._run(['checkout', target_branch])
                 if code != 0:
                     if ('already used by worktree' in output
                             or 'already checked out at' in output):
                         base_ref = self._resolve_branch_ref(target_branch) or 'HEAD'
                         fallback_branch = self._make_fallback_branch(target_branch)
                         code, output = self._run(['checkout', '-b', fallback_branch, base_ref])
+                        if code != 0 and self._should_stash_tool_paths(output):
+                            ok, stash_msg = self._stash_tool_paths_for_checkout()
+                            if not ok:
+                                return False, stash_msg or f'Failed to stash tool files: {output}'
+                            actions.append(stash_msg)
+                            code, output = self._run(['checkout', '-b', fallback_branch, base_ref])
                         if code != 0:
                             return False, f'Failed to checkout {fallback_branch} from {base_ref}: {output}'
                         actions.append(f'checked out {fallback_branch} (from {base_ref})')
