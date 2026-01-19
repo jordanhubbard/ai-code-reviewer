@@ -906,11 +906,15 @@ class BeadsManager:
         args: List[str],
         cwd: Optional[Path] = None,
         timeout: int = 120,
+        env_overrides: Optional[Dict[str, str]] = None,
     ) -> subprocess.CompletedProcess:
         if not self.bd_cmd:
             raise BeadsMigrationError("bd command not available for beads migration")
         cwd_path = cwd or self.repo_root
         cmd = [self.bd_cmd] + args
+        env = os.environ.copy()
+        if env_overrides:
+            env.update(env_overrides)
         try:
             return subprocess.run(
                 cmd,
@@ -918,6 +922,7 @@ class BeadsManager:
                 capture_output=True,
                 text=True,
                 timeout=timeout,
+                env=env,
             )
         except subprocess.TimeoutExpired as exc:
             raise BeadsMigrationError(
@@ -925,6 +930,12 @@ class BeadsManager:
                 "This can happen on very large repositories when rebuilding the beads DB.\n"
                 "Try running the command manually with a higher timeout, or set BD_MIGRATION_TIMEOUT_SECONDS."
             ) from exc
+
+    def _sqlite_env_overrides(self) -> Dict[str, str]:
+        return {
+            'BD_NO_DB': '0',
+            'BEADS_NO_DB': '0',
+        }
 
     def _bd_supports_migrate_issues(self) -> bool:
         try:
@@ -1007,7 +1018,7 @@ class BeadsManager:
         if source:
             args.extend(['--source', source])
         timeout = int(os.environ.get('BD_MIGRATION_TIMEOUT_SECONDS', '600'))
-        doctor = self._run_bd_command(args, cwd=root, timeout=timeout)
+        doctor = self._run_bd_command(args, cwd=root, timeout=timeout, env_overrides=self._sqlite_env_overrides())
         if doctor.returncode != 0:
             raise BeadsMigrationError(
                 f"bd doctor failed for {root}; stderr: {doctor.stderr.strip()}"
@@ -1031,6 +1042,7 @@ class BeadsManager:
             ['init', '--from-jsonl', '--prefix', prefix],
             cwd=root,
             timeout=timeout,
+            env_overrides=self._sqlite_env_overrides(),
         )
         if init.returncode != 0:
             raise BeadsMigrationError(
@@ -1080,6 +1092,7 @@ class BeadsManager:
             ],
             cwd=self.tool_root,
             timeout=timeout,
+            env_overrides=self._sqlite_env_overrides(),
         )
         if result.returncode != 0:
             raise BeadsMigrationError(
