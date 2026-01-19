@@ -487,6 +487,9 @@ class GitHelper:
 
     def _stash_tool_paths_for_checkout(self) -> Tuple[bool, Optional[str]]:
         paths = self._tool_paths_for_checkout()
+        existing = [path for path in paths if (self.repo_root / path).exists()]
+        if not existing:
+            return True, 'no tool files to stash'
         code, output = self._run([
             'stash',
             'push',
@@ -494,7 +497,7 @@ class GitHelper:
             '-m',
             'reviewer-prep-tool-files',
             '--',
-            *paths,
+            *existing,
         ])
         if code != 0 and 'No local changes to save' not in output:
             return False, f'Failed to stash tool files: {output}'
