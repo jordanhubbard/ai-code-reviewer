@@ -152,6 +152,10 @@ source:
   # Most projects: ~5-10 minutes
   build_timeout: 7200  # 2 hours
   
+  # Optional: branch to use for review operations (defaults to repo default)
+  # If this branch is checked out in another worktree, a reviewer/* branch will be created
+  # branch: "main"
+
   # Pre-build command to run once at startup
   # Examples: "sudo -v" (cache sudo), "npm install" (deps), "" (none)
   # Set to empty string to disable

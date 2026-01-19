@@ -4851,7 +4851,16 @@ Examples:
         print("\n⚠️  WARNING: Pre-flight check skipped!")
         print("   If source doesn't build, AI may make things worse.\n")
 
-    ready, ready_msg = git_helper.ensure_repository_ready(allow_rebase=not git_helper.has_changes())
+    source_config = config.get('source', {})
+    preferred_branch = (
+        source_config.get('branch')
+        or source_config.get('preferred_branch')
+        or None
+    )
+    ready, ready_msg = git_helper.ensure_repository_ready(
+        preferred_branch=preferred_branch or 'main',
+        allow_rebase=not git_helper.has_changes(),
+    )
     if not ready:
         logger.error(f"Unable to prepare source tree: {ready_msg}")
         sys.exit(1)
