@@ -188,9 +188,26 @@ query_host_models() {
     local vllm_response
     vllm_response=$(curl -s --connect-timeout 5 "$base_url:8000/v1/models" 2>/dev/null)
     if [[ -n "$vllm_response" && "$vllm_response" == *'"data"'* ]]; then
-        # Parse JSON to extract model IDs
+        # Parse JSON to extract model IDs. Prefer python to avoid pulling in permission IDs
+        # like "modelperm-..." and to handle any JSON escaping reliably.
         local models
-        models=$(echo "$vllm_response" | grep -o '"id"[[:space:]]*:[[:space:]]*"[^"]*"' | sed 's/"id"[[:space:]]*:[[:space:]]*"//;s/"$//')
+        if command -v python3 >/dev/null 2>&1; then
+            models=$(printf '%s' "$vllm_response" | python3 -c 'import json,sys
+try:
+    payload=json.load(sys.stdin)
+    for item in payload.get("data", []) or []:
+        mid=item.get("id") if isinstance(item, dict) else None
+        if isinstance(mid, str) and mid:
+            print(mid)
+except Exception:
+    pass')
+        else
+            models=$(printf '%s' "$vllm_response" \
+                | grep -o '"id"[[:space:]]*:[[:space:]]*"[^"]*"' \
+                | sed 's/"id"[[:space:]]*:[[:space:]]*"//;s/"$//' \
+                | grep -v '^modelperm-')
+        fi
+        models=$(printf '%s' "$models" | tr -d '\r')
         while IFS= read -r model; do
             [[ -n "$model" ]] && AVAILABLE_MODELS+=("$model")
         done <<< "$models"
@@ -215,7 +232,23 @@ query_host_models() {
         vllm_response=$(curl -s --connect-timeout 5 "$base_url/v1/models" 2>/dev/null)
         if [[ -n "$vllm_response" && "$vllm_response" == *'"data"'* ]]; then
             local models
-            models=$(echo "$vllm_response" | grep -o '"id"[[:space:]]*:[[:space:]]*"[^"]*"' | sed 's/"id"[[:space:]]*:[[:space:]]*"//;s/"$//')
+            if command -v python3 >/dev/null 2>&1; then
+                models=$(printf '%s' "$vllm_response" | python3 -c 'import json,sys
+try:
+    payload=json.load(sys.stdin)
+    for item in payload.get("data", []) or []:
+        mid=item.get("id") if isinstance(item, dict) else None
+        if isinstance(mid, str) and mid:
+            print(mid)
+except Exception:
+    pass')
+            else
+                models=$(printf '%s' "$vllm_response" \
+                    | grep -o '"id"[[:space:]]*:[[:space:]]*"[^"]*"' \
+                    | sed 's/"id"[[:space:]]*:[[:space:]]*"//;s/"$//' \
+                    | grep -v '^modelperm-')
+            fi
+            models=$(printf '%s' "$models" | tr -d '\r')
             while IFS= read -r model; do
                 [[ -n "$model" ]] && AVAILABLE_MODELS+=("$model")
             done <<< "$models"
@@ -242,10 +275,14 @@ check_model_exists() {
     local model="$1"
     shift
     local hosts=("$@")
+
+    # Normalize user input (trim whitespace and strip CR)
+    model=$(printf '%s' "$model" | tr -d '\r' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
     
     for host in "${hosts[@]}"; do
         query_host_models "$host"
         for available in "${AVAILABLE_MODELS[@]}"; do
+            available=$(printf '%s' "$available" | tr -d '\r' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
             # Exact match
             if [[ "$available" == "$model" ]]; then
                 return 0
