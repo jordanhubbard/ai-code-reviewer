@@ -431,6 +431,22 @@ class GitHelper:
             return False
         return (self._git_dir / relative).exists()
 
+    def _resolve_branch_ref(self, branch: str) -> Optional[str]:
+        if not branch:
+            return None
+        code, _ = self._run(['show-ref', '--verify', f'refs/heads/{branch}'])
+        if code == 0:
+            return branch
+        code, _ = self._run(['show-ref', '--verify', f'refs/remotes/origin/{branch}'])
+        if code == 0:
+            return f'origin/{branch}'
+        return None
+
+    def _make_fallback_branch(self, base_branch: str) -> str:
+        timestamp = datetime.datetime.utcnow().strftime('%Y%m%d%H%M%S')
+        safe_base = re.sub(r'[^A-Za-z0-9._/-]+', '-', base_branch or 'detached')
+        return f'reviewer/{safe_base}-{timestamp}'
+
     def has_rebase_in_progress(self) -> bool:
         return any(self._path_exists(name) for name in ['rebase-apply', 'rebase-merge'])
 
@@ -493,8 +509,17 @@ class GitHelper:
         if branch == 'HEAD' or not branch:
             code, output = self._run(['checkout', target_branch])
             if code != 0:
-                return False, f'Failed to checkout {target_branch}: {output}'
-            actions.append(f'checked out {target_branch}')
+                if 'already used by worktree' in output:
+                    base_ref = self._resolve_branch_ref(target_branch) or 'HEAD'
+                    fallback_branch = self._make_fallback_branch(target_branch)
+                    code, output = self._run(['checkout', '-b', fallback_branch, base_ref])
+                    if code != 0:
+                        return False, f'Failed to checkout {target_branch}: {output}'
+                    actions.append(f'checked out {fallback_branch} (from {base_ref})')
+                else:
+                    return False, f'Failed to checkout {target_branch}: {output}'
+            else:
+                actions.append(f'checked out {target_branch}')
         else:
             target_branch = branch
 
