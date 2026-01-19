@@ -103,7 +103,7 @@ deps: check-deps
 # Interactive configuration setup
 # Creates config.yaml with user prompts, validates hosts, shows defaults
 config-init:
-	@./scripts/config-init.sh
+	@bash ./scripts/config-init.sh
 
 # Update config.yaml with new defaults from config.yaml.defaults
 # If config.yaml doesn't exist, runs interactive setup instead

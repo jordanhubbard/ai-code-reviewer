@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 #
 # config-init.sh - Interactive configuration setup for AI Code Reviewer
 #

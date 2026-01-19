@@ -4,6 +4,7 @@ from __future__ import annotations
 import os
 import re
 import shlex
+import shutil
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -93,6 +94,15 @@ def run_command(label: str, argv: list[str], log_file) -> int:
     return exit_code
 
 
+def resolve_bash() -> str | None:
+    bash = shutil.which("bash")
+    if bash:
+        return bash
+    # Common FreeBSD location when installed via pkg
+    candidate = "/usr/local/bin/bash"
+    return candidate if Path(candidate).exists() else None
+
+
 def main() -> int:
     project_root = Path(__file__).resolve().parent.parent
     os.chdir(project_root)
@@ -120,7 +130,12 @@ def main() -> int:
 
         if not config_path.exists():
             echo(log_file, "*** No config.yaml found - running interactive setup...")
-            exit_code = run_command("config-init", ["./scripts/config-init.sh"], log_file)
+            bash = resolve_bash()
+            if not bash:
+                echo(log_file, "*** ERROR: bash not found; required to run scripts/config-init.sh")
+                echo(log_file, "*** Install bash (e.g. FreeBSD: pkg install bash) and retry")
+                return 1
+            exit_code = run_command("config-init", [bash, "./scripts/config-init.sh"], log_file)
             if exit_code != 0:
                 return exit_code
         elif defaults_path.exists() and defaults_path.stat().st_mtime > config_path.stat().st_mtime:
