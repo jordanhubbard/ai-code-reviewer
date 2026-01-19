@@ -139,6 +139,9 @@ test: check-deps
 	@echo "=== Import Check: Build Executor ==="
 	@$(VENV_PY) -c "from build_executor import create_executor_from_config; print('✓ build_executor imports OK')"
 	@echo ""
+	@echo "=== Unit Tests ==="
+	@$(VENV_PY) -m unittest discover -s tests -p "test_*.py"
+	@echo ""
 	@echo "=== Config Migration Test ==="
 	@$(VENV_PY) -c "\
 import yaml; \
