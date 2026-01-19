@@ -39,15 +39,15 @@
 
 ### 1. Install Dependencies
 
-```bash
-# On FreeBSD
-sudo pkg install python3 py311-pip
-sudo pip install pyyaml
+The recommended setup is to let the Makefile manage a project-local virtualenv.
 
-# On Linux
-sudo apt install python3 python3-pip
-pip3 install pyyaml
+```bash
+make check-deps
 ```
+
+Notes:
+- `scripts/config-init.sh` requires `bash` (on FreeBSD it is typically `/usr/local/bin/bash`).
+- If `make check-deps` reports missing `bd` (beads), issue tracking is disabled but the reviewer can still run.
 
 ### 2. Set Up an LLM Server (vLLM or Ollama)
 
@@ -73,6 +73,14 @@ OLLAMA_HOST=0.0.0.0:11434 ollama serve
 ```
 
 ### 3. Configure
+
+**Recommended (interactive):**
+
+```bash
+make config-init
+```
+
+**Or manual:**
 
 ```bash
 cd ai-code-reviewer
@@ -107,6 +115,12 @@ You can list **multiple hosts** (vLLM and/or Ollama) and **multiple models**; th
 make run
 ```
 
+For more output while debugging:
+
+```bash
+make run-verbose
+```
+
 The AI will:
 1. Pick a directory from your source tree
 2. Review all files in that directory
@@ -115,6 +129,33 @@ The AI will:
 5. If build fails: iterate until it succeeds
 6. Commit changes
 7. Move to next directory
+
+## Make Targets
+
+Run `make help` for the authoritative list. Common targets:
+
+| Target | What it does |
+|--------|--------------|
+| `make help` | Show available targets |
+| `make check-deps` | Create `.venv/` and install required Python deps (auto-run by `make run`) |
+| `make deps` | Alias for `check-deps` |
+| `make config-init` | Interactive setup wizard to create `config.yaml` |
+| `make config-update` | Merge new defaults into an existing `config.yaml` |
+| `make validate` | Validate LLM connectivity/model availability (`--validate-only`) |
+| `make run` | Run the full review loop (auto-runs `check-deps` and `config-init` when needed) |
+| `make run-verbose` | Run the reviewer with verbose logging (uses existing `config.yaml`) |
+| `make test` | Fast local checks (syntax/import/config migration) |
+| `make test-all` | Extra component tests that require a running LLM server |
+| `make release` | Run tests, tag, and create a GitHub release |
+| `make clean` | Remove caches/logs (local) |
+| `make clean-all` | `clean` plus any leftover local model weights |
+
+### Logs
+
+- `make run` session log: `.reviewer-log/make-run-*.log`
+- Internal ops log: `.reviewer-log/ops.jsonl`
+- Per-step conversation logs: `personas/<persona>/logs/step_*.txt`
+- Source-tree metadata (per audited project): `<source.root>/.ai-code-reviewer/`
 
 ## Configuration Examples
 
