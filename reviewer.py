@@ -801,13 +801,22 @@ class BeadsManager:
     ) -> subprocess.CompletedProcess:
         if not self.bd_cmd:
             raise BeadsMigrationError("bd command not available for beads migration")
-        return subprocess.run(
-            [self.bd_cmd] + args,
-            cwd=str(cwd or self.repo_root),
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-        )
+        cwd_path = cwd or self.repo_root
+        cmd = [self.bd_cmd] + args
+        try:
+            return subprocess.run(
+                cmd,
+                cwd=str(cwd_path),
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise BeadsMigrationError(
+                f"bd command timed out after {timeout}s in {cwd_path}: {shlex.join(cmd)}\n"
+                "This can happen on very large repositories when rebuilding the beads DB.\n"
+                "Try running the command manually with a higher timeout, or set BD_MIGRATION_TIMEOUT_SECONDS."
+            ) from exc
 
     def _bd_supports_migrate_issues(self) -> bool:
         try:
@@ -889,7 +898,8 @@ class BeadsManager:
         args = ['doctor', '--fix', '--yes']
         if source:
             args.extend(['--source', source])
-        doctor = self._run_bd_command(args, cwd=root, timeout=300)
+        timeout = int(os.environ.get('BD_MIGRATION_TIMEOUT_SECONDS', '600'))
+        doctor = self._run_bd_command(args, cwd=root, timeout=timeout)
         if doctor.returncode != 0:
             raise BeadsMigrationError(
                 f"bd doctor failed for {root}; stderr: {doctor.stderr.strip()}"
@@ -908,10 +918,11 @@ class BeadsManager:
             )
         prefix = self._determine_issue_prefix(root)
         print(f"*** Beads database missing in {root}; initializing with prefix '{prefix}'...")
+        timeout = int(os.environ.get('BD_MIGRATION_TIMEOUT_SECONDS', '1800'))
         init = self._run_bd_command(
             ['init', '--from-jsonl', '--prefix', prefix],
             cwd=root,
-            timeout=300,
+            timeout=timeout,
         )
         if init.returncode != 0:
             raise BeadsMigrationError(
@@ -949,6 +960,7 @@ class BeadsManager:
         if (to_root / '.beads').exists():
             self._ensure_beads_db(to_root)
 
+        timeout = int(os.environ.get('BD_MIGRATION_TIMEOUT_SECONDS', '1800'))
         result = self._run_bd_command(
             [
                 'migrate', 'issues',
@@ -959,7 +971,7 @@ class BeadsManager:
                 '--yes',
             ],
             cwd=self.tool_root,
-            timeout=300,
+            timeout=timeout,
         )
         if result.returncode != 0:
             raise BeadsMigrationError(
@@ -1791,12 +1803,11 @@ class ReviewLoop:
                 print("    Beads: all directories already tracked")
             return manager
         except BeadsMigrationError as exc:
-            print("\nERROR: Beads migration failed")
+            print("\nWARNING: Beads migration failed; continuing without beads integration")
             print("-" * 70)
             print(str(exc))
-            print("\nAborting: beads data cannot be safely migrated to the source tree.")
             print("-" * 70)
-            raise SystemExit(1)
+            return None
         except Exception as exc:
             print(f"*** WARNING: Unable to initialize beads manager: {exc}")
             logger.warning("Beads initialization failed", exc_info=exc)
@@ -4232,12 +4243,10 @@ def preflight_sanity_check(
         tool_root = Path(__file__).resolve().parent
         BeadsManager(source_root, tool_root=tool_root, git_helper=git)
     except BeadsMigrationError as exc:
-        print("\nERROR: Beads migration failed")
+        print("\nWARNING: Beads migration failed; continuing without beads integration")
         print("-" * 70)
         print(str(exc))
-        print("\nAborting: beads data cannot be safely migrated to the source tree.")
         print("-" * 70)
-        return False
 
     print("\n" + "=" * 70)
     print("PRE-FLIGHT SANITY CHECK")
