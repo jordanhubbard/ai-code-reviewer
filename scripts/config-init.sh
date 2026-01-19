@@ -38,6 +38,37 @@ DEFAULT_BUILD_TIMEOUT=7200
 DEFAULT_PERSONA="personas/freebsd-angry-ai"
 DEFAULT_TARGET_DIRS=10
 
+
+expand_path() {
+    local raw="$1"
+    if command -v python3 >/dev/null 2>&1; then
+        python3 -c 'import os,sys
+p=sys.argv[1]
+print(os.path.expanduser(os.path.expandvars(p)))' "$raw"
+        return 0
+    fi
+    # Best-effort fallback: expand ~ only when it is the first character
+    case "$raw" in
+        ~/*)
+            echo "${HOME}${raw#\~}"
+            ;;
+        *)
+            echo "$raw"
+            ;;
+    esac
+}
+
+
+validate_source_root_dir() {
+    local raw="$1"
+    local expanded
+    expanded=$(expand_path "$raw")
+    if [[ -d "$expanded" ]]; then
+        return 0
+    fi
+    return 1
+}
+
 # Arrays to hold user input
 declare -a HOSTS
 declare -a MODELS
@@ -725,23 +756,51 @@ main() {
     fi
     
     while true; do
-        # Step 1: Hosts
+        # Step 1: Source Configuration (validate directory early to fail fast)
+        print_section "Source Configuration"
+        read_value "Source root directory" "$DEFAULT_SOURCE_ROOT" SOURCE_ROOT
+        while true; do
+            if validate_source_root_dir "$SOURCE_ROOT"; then
+                break
+            fi
+            echo ""
+            print_warning "Source root is not a directory (after ~/$VARS expansion): $SOURCE_ROOT"
+            echo ""
+            echo "This could mean:"
+            echo "  - The path is wrong"
+            echo "  - The directory doesn't exist on this machine"
+            echo "  - You need to mount/clone the repo first"
+            echo ""
+            echo -n "Use this value anyway? (y/N/r to re-enter): "
+            read -r add_anyway
+            case "${add_anyway,,}" in
+                y)
+                    print_warning "Keeping source root (not validated): $SOURCE_ROOT"
+                    break
+                    ;;
+                r)
+                    read_value "Source root directory" "$DEFAULT_SOURCE_ROOT" SOURCE_ROOT
+                    ;;
+                *)
+                    read_value "Source root directory" "$DEFAULT_SOURCE_ROOT" SOURCE_ROOT
+                    ;;
+            esac
+        done
+
+        read_value "Build command" "$DEFAULT_BUILD_COMMAND" BUILD_COMMAND
+        read_value "Build timeout (seconds)" "$DEFAULT_BUILD_TIMEOUT" BUILD_TIMEOUT
+
+        # Step 2: Hosts
         read_hosts HOSTS DEFAULT_HOSTS
-        
-        # Step 2: Models (with validation against hosts)
+
+        # Step 3: Models (with validation against hosts)
         read_models MODELS DEFAULT_MODELS HOSTS
-        
-        # Step 3: LLM Settings
+
+        # Step 4: LLM Settings
         print_section "LLM Settings"
         read_value "Request timeout (seconds)" "$DEFAULT_TIMEOUT" TIMEOUT
         read_value "Max tokens per response" "$DEFAULT_MAX_TOKENS" MAX_TOKENS
         read_value "Temperature (0.0-1.0)" "$DEFAULT_TEMPERATURE" TEMPERATURE
-        
-        # Step 4: Source Configuration
-        print_section "Source Configuration"
-        read_value "Source root directory" "$DEFAULT_SOURCE_ROOT" SOURCE_ROOT
-        read_value "Build command" "$DEFAULT_BUILD_COMMAND" BUILD_COMMAND
-        read_value "Build timeout (seconds)" "$DEFAULT_BUILD_TIMEOUT" BUILD_TIMEOUT
         
         # Step 5: Review Settings
         print_section "Review Settings"

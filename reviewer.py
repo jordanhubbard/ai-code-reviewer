@@ -4599,12 +4599,35 @@ Examples:
     
     from llm_client import create_client_from_config, LLMError, LLMConnectionError
     from build_executor import create_executor_from_config
+
+    # Validate source.root early (directory existence) to fail fast before LLM probing.
+    # Note: Full source-tree validation (Makefile/CMakeLists.txt) still happens below.
+    if not args.validate_only:
+        build_section = config.get('build', config.get('source', {}))
+        source_root_raw = build_section.get('source_root', build_section.get('root', '..'))
+        source_root_str = os.path.expandvars(str(source_root_raw)).strip()
+        source_root = Path(source_root_str).expanduser()
+        if not source_root.is_absolute():
+            source_root = Path(__file__).resolve().parent / source_root
+        source_root = source_root.resolve()
+        if not source_root.is_dir():
+            print("\n" + "=" * 70)
+            print("ERROR: Invalid Source Tree Configuration")
+            print("=" * 70)
+            print(f"Source root is not a directory: {source_root}")
+            print()
+            print("Please fix config.yaml:")
+            print(f"  1. Open: {config_path}")
+            print("  2. Set source.root (or build.source_root) to a valid directory")
+            print(f"  3. Example: source.root: \"{Path.home()}/freebsd-src\"")
+            print("=" * 70 + "\n")
+            sys.exit(1)
     
     try:
         logger.info("Connecting to LLM server(s)...")
         llm_client = create_client_from_config(config)
         logger.info("LLM connection validated successfully!")
-        
+
         if args.validate_only:
             print("\n✓ LLM connection validated!")
             host_status = llm_client.get_host_status()
@@ -4612,7 +4635,7 @@ Examples:
                 print(f"  Host: {host['url']} ({host['backend']}) -> model: {host['model']}")
             print(f"  Available models: {', '.join(llm_client.list_models())}")
             sys.exit(0)
-        
+
     except LLMError as e:
         print(str(e), file=sys.stderr)
         sys.exit(1)
