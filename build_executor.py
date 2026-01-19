@@ -480,7 +480,8 @@ def create_executor_from_config(config_dict: Dict[str, Any], run_pre_build: bool
     # Resolve source root relative to config file location
     # Support both 'source_root' (new) and 'root' (old) keys
     source_root_str = build_config.get('source_root', build_config.get('root', '..'))
-    source_root = Path(source_root_str)
+    source_root_str = os.path.expandvars(str(source_root_str)).strip()
+    source_root = Path(source_root_str).expanduser()
     
     if not source_root.is_absolute():
         # Default: assume config is in angry-ai/ subdirectory
