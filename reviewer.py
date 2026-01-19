@@ -936,8 +936,10 @@ class BeadsManager:
 
     def _sqlite_env_overrides(self) -> Dict[str, str]:
         return {
-            'BD_NO_DB': '0',
-            'BEADS_NO_DB': '0',
+            'BD_NO_DB': 'false',
+            'BEADS_NO_DB': 'false',
+            'BD_NO_DB_BOOL': 'false',
+            'BEADS_NO_DB_BOOL': 'false',
         }
 
     def _bd_supports_migrate_issues(self) -> bool:
@@ -1092,6 +1094,7 @@ class BeadsManager:
                 '--status', 'all',
                 '--include', 'closure',
                 '--yes',
+                '--no-daemon',
             ],
             cwd=self.tool_root,
             timeout=timeout,
