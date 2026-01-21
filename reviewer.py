@@ -1732,7 +1732,11 @@ class ReviewLoop:
         
         # Load or generate the review index
         print("*** Loading review index...")
-        self.index = generate_index(source_root)
+        force_rebuild = bool(self.review_config.get('rebuild_index', False))
+        env_rebuild = os.environ.get('ANGRY_AI_REBUILD_INDEX')
+        if env_rebuild is not None:
+            force_rebuild = env_rebuild.strip().lower() in {'1', 'true', 'yes', 'on'}
+        self.index = generate_index(source_root, force_rebuild=force_rebuild)
         print(f"    Found {len(self.index.entries)} reviewable directories")
         self.beads = self._init_beads_manager()
         

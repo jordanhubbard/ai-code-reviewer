@@ -429,9 +429,16 @@ class ReviewIndex:
         return '\n'.join(lines)
 
 
-def generate_index(source_root: Path) -> ReviewIndex:
+def generate_index(source_root: Path, force_rebuild: bool = False) -> ReviewIndex:
     """Generate or load the review index."""
     index = ReviewIndex(source_root)
+    if index.index_path.exists() and not force_rebuild:
+        try:
+            index._load()
+            print(f"*** Using existing review index at {index.index_path}")
+            return index
+        except Exception as exc:
+            print(f"WARNING: Failed to load review index ({exc}); regenerating")
     index.generate()
     index.save()
     return index
@@ -446,7 +453,7 @@ if __name__ == "__main__":
         source_root = Path(__file__).parent.parent
     
     print(f"Generating index for: {source_root}")
-    index = generate_index(source_root)
+    index = generate_index(source_root, force_rebuild=True)
     print(f"Found {len(index.entries)} reviewable directories")
     print(f"Index saved to: {index.index_path}")
     print()
