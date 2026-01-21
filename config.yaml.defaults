@@ -64,7 +64,7 @@ llm:
   #      on each host before configuring this list.
   #
   models:
-    - "nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16"  # Preferred for vLLM (HuggingFace name)
+    - "nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-FP8"   # Preferred for vLLM (HuggingFace name)
     - "qwen2.5-coder:32b"                           # Good Ollama fallback
     # - "qwen2.5-coder:14b"                         # Smaller fallback
     # - "codellama:34b"                             # Alternative
