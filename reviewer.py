@@ -1659,6 +1659,7 @@ class ReviewLoop:
         max_parallel_files: int = 1,
         log_dir: Optional[Path] = None,
         ops_logger: Optional[OpsLogger] = None,
+        forever_mode: bool = False,
     ):
         self.ollama = ollama_client
         self.builder = build_executor
@@ -1668,6 +1669,7 @@ class ReviewLoop:
         self.max_iterations_per_directory = max_iterations_per_directory
         self.max_parallel_files = max_parallel_files
         self.review_config = review_config or {}
+        self.forever_mode = forever_mode
         
         # Persona files (behavior templates - shared across projects)
         self.bootstrap_file = persona_dir / "AI_START_HERE.md"
@@ -4136,9 +4138,11 @@ Output ONLY the lesson entry, nothing else."""
         step = 0
         directory_iterations = 0  # Iterations spent on current directory
         last_directory = None
-        
-        # Continue until we've completed target directories (or 0 = unlimited)
-        while self.target_directories == 0 or self.session.directories_completed < self.target_directories:
+
+        # Continue until we've completed target directories (or 0 = unlimited, or forever mode)
+        while (self.forever_mode or
+               self.target_directories == 0 or
+               self.session.directories_completed < self.target_directories):
             step += 1
             
             # Track iterations per directory
@@ -4163,7 +4167,10 @@ Output ONLY the lesson entry, nothing else."""
             
             # Show hierarchical progress
             progress_summary = self.session.get_progress_summary()
-            dir_progress = f"{self.session.directories_completed}/{self.target_directories}" if self.target_directories > 0 else f"{self.session.directories_completed}"
+            if self.forever_mode:
+                dir_progress = f"{self.session.directories_completed} (forever mode)"
+            else:
+                dir_progress = f"{self.session.directories_completed}/{self.target_directories}" if self.target_directories > 0 else f"{self.session.directories_completed}"
             logger.info(f"Step {step} | Dir {dir_progress} | {self.session.current_directory or 'No scope'} ({directory_iterations}/{self.max_iterations_per_directory})")
             print(f"\n{'='*70}")
             print(f"STEP {step} | Directories: {dir_progress} | Current: {self.session.current_directory or 'None'} ({directory_iterations}/{self.max_iterations_per_directory})")
@@ -4314,9 +4321,22 @@ Output ONLY the lesson entry, nothing else."""
             
             result = self._execute_action(action)
             logger.info(f"Action result: {result[:100]}...")
-            
+
             self.history.append({"role": "user", "content": result})
-            
+
+            # Check if we're in forever mode and no more work remains
+            if self.forever_mode:
+                next_pending = self.index.get_next_pending()
+                if next_pending is None and self.session.current_directory is None:
+                    logger.info("Forever mode: No more pending directories. Stopping.")
+                    print("\n" + "="*60)
+                    print("FOREVER MODE COMPLETE")
+                    print("="*60)
+                    print("All directories have been reviewed.")
+                    print(f"Total directories completed: {self.session.directories_completed}")
+                    print("="*60)
+                    break
+
             # Prune history if getting too long
             if len(self.history) > 42:
                 self.history = self.history[:2] + self.history[-40:]
@@ -4649,7 +4669,8 @@ def main():
 Examples:
     python reviewer.py                     # Use default config.yaml
     python reviewer.py --config my.yaml    # Use custom config
-    python reviewer.py --validate-only     # Just validate Ollama connection
+    python reviewer.py --forever           # Run until all directories reviewed
+    python reviewer.py --validate-only     # Just validate LLM connection
     python reviewer.py --skip-preflight    # Skip pre-flight build check
         """
     )
@@ -4677,7 +4698,13 @@ Examples:
         action='store_true',
         help='Skip pre-flight build sanity check (use with caution)'
     )
-    
+
+    parser.add_argument(
+        '--forever',
+        action='store_true',
+        help='Run until all directories are reviewed (ignores target_directories setting)'
+    )
+
     args = parser.parse_args()
     
     log_level = logging.DEBUG if args.verbose else logging.INFO
@@ -4880,9 +4907,10 @@ Examples:
         persona_dir=persona_dir,
         review_config=review_config,
         ops_logger=ops_logger,
-        target_directories=review_config.get('target_directories', 10),
+        target_directories=review_config.get('target_directories', 10) if not args.forever else 0,
         max_iterations_per_directory=review_config.get('max_iterations_per_directory', 200),
         max_parallel_files=review_config.get('max_parallel_files', 1),
+        forever_mode=args.forever,
     )
     
     try:

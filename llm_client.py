@@ -14,8 +14,10 @@ Features:
 
 import logging
 import os
+import random
 import threading
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Any, Tuple, Protocol
 
 from ollama_client import (
@@ -75,6 +77,17 @@ class HostConfig:
 
 
 @dataclass
+class UnhealthyHostInfo:
+    """Tracks state of an unhealthy host for recovery attempts."""
+    host_config: HostConfig
+    failed_at: datetime
+    failure_reason: Exception
+    retry_count: int = 0
+    next_retry_at: datetime = field(default_factory=datetime.now)
+    consecutive_failures: int = 0
+
+
+@dataclass
 class MultiHostConfig:
     """Configuration for multi-host LLM client."""
     hosts: List[str]
@@ -91,6 +104,10 @@ class MultiHostConfig:
     adaptive_batch_max: int = 8
     extra_options: Dict[str, Any] = field(default_factory=dict)
     ps_monitor_interval: float = 0.0
+    health_check_enabled: bool = True
+    health_check_interval: int = 30
+    health_check_max_interval: int = 300
+    health_check_timeout: int = 10
 
 
 class MultiHostClient:
@@ -110,10 +127,10 @@ class MultiHostClient:
     def __init__(self, config: MultiHostConfig):
         """
         Initialize the multi-host client.
-        
+
         Args:
             config: MultiHostConfig with hosts, models, and options
-            
+
         Raises:
             LLMConnectionError: If no hosts are reachable
             LLMModelNotFoundError: If no models are available on any host
@@ -121,6 +138,9 @@ class MultiHostClient:
         self.config = config
         self._vllm_hosts: List[HostConfig] = []  # Preferred hosts (vLLM backend)
         self._ollama_hosts: List[HostConfig] = []  # Fallback hosts (Ollama backend)
+        self._unhealthy_hosts: Dict[str, UnhealthyHostInfo] = {}  # key: host.url
+        self._health_check_thread: Optional[threading.Thread] = None
+        self._shutdown_event = threading.Event()
         self._vllm_index = 0
         self._ollama_index = 0
         self._host_lock = threading.Lock()
@@ -173,6 +193,9 @@ class MultiHostClient:
             f"max_parallel={self._effective_max_parallel}"
         )
 
+        # Start health check thread for automatic recovery
+        self._start_health_check_thread()
+
     def _total_hosts(self) -> int:
         return len(self._vllm_hosts) + len(self._ollama_hosts)
 
@@ -222,6 +245,7 @@ class MultiHostClient:
     def _mark_host_unhealthy(self, host: HostConfig, reason: Exception) -> None:
         with self._host_lock:
             before = self._total_hosts()
+            # Remove from active pools
             if host.backend == 'vllm':
                 self._vllm_hosts = [h for h in self._vllm_hosts if h is not host]
                 if self._vllm_index >= len(self._vllm_hosts):
@@ -230,11 +254,38 @@ class MultiHostClient:
                 self._ollama_hosts = [h for h in self._ollama_hosts if h is not host]
                 if self._ollama_index >= len(self._ollama_hosts):
                     self._ollama_index = 0
+
+            # Move to unhealthy pool for recovery attempts
+            now = datetime.now()
+            base_interval = self.config.health_check_interval
+            jitter = random.uniform(0, base_interval * 0.1)
+            next_retry = now + timedelta(seconds=base_interval + jitter)
+
+            if host.url in self._unhealthy_hosts:
+                # Update existing entry
+                info = self._unhealthy_hosts[host.url]
+                info.retry_count += 1
+                info.consecutive_failures += 1
+                info.failure_reason = reason
+                info.next_retry_at = next_retry
+            else:
+                # Create new entry
+                self._unhealthy_hosts[host.url] = UnhealthyHostInfo(
+                    host_config=host,
+                    failed_at=now,
+                    failure_reason=reason,
+                    retry_count=0,
+                    next_retry_at=next_retry,
+                    consecutive_failures=1
+                )
+
             after = self._total_hosts()
+
         logger.warning(
             f"Host {host.url} marked unhealthy ({host.backend}): {reason}. "
-            f"Remaining hosts: {after}"
+            f"Next retry in {base_interval + jitter:.0f}s. Remaining hosts: {after}"
         )
+
         if after == 0:
             return
         if before != after:
@@ -661,8 +712,161 @@ class MultiHostClient:
         )
         if host_info:
             logger.info(f"  Per-host: {', '.join(host_info)}")
-        
+
         return recommended
+
+    def _update_retry_schedule(self, info: UnhealthyHostInfo, reason: Optional[Exception] = None) -> None:
+        """Update retry schedule with exponential backoff."""
+        info.retry_count += 1
+        info.consecutive_failures += 1
+        if reason:
+            info.failure_reason = reason
+
+        base_interval = self.config.health_check_interval
+        max_interval = self.config.health_check_max_interval
+
+        # Exponential backoff: base * (2 ** retry_count) with jitter
+        interval = min(base_interval * (2 ** info.retry_count), max_interval)
+        jitter = random.uniform(0, interval * 0.1)
+        interval += jitter
+
+        info.next_retry_at = datetime.now() + timedelta(seconds=interval)
+        logger.debug(
+            f"Reconnection to {info.host_config.url} failed (retry #{info.retry_count}): "
+            f"{reason or info.failure_reason}. Next retry in {interval:.0f}s"
+        )
+
+    def _validate_host_connection(self, host: HostConfig) -> bool:
+        """
+        Validate a host connection for health check recovery.
+
+        Returns:
+            True if connection is valid, False otherwise
+        """
+        try:
+            # Use existing validation from client implementations
+            if host.backend == 'vllm':
+                host.client._validate_connection()
+            else:  # ollama
+                host.client._validate_connection()
+            return True
+        except Exception as e:
+            logger.debug(f"Health check failed for {host.url}: {e}")
+            return False
+
+    def _restore_healthy_host(self, info: UnhealthyHostInfo) -> None:
+        """Restore a recovered host to the active pool."""
+        with self._host_lock:
+            host = info.host_config
+            # Remove from unhealthy pool
+            if host.url in self._unhealthy_hosts:
+                del self._unhealthy_hosts[host.url]
+
+            # Add back to appropriate active pool
+            if host.backend == 'vllm':
+                self._vllm_hosts.append(host)
+            else:
+                self._ollama_hosts.append(host)
+
+            after = self._total_hosts()
+
+        downtime = datetime.now() - info.failed_at
+        downtime_str = str(downtime).split('.')[0]  # Remove microseconds
+
+        logger.info(
+            f"Host {host.url} recovered after {info.retry_count} retries (down {downtime_str}). "
+            f"Restored to active pool. Active hosts: {after}"
+        )
+
+        # Recalculate parallelism if dynamic mode
+        if self._dynamic_parallelism:
+            try:
+                new_limit = self._query_recommended_parallelism()
+                self._set_concurrency_limit(new_limit)
+            except Exception as e:
+                logger.debug(f"Could not recalculate parallelism after recovery: {e}")
+
+    def _attempt_host_recovery(self) -> None:
+        """Attempt to recover hosts that are due for retry."""
+        now = datetime.now()
+
+        # Find hosts due for retry (snapshot to avoid holding lock during I/O)
+        with self._host_lock:
+            hosts_to_retry = [
+                (url, info) for url, info in self._unhealthy_hosts.items()
+                if info.next_retry_at <= now
+            ]
+
+        # Try recovery for each due host
+        for url, info in hosts_to_retry:
+            logger.info(f"Attempting reconnection to {url} (retry #{info.retry_count + 1})...")
+
+            if self._validate_host_connection(info.host_config):
+                # Success - restore to active pool
+                self._restore_healthy_host(info)
+            else:
+                # Failed - update retry schedule
+                self._update_retry_schedule(info)
+
+    def _health_check_loop(self) -> None:
+        """Background thread loop for health checks."""
+        logger.info("Health check thread started")
+        last_status_log = datetime.now()
+        status_log_interval = timedelta(minutes=5)
+
+        while not self._shutdown_event.is_set():
+            # Wake every 5 seconds to check for work
+            self._shutdown_event.wait(timeout=5.0)
+
+            if self._shutdown_event.is_set():
+                break
+
+            # Attempt recovery for any due hosts
+            try:
+                self._attempt_host_recovery()
+            except Exception as e:
+                logger.error(f"Error in health check loop: {e}", exc_info=True)
+
+            # Periodic status logging
+            if datetime.now() - last_status_log >= status_log_interval:
+                with self._host_lock:
+                    healthy = len(self._vllm_hosts) + len(self._ollama_hosts)
+                    unhealthy = len(self._unhealthy_hosts)
+                if healthy > 0 or unhealthy > 0:
+                    logger.info(
+                        f"Connection pool status: {healthy} healthy, {unhealthy} unhealthy"
+                    )
+                last_status_log = datetime.now()
+
+        logger.info("Health check thread stopped")
+
+    def _start_health_check_thread(self) -> None:
+        """Start the background health check thread."""
+        if not self.config.health_check_enabled:
+            logger.info("Health check disabled by configuration")
+            return
+
+        self._health_check_thread = threading.Thread(
+            target=self._health_check_loop,
+            daemon=True,
+            name="LLM-HealthCheck"
+        )
+        self._health_check_thread.start()
+        logger.info("Health check thread initialized")
+
+    def shutdown(self) -> None:
+        """Shutdown the client and health check thread."""
+        logger.info("Shutting down MultiHostClient...")
+        self._shutdown_event.set()
+
+        if self._health_check_thread and self._health_check_thread.is_alive():
+            self._health_check_thread.join(timeout=10)
+            if self._health_check_thread.is_alive():
+                logger.warning("Health check thread did not stop gracefully")
+            else:
+                logger.info("Health check thread stopped")
+
+        logger.info("MultiHostClient shutdown complete")
 
 
 def create_client_from_config(config_dict: Dict[str, Any]) -> MultiHostClient:
@@ -764,7 +968,12 @@ def create_client_from_config(config_dict: Dict[str, Any]) -> MultiHostClient:
     extra_options = llm_config.get('options', {})
     if not isinstance(extra_options, dict):
         extra_options = {}
-    
+
+    # Parse health check config
+    health_check_cfg = llm_config.get('health_check', {})
+    if not isinstance(health_check_cfg, dict):
+        health_check_cfg = {}
+
     config = MultiHostConfig(
         hosts=hosts,
         models=models,
@@ -780,6 +989,10 @@ def create_client_from_config(config_dict: Dict[str, Any]) -> MultiHostClient:
         adaptive_batch_max=_coerce_int(batching_cfg.get('max_num_batch', 8), 8),
         extra_options=extra_options,
         ps_monitor_interval=max(0.0, float(llm_config.get('ps_monitor_interval', 0))),
+        health_check_enabled=_coerce_bool(health_check_cfg.get('enabled', True), True),
+        health_check_interval=_coerce_int(health_check_cfg.get('interval', 30), 30),
+        health_check_max_interval=_coerce_int(health_check_cfg.get('max_interval', 300), 300),
+        health_check_timeout=_coerce_int(health_check_cfg.get('timeout', 10), 10),
     )
     
     return MultiHostClient(config)

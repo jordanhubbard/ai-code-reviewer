@@ -111,6 +111,17 @@ llm:
   #   top_p: 0.95
   options: {}
 
+  # Health check configuration for automatic host recovery
+  # When a host fails, it's moved to an unhealthy pool and the system
+  # continues with remaining hosts. Background health checks attempt
+  # to reconnect using exponential backoff (30s, 60s, 120s, 240s, 300s max).
+  # Once recovered, the host is automatically restored to the active pool.
+  health_check:
+    enabled: true        # Enable automatic recovery (set false for legacy behavior)
+    interval: 30         # Base retry interval in seconds
+    max_interval: 300    # Maximum retry interval (5 minutes)
+    timeout: 10          # Timeout for health check probes
+
 # =============================================================================
 # Legacy Ollama Configuration (DEPRECATED - use 'llm' section above)
 # =============================================================================
