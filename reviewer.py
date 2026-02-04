@@ -30,6 +30,7 @@ import shutil
 import signal
 import subprocess
 import sys
+import time
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed, Future
 from difflib import SequenceMatcher
@@ -3939,6 +3940,190 @@ Output ONLY the lesson entry, nothing else."""
             sections.append(f"{header}\n```diff\n{body}\n```")
         return "\n\n".join(sections)
     
+    # Error classification for forever mode
+    # Recoverable errors can be retried; unrecoverable trigger emergency stop
+    RECOVERABLE_ERRORS = {
+        'timeout': 'LLM request timed out',
+        'connection': 'Connection to LLM server failed',
+        'rate_limit': 'Rate limited by LLM server',
+        'temporary': 'Temporary server error',
+    }
+    UNRECOVERABLE_ERRORS = {
+        'model_not_found': 'Model does not exist on server',
+        'auth_failed': 'Authentication failed',
+        'config_error': 'Configuration is invalid',
+        'disk_full': 'Disk full - cannot write files',
+        'git_corrupt': 'Git repository is corrupted',
+    }
+    
+    def _classify_llm_error(self, error_msg: str) -> tuple:
+        """
+        Classify an LLM error as recoverable or unrecoverable.
+        
+        Returns:
+            (is_recoverable, error_type, description)
+        """
+        error_lower = error_msg.lower()
+        
+        # Check for recoverable errors first
+        if 'timed out' in error_lower or 'timeout' in error_lower:
+            return (True, 'timeout', self.RECOVERABLE_ERRORS['timeout'])
+        if 'connection' in error_lower or 'connect' in error_lower:
+            return (True, 'connection', self.RECOVERABLE_ERRORS['connection'])
+        if 'rate' in error_lower and 'limit' in error_lower:
+            return (True, 'rate_limit', self.RECOVERABLE_ERRORS['rate_limit'])
+        if '503' in error_lower or '502' in error_lower or 'unavailable' in error_lower:
+            return (True, 'temporary', self.RECOVERABLE_ERRORS['temporary'])
+        if 'temporarily' in error_lower or 'try again' in error_lower:
+            return (True, 'temporary', self.RECOVERABLE_ERRORS['temporary'])
+        
+        # Check for unrecoverable errors
+        if 'does not exist' in error_lower or 'not found' in error_lower:
+            if 'model' in error_lower:
+                return (False, 'model_not_found', self.UNRECOVERABLE_ERRORS['model_not_found'])
+        if 'auth' in error_lower or 'unauthorized' in error_lower or '401' in error_lower:
+            return (False, 'auth_failed', self.UNRECOVERABLE_ERRORS['auth_failed'])
+        if 'disk' in error_lower and ('full' in error_lower or 'space' in error_lower):
+            return (False, 'disk_full', self.UNRECOVERABLE_ERRORS['disk_full'])
+        
+        # Default: treat unknown errors as recoverable (try before giving up)
+        return (True, 'unknown', f'Unknown error: {error_msg[:100]}')
+    
+    def _commit_lessons_and_continue(self, reason: str) -> bool:
+        """
+        Commit any pending lessons to the source tree repo before continuing.
+        
+        This ensures lessons are not lost if we need to recover from an error.
+        In forever mode, we commit lessons and keep going rather than stopping.
+        
+        Returns:
+            True if lessons were committed, False otherwise
+        """
+        # Check if there are any uncommitted changes to lessons file
+        if not self.lessons_file.exists():
+            return False
+        
+        try:
+            # Check if lessons file has changes
+            diff = self.git.diff(str(self.lessons_file))
+            if not diff:
+                # Check untracked
+                status = self.git.show_status()
+                if str(self.lessons_file.relative_to(self.source_root)) not in status:
+                    return False
+            
+            # Stage and commit the lessons
+            self.git.add(str(self.lessons_file))
+            commit_msg = f"LESSONS: {reason}\n\nAuto-committed lessons learned before recovery."
+            success, output = self.git.commit(commit_msg)
+            
+            if success:
+                self.git.push()
+                print(f"*** Lessons committed and pushed: {reason}")
+                logger.info(f"Auto-committed lessons: {reason}")
+                return True
+            else:
+                logger.warning(f"Failed to commit lessons: {output}")
+                return False
+                
+        except Exception as e:
+            logger.warning(f"Error committing lessons: {e}")
+            return False
+    
+    def _emergency_stop(self, error_type: str, error_msg: str, context: str = "") -> None:
+        """
+        Perform an emergency stop with clear user instructions.
+        
+        This should ONLY be called for truly unrecoverable errors.
+        """
+        print("\n" + "="*70)
+        print("🛑 EMERGENCY STOP - UNRECOVERABLE ERROR")
+        print("="*70)
+        print(f"\nError Type: {error_type}")
+        print(f"Error: {error_msg}")
+        if context:
+            print(f"Context: {context}")
+        
+        print("\n" + "-"*70)
+        print("WHY THIS CANNOT BE RECOVERED:")
+        print("-"*70)
+        
+        if error_type == 'model_not_found':
+            print("""
+The specified AI model does not exist on the LLM server.
+This is a configuration issue that requires manual intervention.
+
+TO FIX:
+1. Check your LLM server for available models:
+   - For Ollama: ollama list
+   - For vLLM: check your server's model directory
+2. Update config.yaml with a valid model name:
+   llm:
+     models:
+       - "your-model-name-here"
+3. Restart the review: make run-forever
+""")
+        elif error_type == 'auth_failed':
+            print("""
+Authentication to the LLM server failed.
+This requires updating credentials.
+
+TO FIX:
+1. Check your API key or credentials in config.yaml
+2. Verify the LLM server is accessible
+3. Restart the review: make run-forever
+""")
+        elif error_type == 'disk_full':
+            print("""
+The disk is full. Cannot write files or git commits.
+
+TO FIX:
+1. Free up disk space on this system
+2. Consider cleaning git history or old logs
+3. Restart the review: make run-forever
+""")
+        elif error_type == 'git_corrupt':
+            print("""
+The git repository appears to be corrupted.
+
+TO FIX:
+1. Try: git fsck --full
+2. If needed: git reflog expire --expire=now --all && git gc --prune=now
+3. As last resort: re-clone the repository
+4. Restart the review: make run-forever
+""")
+        else:
+            print(f"""
+An unrecoverable error occurred that requires manual intervention.
+
+TO FIX:
+1. Review the error message above
+2. Check config.yaml settings
+3. Verify LLM server status
+4. Restart the review: make run-forever
+""")
+        
+        print("-"*70)
+        print("SESSION STATE:")
+        print("-"*70)
+        print(f"Directories completed: {self.session.directories_completed}")
+        print(f"Current directory: {self.session.current_directory or 'None'}")
+        print(f"Session ID: {self.session.session_id}")
+        
+        # Try to commit any pending lessons before stopping
+        self._commit_lessons_and_continue("Emergency stop - preserving lessons")
+        
+        # Clean up any dirty state
+        self._cleanup_dirty_state()
+        
+        print("\n" + "="*70)
+        print("The review has stopped. Follow the instructions above to resolve.")
+        print("="*70 + "\n")
+        
+        # Log to ops
+        if self.ops:
+            self.ops.ai_error(f"EMERGENCY_STOP: {error_type} - {error_msg}")
+    
     def _recover_from_loop(self, action: Dict[str, Any]) -> str:
         """
         Automatically recover when stuck in an infinite loop.
@@ -4178,37 +4363,82 @@ Output ONLY the lesson entry, nothing else."""
                 print(f"\n{progress_summary}")
             print('='*70)
             
+            # Track retry state for recoverable errors
+            if not hasattr(self.session, 'llm_retry_count'):
+                self.session.llm_retry_count = 0
+                self.session.llm_retry_backoff = 5  # Start with 5 second backoff
+            
             try:
                 response = self.ollama.chat(self.history)
+                # Reset retry counters on success
+                self.session.llm_retry_count = 0
+                self.session.llm_retry_backoff = 5
             except Exception as e:
                 error_msg = str(e)
-                if "timed out" in error_msg.lower() or "timeout" in error_msg.lower():
-                    logger.error(f"LLM timeout after {self.ollama.config.timeout}s")
-                    self.ops.ai_timeout(self.ollama.config.timeout, f"Step {step}")
+                is_recoverable, error_type, description = self._classify_llm_error(error_msg)
+                
+                logger.error(f"LLM error ({error_type}): {error_msg}")
+                self.ops.ai_error(error_msg)
+                
+                if is_recoverable and self.forever_mode:
+                    # In forever mode, recoverable errors should retry, not stop
+                    self.session.llm_retry_count += 1
+                    max_retries = 10  # Give up after 10 consecutive failures
+                    
+                    if self.session.llm_retry_count > max_retries:
+                        # Too many retries - commit lessons and emergency stop
+                        self._commit_lessons_and_continue(f"LLM error after {max_retries} retries")
+                        self._emergency_stop(
+                            error_type, 
+                            error_msg,
+                            f"Failed {max_retries} consecutive times. Error type: {description}"
+                        )
+                        break
+                    
+                    # Calculate backoff with exponential increase, capped at 5 minutes
+                    backoff = min(self.session.llm_retry_backoff, 300)
+                    self.session.llm_retry_backoff = min(self.session.llm_retry_backoff * 2, 300)
+                    
                     print(f"\n{'='*60}")
-                    print("ERROR: Request timed out")
+                    print(f"⚠️  RECOVERABLE ERROR (attempt {self.session.llm_retry_count}/{max_retries})")
                     print('='*60)
-                    print(f"The model took longer than {self.ollama.config.timeout}s to respond.")
-                    print("This usually happens with large files (1000+ lines).")
-                    print("\nSolutions:")
-                    print(f"1. Increase timeout in config.yaml: llm.timeout (currently {self.ollama.config.timeout}s)")
-                    print("2. Review smaller files first")
-                    print("3. Break large files into sections")
+                    print(f"Error type: {error_type}")
+                    print(f"Description: {description}")
+                    print(f"\nThis error is recoverable. Retrying in {backoff} seconds...")
+                    print(f"Forever mode continues automatically.")
                     print('='*60)
-                elif "does not exist" in error_msg.lower() or "not found" in error_msg.lower():
-                    logger.error(f"LLM model error: {e}")
-                    self.ops.ai_error(error_msg)
+                    
+                    # Commit any pending lessons before we wait
+                    if self.session.llm_retry_count == 1:
+                        self._commit_lessons_and_continue(f"Preserving lessons before retry ({error_type})")
+                    
+                    # Wait with backoff
+                    time.sleep(backoff)
+                    continue  # Retry the loop iteration
+                    
+                elif not is_recoverable:
+                    # Unrecoverable error - emergency stop with instructions
+                    self._commit_lessons_and_continue(f"Unrecoverable error: {error_type}")
+                    self._emergency_stop(error_type, error_msg)
+                    break
+                    
+                else:
+                    # Not in forever mode - show error and stop (legacy behavior)
                     print(f"\n{'='*60}")
-                    print("ERROR: Model not found on server")
+                    print(f"ERROR: {description}")
                     print('='*60)
                     print(f"{error_msg}")
-                    print("\nTo see available models, check your LLM server.")
-                    print("Then update config.yaml llm.models with valid model names.")
+                    if error_type == 'timeout':
+                        print(f"\nThe model took longer than {self.ollama.config.timeout}s to respond.")
+                        print("Solutions:")
+                        print(f"1. Increase timeout in config.yaml: llm.timeout")
+                        print("2. Review smaller files first")
+                        print("3. Use --forever mode for automatic retry")
+                    elif error_type == 'model_not_found':
+                        print("\nTo see available models, check your LLM server.")
+                        print("Then update config.yaml llm.models with valid model names.")
                     print('='*60)
-                else:
-                    logger.error(f"LLM error: {e}")
-                    self.ops.ai_error(error_msg)
-                break
+                    break
             
             last_user_msg = self.history[-1]['content'] if self.history else ""
             self._log_exchange(step, last_user_msg, response)
