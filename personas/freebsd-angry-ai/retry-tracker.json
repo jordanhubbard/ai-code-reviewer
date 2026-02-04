@@ -2,5 +2,41 @@
   "bin/cpuset": {
     "attempts": 3,
     "last_attempt": "2026-01-02T06:50:29.318003"
+  },
+  "bin/echo/tests": {
+    "attempts": 1,
+    "last_attempt": "2026-01-19T21:19:03.637226"
+  },
+  "bin/sh/bltin": {
+    "attempts": 1,
+    "last_attempt": "2026-01-22T12:04:37.557442"
+  },
+  "bin/sh/tests/set-e": {
+    "attempts": 1,
+    "last_attempt": "2026-01-22T14:18:52.599566"
+  },
+  "bin/timeout": {
+    "attempts": 1,
+    "last_attempt": "2026-01-22T15:28:15.682937"
+  },
+  "sbin/devmatch": {
+    "attempts": 1,
+    "last_attempt": "2026-01-25T02:58:58.083790"
+  },
+  "sbin/geom/misc": {
+    "attempts": 1,
+    "last_attempt": "2026-02-02T12:12:01.430230"
+  },
+  "sbin/growfs/tests": {
+    "attempts": 1,
+    "last_attempt": "2026-02-03T20:12:58.520439"
+  },
+  "sbin/ipf/ipfsync": {
+    "attempts": 1,
+    "last_attempt": "2026-02-04T00:35:53.903434"
+  },
+  "sbin/ipf/ipmon": {
+    "attempts": 1,
+    "last_attempt": "2026-02-04T00:55:41.424776"
   }
 }
