@@ -21,7 +21,7 @@ FREEBSD_PYYAML_PKG?=py311-pyyaml
 # All paths are relative to the Makefile
 
 # Phony targets
-.PHONY: all venv deps check-deps config-init config-update validate run run-verbose test test-all release clean clean-all help
+.PHONY: all venv deps check-deps config-init config-update validate run run-verbose run-forever test test-all release clean clean-all help
 
 # Default target
 all: help
@@ -170,6 +170,10 @@ run:
 run-verbose: check-deps
 	$(VENV_PY) reviewer.py --config config.yaml -v
 
+# Run in forever mode (review all directories until complete)
+run-forever: check-deps
+	$(VENV_PY) reviewer.py --config config.yaml --forever
+
 #
 # Release target
 #
@@ -257,6 +261,7 @@ help:
 	@echo "Usage:"
 	@echo "  make run          Start the review loop (auto-checks dependencies)"
 	@echo "  make run-verbose  Run with verbose logging"
+	@echo "  make run-forever  Run until all directories are reviewed"
 	@echo "  make test         Run syntax and import tests (no server required)"
 	@echo "  make test-all     Run all tests including server connectivity"
 	@echo ""
