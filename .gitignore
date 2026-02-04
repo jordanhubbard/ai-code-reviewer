@@ -17,6 +17,9 @@ build/
 *.swo
 *~
 config.yaml
+settings.json
+.mcp.json
+CLAUDE.md
 personas/*/logs/
 
 # Beads issue tracker database (syncs to separate branch via bd sync)
