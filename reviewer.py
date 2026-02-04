@@ -2626,7 +2626,9 @@ If no changes needed, respond with just: NO_EDITS_NEEDED"""
             
             # Generate commit message
             dirs_affected = set(str(Path(f).parent) for f in successful_files)
-            commit_message = self._generate_commit_message(list(successful_files))
+            # Get the diff for the staged files
+            full_diff = self.git.diff_staged()
+            commit_message = self._generate_commit_message(full_diff, list(successful_files))
             
             # Commit
             success, output = self.git.commit(commit_message)
