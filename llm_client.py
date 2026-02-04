@@ -356,6 +356,8 @@ class MultiHostClient:
                         f"Host {try_url}: {host_config.backend} backend, "
                         f"model={host_config.model}"
                     )
+                    # Successfully connected, no need to try other ports on this host
+                    break
     
     def _expand_host_url(self, url: str) -> List[str]:
         """
