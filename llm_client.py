@@ -450,7 +450,7 @@ class MultiHostClient:
             except VLLMModelNotFoundError:
                 logger.debug(f"Model {model} not found on vLLM at {url}")
                 continue
-            except VLLMError as e:
+            except (VLLMError, TimeoutError, ConnectionError) as e:
                 logger.debug(f"vLLM error for {model} at {url}: {e}")
                 continue
         return None
@@ -485,7 +485,7 @@ class MultiHostClient:
             except OllamaModelNotFoundError:
                 logger.debug(f"Model {model} not found on Ollama at {url}")
                 continue
-            except OllamaError as e:
+            except (OllamaError, TimeoutError, ConnectionError) as e:
                 logger.debug(f"Ollama error for {model} at {url}: {e}")
                 continue
         return None
