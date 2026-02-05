@@ -3490,7 +3490,9 @@ Output ONLY the lesson entry, nothing else."""
                 return f"READ_FILE_ERROR: {e}"
             if not path.exists():
                 return f"READ_FILE_ERROR: File not found: {path}\nTIP: Use FIND_FILE to locate files"
-            
+            if path.is_dir():
+                return f"READ_FILE_ERROR: {path} is a directory, not a file\nTIP: Use LIST_FILES to see directory contents"
+
             # Update session tracking
             rel_path = str(path.relative_to(self.source_root))
             self.session.current_file = rel_path
