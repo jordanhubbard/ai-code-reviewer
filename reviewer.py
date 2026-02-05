@@ -44,6 +44,11 @@ from pathlib import Path
 from typing import Dict, List, Optional, Any, Tuple, Set
 import json
 
+# Import new validation and metrics modules
+from persona_validator import PersonaValidator
+from build_validator import BuildValidator
+from persona_metrics import PersonaMetricsTracker
+
 logger = logging.getLogger(__name__)
 
 # File types considered "text" for review workflows
@@ -1732,7 +1737,33 @@ class ReviewLoop:
         
         # Load bootstrap content
         self.bootstrap_content = self.bootstrap_file.read_text(encoding='utf-8')
-        
+
+        # Validate persona
+        print("*** Validating persona...")
+        is_valid, validation_report = PersonaValidator.validate_and_report(persona_dir)
+        if not is_valid:
+            logger.error(f"Persona validation failed:\n{validation_report}")
+            print(f"\n{'='*70}")
+            print("ERROR: Persona Validation Failed")
+            print(f"{'='*70}")
+            print(validation_report)
+            print(f"\n{'='*70}")
+            print("Please fix the persona files or choose a different persona.")
+            print(f"{'='*70}\n")
+            raise ValueError("Invalid persona")
+        else:
+            logger.info(f"Persona validated successfully:\n{validation_report}")
+            print(f"    ✓ Persona validated: {persona_dir.name}")
+
+        # Initialize persona metrics tracker
+        metrics_dir = self.source_meta_dir / "metrics"
+        self.metrics_tracker = PersonaMetricsTracker(metrics_dir)
+        self.metrics = self.metrics_tracker.start_session(
+            persona_name=persona_dir.name,
+            session_id=self.session.session_id
+        )
+        logger.info(f"Persona metrics tracking enabled: {metrics_dir}")
+
         # Load or generate the review index
         print("*** Loading review index...")
         force_rebuild = bool(self.review_config.get('rebuild_index', False))
@@ -2789,7 +2820,10 @@ Output ONLY the commit message, no other text."""
     def _record_lesson(self, error_report: str, failed_fix_attempt: str = "") -> None:
         """Record a lesson learned from a build failure to LESSONS.md."""
         print("\n*** Recording lesson learned...")
-        
+
+        # Record in metrics
+        self.metrics.record_lesson()
+
         # Truncate if needed
         if len(error_report) > 4000:
             error_report = error_report[:4000] + "\n... [truncated] ..."
@@ -3524,17 +3558,21 @@ Output ONLY the lesson entry, nothing else."""
                     print(f"\n*** Auto-detected scope: {auto_scope}")
             
             success, message, diff = self.editor.edit_file(path, old_text, new_text)
-            
+
+            # Record edit attempt in metrics (we'll know if it caused build failure later)
+            if success:
+                self.metrics.record_edit(caused_build_failure=False)
+
             if success:
                 # Reset edit failure tracking on success
                 self.session.edit_failure_count = 0
                 self.session.last_failed_edit_file = None
-                
+
                 self.session.pending_changes = True
                 self.session.last_diff = diff
                 if rel_path not in self.session.changed_files:
                     self.session.changed_files.append(rel_path)
-                
+
                 # Log edit success
                 self.ops.edit_success(rel_path, message)
                 
@@ -3658,11 +3696,15 @@ Output ONLY the lesson entry, nothing else."""
             
             # Run build with live output
             result = self._run_build_with_live_output()
-            
+
+            # Record build result in metrics
+            self.metrics.record_build(success=result.success)
+            self.metrics.total_iterations = self.session.action_history.__len__() if hasattr(self.session, 'action_history') else 0
+
             if result.success:
                 # Build succeeded!
                 self.session.files_fixed += len(changed_files)
-                
+
                 # Log build success
                 self.ops.build_success(result.duration_seconds, result.warning_count)
                 
@@ -4576,13 +4618,19 @@ TO FIX:
         # ALWAYS clean up dirty state before ending
         self._cleanup_dirty_state()
         
+        # Update and save persona metrics
+        elapsed_seconds = (datetime.datetime.now() - self.session.start_time).total_seconds()
+        self.metrics.update_from_session(self.session)
+        self.metrics.total_time_seconds = elapsed_seconds
+        self.metrics_tracker.save_session()
+
         # Log session end
         self.ops.session_end(
             directories_completed=self.session.directories_completed,
             files_fixed=self.session.files_fixed,
             build_failures=self.session.build_failures,
         )
-        
+
         # Final status
         print("\n" + "=" * 60)
         print("REVIEW SESSION COMPLETE")
@@ -4595,6 +4643,12 @@ TO FIX:
                 print(f"  ✓ {d}")
         print(f"Files fixed: {self.session.files_fixed}")
         print(f"Build failures: {self.session.build_failures}")
+        print("=" * 60)
+
+        # Show persona effectiveness metrics
+        print("\nPersona Effectiveness Metrics:")
+        print("-" * 60)
+        print(self.metrics.get_summary())
         print("=" * 60)
 
 
@@ -5045,8 +5099,45 @@ Examples:
     except Exception as e:
         logger.error(f"Failed to create build executor: {e}")
         sys.exit(1)
-    
+
     source_root = builder.config.source_root
+
+    # Validate build command against detected project type
+    print("*** Validating build command...")
+    build_command = builder.config.build_command
+    validation = BuildValidator.validate_build_command(build_command, source_root)
+
+    if validation.detected_project:
+        print(f"    Detected project: {validation.detected_project.project_type} "
+              f"(confidence: {validation.detected_project.confidence})")
+
+    if validation.is_valid:
+        print(f"    ✓ Build command validated")
+    else:
+        print(f"\n{'='*70}")
+        print("WARNING: Build Command May Be Incorrect")
+        print(f"{'='*70}")
+        print(f"Build command: {build_command}")
+        print()
+        if validation.warnings:
+            print("Warnings:")
+            for warning in validation.warnings:
+                print(f"  • {warning}")
+        print()
+        if validation.suggestions:
+            print("Suggested commands:")
+            for suggestion in validation.suggestions:
+                print(f"  • {suggestion}")
+        print()
+        print("You can continue, but the build validation may not work correctly.")
+        print(f"To fix: edit {config_path} and update source.build_command")
+        print(f"{'='*70}\n")
+
+        # Ask user if they want to continue
+        response = input("Continue anyway? [y/N]: ").strip().lower()
+        if response not in ('y', 'yes'):
+            print("Exiting. Please fix build_command in config.yaml")
+            sys.exit(1)
     
     # Validate source tree before proceeding
     is_valid, error_msg = validate_source_tree(source_root)

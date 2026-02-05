@@ -21,7 +21,7 @@ FREEBSD_PYYAML_PKG?=py311-pyyaml
 # All paths are relative to the Makefile
 
 # Phony targets
-.PHONY: all venv deps check-deps config-init config-update validate run run-verbose run-forever test test-all release clean clean-all help
+.PHONY: all venv deps check-deps config-init config-update validate run run-verbose run-forever test test-all validate-persona validate-build show-metrics release clean clean-all help
 
 # Default target
 all: help
@@ -175,6 +175,42 @@ run-forever: check-deps
 	$(VENV_PY) reviewer.py --config config.yaml --forever
 
 #
+# Validation targets
+#
+
+# Validate persona files
+validate-persona:
+	@if [ ! -f config.yaml ]; then \
+		echo "config.yaml not found. Run 'make config-init' first."; \
+		exit 1; \
+	fi
+	@PERSONA=$$(grep "persona:" config.yaml | head -1 | sed 's/.*: *"\{0,1\}\([^"]*\)"\{0,1\}/\1/'); \
+	echo "Validating persona: $$PERSONA"; \
+	$(VENV_PY) persona_validator.py "$$PERSONA"
+
+# Validate build command
+validate-build:
+	@if [ ! -f config.yaml ]; then \
+		echo "config.yaml not found. Run 'make config-init' first."; \
+		exit 1; \
+	fi
+	@SOURCE_ROOT=$$(grep "root:" config.yaml | grep -v "#" | head -1 | sed 's/.*: *"\{0,1\}\([^"]*\)"\{0,1\}/\1/'); \
+	BUILD_CMD=$$(grep "build_command:" config.yaml | head -1 | sed 's/.*: *"\{0,1\}\([^"]*\)"\{0,1\}/\1/'); \
+	echo "Validating build command for: $$SOURCE_ROOT"; \
+	echo "Build command: $$BUILD_CMD"; \
+	$(VENV_PY) build_validator.py "$$SOURCE_ROOT" "$$BUILD_CMD"
+
+# Show persona effectiveness metrics
+show-metrics:
+	@if [ ! -f config.yaml ]; then \
+		echo "config.yaml not found. Run 'make config-init' first."; \
+		exit 1; \
+	fi
+	@SOURCE_ROOT=$$(grep "root:" config.yaml | grep -v "#" | head -1 | sed 's/.*: *"\{0,1\}\([^"]*\)"\{0,1\}/\1/'); \
+	echo "Showing metrics for: $$SOURCE_ROOT"; \
+	$(VENV_PY) scripts/show_metrics.py "$$SOURCE_ROOT"
+
+#
 # Release target
 #
 
@@ -259,11 +295,16 @@ help:
 	@echo "  make validate       Test connection to LLM server"
 	@echo ""
 	@echo "Usage:"
-	@echo "  make run          Start the review loop (auto-checks dependencies)"
-	@echo "  make run-verbose  Run with verbose logging"
-	@echo "  make run-forever  Run until all directories are reviewed"
-	@echo "  make test         Run syntax and import tests (no server required)"
-	@echo "  make test-all     Run all tests including server connectivity"
+	@echo "  make run            Start the review loop (auto-checks dependencies)"
+	@echo "  make run-verbose    Run with verbose logging"
+	@echo "  make run-forever    Run until all directories are reviewed"
+	@echo "  make test           Run syntax and import tests (no server required)"
+	@echo "  make test-all       Run all tests including server connectivity"
+	@echo ""
+	@echo "Validation:"
+	@echo "  make validate-persona  Validate persona files (AI_START_HERE.md, etc.)"
+	@echo "  make validate-build    Validate build command matches project type"
+	@echo "  make show-metrics      Show persona effectiveness metrics"
 	@echo ""
 	@echo "Release:"
 	@echo "  make release      Run tests, tag, and create GitHub release (bumps version)"
