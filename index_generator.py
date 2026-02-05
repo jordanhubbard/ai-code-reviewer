@@ -51,10 +51,43 @@ class DirectoryEntry:
     notes: str = ""
 
 
+# File types considered "text" for review workflows
+# IMPORTANT: Only include ACTUAL SOURCE CODE file types here
+# Test data files (.in, .ok, .out, .err, .txt) should NOT be reviewed
 REVIEWABLE_SUFFIXES = {
-    '.c', '.h', '.cc', '.cpp', '.cxx', '.s', '.S', '.sh', '.py', '.awk', '.ksh',
-    '.mk', '.m4', '.rs', '.go', '.m', '.mm', '.1', '.2', '.3', '.4', '.5', '.6',
-    '.7', '.8', '.9', '.txt', '.md', '.in'
+    # C/C++ source and headers
+    '.c', '.h', '.cc', '.cpp', '.cxx', '.hpp', '.hxx',
+    # Assembly
+    '.s', '.S',
+    # Shell scripts
+    '.sh', '.bash', '.ksh', '.zsh',
+    # Python
+    '.py',
+    # Scripting languages
+    '.awk', '.sed', '.perl', '.pl',
+    # Build system files
+    '.mk', '.cmake',
+    # Template files
+    '.m4',
+    # Rust
+    '.rs',
+    # Go
+    '.go',
+    # Objective-C
+    '.m', '.mm',
+    # Man pages
+    '.1', '.2', '.3', '.4', '.5', '.6', '.7', '.8', '.9', '.mdoc',
+    # Lex/Yacc
+    '.l', '.y', '.ll', '.yy',
+    # Documentation (only markdown for inline docs)
+    '.md',
+}
+
+# Test data and output files that should NEVER be reviewed
+EXCLUDED_SUFFIXES = {
+    '.in', '.ok', '.out', '.err', '.txt', '.log', '.dat', '.data',
+    '.expected', '.actual', '.diff', '.orig', '.rej', '.bak',
+    '.golden', '.baseline', '.result', '.output', '.input',
 }
 
 REVIEWABLE_SPECIAL_FILES = {
@@ -178,6 +211,11 @@ class ReviewIndex:
                         
                         name = child.name
                         suffix = child.suffix.lower()
+
+                        # Skip excluded file types (test data, output files, etc.)
+                        if suffix in EXCLUDED_SUFFIXES:
+                            continue
+
                         if name in REVIEWABLE_SPECIAL_FILES:
                             reviewable_found = True
                         if suffix == '.c':
