@@ -1414,6 +1414,27 @@ class BeadsManager:
         if output:
             self.issues[directory]['status'] = 'closed'
     
+    def has_open_work(self) -> bool:
+        """Return True if any directory review bead is still open or in_progress."""
+        return any(
+            issue.get('status') in ('open', 'in_progress')
+            for issue in self.issues.values()
+        )
+
+    def get_open_directories(self) -> List[str]:
+        """Return directory names that have open or in_progress beads."""
+        return [
+            directory for directory, issue in self.issues.items()
+            if issue.get('status') in ('open', 'in_progress')
+        ]
+
+    def get_open_count(self) -> int:
+        """Return count of non-closed directory review beads."""
+        return sum(
+            1 for issue in self.issues.values()
+            if issue.get('status') in ('open', 'in_progress')
+        )
+
     def create_systemic_issue(
         self,
         title: str,
@@ -3885,7 +3906,21 @@ Output ONLY the lesson entry, nothing else."""
         
         elif action_type == 'HALT':
             # Check for incomplete work before allowing HALT
-            
+
+            # 0. In forever mode, reject HALT if open beads remain
+            if self.forever_mode and self.beads and self.beads.has_open_work():
+                open_dirs = self.beads.get_open_directories()
+                open_count = len(open_dirs)
+                suggestion_lines = "\n".join(f"  - {d}" for d in open_dirs[:5])
+                if open_count > 5:
+                    suggestion_lines += f"\n  ... and {open_count - 5} more"
+                next_dir = self.index.get_next_pending() or open_dirs[0]
+                return (
+                    f"HALT_REJECTED: Forever mode is active with {open_count} directories still requiring review.\n\n"
+                    f"Open directories:\n{suggestion_lines}\n\n"
+                    f"Use ACTION: SET_SCOPE {next_dir} to continue reviewing."
+                )
+
             # 1. Check for uncommitted changes
             if self.session.pending_changes:
                 return f"HALT_REJECTED: You have uncommitted changes in {self.session.current_directory}.\n" \
@@ -4351,7 +4386,37 @@ TO FIX:
                 )
         
         return None
-    
+
+    def _rescan_for_new_directories(self) -> int:
+        """Re-scan the source tree for new directories not yet tracked.
+
+        Returns the number of new directories discovered and filed as beads.
+        """
+        print("\n*** Forever mode: Re-scanning source tree for new directories...")
+        new_index = generate_index(self.source_root, force_rebuild=True)
+        existing_dirs = set(self.index.entries.keys())
+        new_dirs = [
+            path for path in new_index.entries
+            if path not in existing_dirs
+        ]
+        if not new_dirs:
+            print("    No new directories found.")
+            return 0
+
+        # Merge new entries into the live index
+        for path in new_dirs:
+            self.index.entries[path] = new_index.entries[path]
+        self.index.save()
+        print(f"    Found {len(new_dirs)} new directories in source tree")
+
+        # File beads for the new directories
+        if self.beads:
+            created = self.beads.ensure_directories(new_dirs)
+            print(f"    Created {created} new beads for review")
+            return created
+
+        return len(new_dirs)
+
     def _cleanup_dirty_state(self) -> None:
         """Clean up any uncommitted changes before ending session."""
         if self.session.pending_changes or self.git.has_changes():
@@ -4630,6 +4695,17 @@ TO FIX:
                 continue
             
             if action['action'] == 'HALT':
+                # In forever mode, reject HALT if open beads remain
+                if self.forever_mode and self.beads and self.beads.has_open_work():
+                    open_dirs = self.beads.get_open_directories()
+                    next_dir = self.index.get_next_pending() or open_dirs[0]
+                    msg = (
+                        f"HALT_REJECTED: Forever mode active with {len(open_dirs)} "
+                        f"directories still open.\n"
+                        f"Next: ACTION: SET_SCOPE {next_dir}\n"
+                    )
+                    self.history.append({"role": "user", "content": msg})
+                    continue
                 logger.info("Received HALT. Stopping.")
                 break
             
@@ -4641,15 +4717,36 @@ TO FIX:
             # Check if we're in forever mode and no more work remains
             if self.forever_mode:
                 next_pending = self.index.get_next_pending()
-                if next_pending is None and self.session.current_directory is None:
+                beads_open = self.beads.has_open_work() if self.beads else False
+                if next_pending is None and not beads_open and self.session.current_directory is None:
+                    # All known work is done - re-scan for new directories
+                    new_count = self._rescan_for_new_directories()
+                    if new_count > 0:
+                        logger.info(f"Forever mode: Re-scan found {new_count} new directories")
+                        print(f"\n*** Forever mode: Re-scan discovered {new_count} new directories to review")
+                        # Continue the loop to process them
+                        continue
                     logger.info("Forever mode: No more pending directories. Stopping.")
                     print("\n" + "="*60)
                     print("FOREVER MODE COMPLETE")
                     print("="*60)
                     print("All directories have been reviewed.")
                     print(f"Total directories completed: {self.session.directories_completed}")
+                    print("Re-run the directory scan if new source code has been added.")
                     print("="*60)
                     break
+                elif next_pending is None and beads_open and self.session.current_directory is None:
+                    # Index shows all done but beads still open - desync;
+                    # guide the AI to the next open bead
+                    open_dirs = self.beads.get_open_directories()
+                    logger.info(f"Forever mode: Index exhausted but {len(open_dirs)} beads still open")
+                    self.history.append({
+                        "role": "user",
+                        "content": (
+                            f"There are {len(open_dirs)} directories with open beads remaining.\n"
+                            f"Next: ACTION: SET_SCOPE {open_dirs[0]}\n"
+                        )
+                    })
 
             # Prune history if getting too long
             if len(self.history) > 42:
