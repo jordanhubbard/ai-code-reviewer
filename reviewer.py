@@ -2719,7 +2719,11 @@ If no changes needed, respond with just: NO_EDITS_NEEDED"""
             if success:
                 self.git.push()
                 print(f"*** Committed {len(successful_files)} successful changes")
-                
+
+                # Get commit hash for tracking
+                _, commit_hash = self.git._run(['rev-parse', 'HEAD'])
+                commit_hash = commit_hash.strip()[:12]
+
                 # Update review summary for successful directories
                 for dir_path in dirs_affected:
                     self._update_review_summary(
@@ -2730,8 +2734,8 @@ If no changes needed, respond with just: NO_EDITS_NEEDED"""
                     # Mark directory complete in index if all its files succeeded
                     dir_files = [f for f in all_changed if f.startswith(dir_path)]
                     if all(f in successful_files for f in dir_files):
-                        self.index.mark_complete(dir_path)
-                        self._beads_mark_complete(dir_path)
+                        self.index.mark_completed(dir_path, commit_hash)
+                        self._beads_mark_completed(dir_path, commit_hash)
             else:
                 print(f"*** Commit failed: {output}")
         
