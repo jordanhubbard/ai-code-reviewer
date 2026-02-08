@@ -2734,7 +2734,7 @@ If no changes needed, respond with just: NO_EDITS_NEEDED"""
                     # Mark directory complete in index if all its files succeeded
                     dir_files = [f for f in all_changed if f.startswith(dir_path)]
                     if all(f in successful_files for f in dir_files):
-                        self.index.mark_completed(dir_path, commit_hash)
+                        self.index.mark_done(dir_path, f"Completed via commit {commit_hash}")
                         self._beads_mark_completed(dir_path, commit_hash)
             else:
                 print(f"*** Commit failed: {output}")
