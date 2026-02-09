@@ -242,6 +242,39 @@ class MultiHostClient:
         ]
         return any(token in message for token in indicators)
 
+    def _renegotiate_host_model(self, host: HostConfig, exc: Exception) -> Optional[str]:
+        """
+        Renegotiate model with a host after a model-not-found error.
+
+        When a vLLM worker restarts with a different model, the cached model
+        name becomes stale. This queries the server for available models and
+        switches to the first one found.
+
+        Args:
+            host: The host that returned model-not-found
+            exc: The original exception
+
+        Returns:
+            New model name if renegotiation succeeded, None otherwise
+        """
+        if host.backend != 'vllm':
+            logger.debug(f"Model renegotiation not supported for {host.backend} backend")
+            return None
+
+        try:
+            new_model = host.client.renegotiate_model()
+            host.model = new_model
+            logger.warning(
+                f"Host {host.url} model renegotiated to '{new_model}' "
+                f"(was: {exc})"
+            )
+            return new_model
+        except Exception as e:
+            logger.warning(
+                f"Model renegotiation failed for {host.url}: {e}"
+            )
+            return None
+
     def _mark_host_unhealthy(self, host: HostConfig, reason: Exception) -> None:
         with self._host_lock:
             before = self._total_hosts()
@@ -546,6 +579,19 @@ class MultiHostClient:
                 try:
                     logger.debug(f"Routing chat request to {host.url} ({host.backend})")
                     return host.client.chat(messages, max_tokens, temperature)
+                except VLLMModelNotFoundError as exc:
+                    new_model = self._renegotiate_host_model(host, exc)
+                    if new_model:
+                        # Retry immediately with the new model
+                        try:
+                            return host.client.chat(messages, max_tokens, temperature)
+                        except Exception as retry_exc:
+                            last_error = retry_exc
+                            if self._is_host_failure(retry_exc):
+                                self._mark_host_unhealthy(host, retry_exc)
+                            continue
+                    last_error = exc
+                    continue
                 except Exception as exc:
                     if self._is_host_failure(exc):
                         last_error = exc
@@ -557,7 +603,7 @@ class MultiHostClient:
             raise LLMConnectionError("All hosts failed while handling chat request") from last_error
         finally:
             self._release_slot()
-    
+
     def generate(
         self,
         prompt: str,
@@ -592,6 +638,19 @@ class MultiHostClient:
                 try:
                     logger.debug(f"Routing generate request to {host.url} ({host.backend})")
                     return host.client.generate(prompt, max_tokens, temperature)
+                except VLLMModelNotFoundError as exc:
+                    new_model = self._renegotiate_host_model(host, exc)
+                    if new_model:
+                        # Retry immediately with the new model
+                        try:
+                            return host.client.generate(prompt, max_tokens, temperature)
+                        except Exception as retry_exc:
+                            last_error = retry_exc
+                            if self._is_host_failure(retry_exc):
+                                self._mark_host_unhealthy(host, retry_exc)
+                            continue
+                    last_error = exc
+                    continue
                 except Exception as exc:
                     if self._is_host_failure(exc):
                         last_error = exc

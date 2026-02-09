@@ -98,6 +98,10 @@ class VLLMClient:
                 return json.loads(response.read().decode('utf-8'))
         except HTTPError as e:
             error_body = e.read().decode('utf-8') if e.fp else str(e)
+            if e.code == 404 and 'does not exist' in error_body.lower():
+                raise VLLMModelNotFoundError(
+                    f"Model not found on {url}: {error_body}"
+                ) from e
             raise VLLMConnectionError(
                 f"HTTP {e.code} from {url}: {error_body}"
             ) from e
@@ -153,6 +157,10 @@ class VLLMClient:
                 return ''.join(full_response)
         except HTTPError as e:
             error_body = e.read().decode('utf-8') if e.fp else str(e)
+            if e.code == 404 and 'does not exist' in error_body.lower():
+                raise VLLMModelNotFoundError(
+                    f"Model not found on {url}: {error_body}"
+                ) from e
             raise VLLMConnectionError(
                 f"HTTP {e.code} from {url}: {error_body}"
             ) from e
@@ -418,6 +426,46 @@ class VLLMClient:
         """List available models on the server."""
         response = self._make_request("/v1/models")
         return [m.get('id', '') for m in response.get('data', [])]
+
+    def renegotiate_model(self) -> str:
+        """
+        Query the server for available models and switch to the first one.
+
+        Called when a request fails with 404 model-not-found, indicating the
+        server was restarted with a different model.
+
+        Returns:
+            The new model name
+
+        Raises:
+            VLLMModelNotFoundError: If no models are available on the server
+        """
+        try:
+            response = self._make_request("/v1/models", timeout=10)
+        except VLLMConnectionError as e:
+            raise VLLMModelNotFoundError(
+                f"Cannot list models during renegotiation: {e}"
+            ) from e
+
+        model_data = response.get('data', [])
+        if not model_data:
+            raise VLLMModelNotFoundError(
+                f"No models available on server {self.base_url} during renegotiation"
+            )
+
+        new_model = model_data[0].get('id', '')
+        old_model = self.config.model
+        self.config.model = new_model
+
+        # Update context length if available
+        max_model_len = model_data[0].get('max_model_len')
+        if max_model_len:
+            self.config.max_model_len = int(max_model_len)
+
+        logger.warning(
+            f"Model renegotiated on {self.base_url}: '{old_model}' -> '{new_model}'"
+        )
+        return new_model
     
     def get_server_metrics(self) -> Dict[str, Any]:
         """
