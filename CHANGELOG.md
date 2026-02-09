@@ -6,6 +6,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [0.18] - 2026-02-09
+
+### Added
+- **Model renegotiation fallback** - When a vLLM worker restarts with a different model, the client now detects the 404 "model does not exist" error, queries the server for available models, and transparently switches to the first one found instead of marking the host unhealthy
+  - New `renegotiate_model()` method on `VLLMClient`
+  - `VLLMModelNotFoundError` now raised (instead of `VLLMConnectionError`) for 404 model-not-found at runtime
+  - Single automatic retry after renegotiation before falling through to next host
+
+### Fixed
+- Fix AttributeError in beads integration: use `mark_done` instead of `mark_completed`
+
+## [0.17] - 2026-02-07
+
 ### Added
 - **Loop Detection and Recovery System** - Prevents infinite loops when AI gets stuck
   - Action history tracking to detect repeated identical actions
