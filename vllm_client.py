@@ -238,10 +238,15 @@ class VLLMClient:
                 return
         
         # Check for partial match (vLLM sometimes uses full paths)
+        # Also normalize Ollama-style ":" to "-" for cross-format matching
+        # e.g. config "qwen2.5-coder:32b" should match vLLM "Qwen/Qwen2.5-Coder-32B-Instruct"
+        model_normalized = model_lower.replace(':', '-')
         for model_info in model_data:
             avail = model_info.get('id', '')
+            avail_lower = avail.lower()
             avail_base = avail.split('/')[-1].lower()
-            if avail_base == model_lower or model_lower in avail.lower():
+            if (avail_base == model_lower or model_lower in avail_lower or
+                    model_normalized in avail_lower):
                 logger.info(f"Model '{model_name}' found as '{avail}' (partial match)")
                 self.config.model = avail
                 _set_model_context_length(model_info)
