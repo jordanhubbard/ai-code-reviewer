@@ -26,6 +26,7 @@ import datetime
 import logging
 import os
 import re
+import shlex
 import shutil
 import signal
 import subprocess
@@ -1060,7 +1061,7 @@ class BeadsManager:
         args = ['doctor', '--fix', '--yes']
         if source:
             args.extend(['--source', source])
-        timeout = int(os.environ.get('BD_MIGRATION_TIMEOUT_SECONDS', '600'))
+        timeout = int(os.environ.get('BD_MIGRATION_TIMEOUT_SECONDS', '3600'))
         doctor = self._run_bd_command(args, cwd=root, timeout=timeout, env_overrides=self._sqlite_env_overrides())
         if doctor.returncode != 0:
             raise BeadsMigrationError(
@@ -1080,7 +1081,7 @@ class BeadsManager:
             )
         prefix = self._determine_issue_prefix(root)
         print(f"*** Beads database missing in {root}; initializing with prefix '{prefix}'...")
-        timeout = int(os.environ.get('BD_MIGRATION_TIMEOUT_SECONDS', '1800'))
+        timeout = int(os.environ.get('BD_MIGRATION_TIMEOUT_SECONDS', '3600'))
         init = self._run_bd_command(
             ['init', '--from-jsonl', '--prefix', prefix],
             cwd=root,
@@ -1123,7 +1124,7 @@ class BeadsManager:
         if (to_root / '.beads').exists():
             self._ensure_beads_db(to_root)
 
-        timeout = int(os.environ.get('BD_MIGRATION_TIMEOUT_SECONDS', '1800'))
+        timeout = int(os.environ.get('BD_MIGRATION_TIMEOUT_SECONDS', '3600'))
         result = self._run_bd_command(
             [
                 'migrate', 'issues',
