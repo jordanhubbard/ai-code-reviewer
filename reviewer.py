@@ -4397,15 +4397,20 @@ TO FIX:
         Returns:
             None if response is OK, warning message if problematic
         """
+        # Short responses that contain a valid ACTION keyword are fine
+        has_action = bool(ActionParser.ACTION_RE.search(response) or
+                         ActionParser.ACTION_INLINE_RE.search(response))
+
         # Check for signs of truncation
         truncation_indicators = [
-            (lambda r: len(r) < 50, "Response is suspiciously short (< 50 chars)"),
+            (lambda r: len(r) < 50 and not has_action,
+             "Response is suspiciously short (< 50 chars) with no ACTION"),
             (lambda r: r.endswith("Here'") or r.endswith("Let'"), "Response ends mid-word (truncated)"),
-            (lambda r: r.count("<<<") != r.count(">>>") and ("<<<" in r or ">>>" in r), 
+            (lambda r: r.count("<<<") != r.count(">>>") and ("<<<" in r or ">>>" in r),
              "Mismatched <<< >>> delimiters (incomplete EDIT_FILE)"),
-            (lambda r: "ACTION: EDIT_FILE" in r and "OLD:" not in r, 
+            (lambda r: "ACTION: EDIT_FILE" in r and "OLD:" not in r,
              "EDIT_FILE action without OLD block"),
-            (lambda r: "OLD:" in r and "NEW:" not in r and "<<<" in r, 
+            (lambda r: "OLD:" in r and "NEW:" not in r and "<<<" in r,
              "OLD block started but no NEW block"),
         ]
         
