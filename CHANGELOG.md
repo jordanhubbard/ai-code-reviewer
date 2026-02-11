@@ -6,6 +6,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [0.19] - 2026-02-10
+
+### Fixed
+- **CRITICAL**: Fix freebsd-angry-ai persona regression - persona was using Cursor-era bootstrap that lacked ACTION format documentation, causing the LLM to produce review text without ACTION: lines and the review loop to stall doing nothing
+  - Rewrote `AI_START_HERE.md` with complete ACTION command documentation, inline personality, and review criteria
+  - Updated `HANDOVER.md` to replace Cursor tool references (StrReplace, Write) with ACTION-based workflow
+  - Preserved critical lessons learned (comment syntax, shell builtins, include ordering)
+- Fix missing `shlex` import in timeout error handler (caused NameError masking real timeout message)
+- Fix provider selection in vLLM client
+
+### Changed
+- Increase beads migration timeout to 1 hour (handles large repositories like freebsd-src)
+- Clean up top-level directory: moved CHUNKING.md and FILE_LOCATIONS.md to docs/, removed temporary dev notes
+
 ## [0.18] - 2026-02-09
 
 ### Added
