@@ -6,6 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [0.21] - 2026-02-10
+
+### Fixed
+- **CRITICAL**: Fix context window overflow that caused "All hosts failed" after conversation history grew beyond 32K model context. History pruning now uses token-aware budgeting (chars/4 estimate) instead of a fixed 42-message limit.
+
+### Changed
+- Default lessons truncation reduced from 8K to 4K chars to leave room for conversation (configurable via `max_lessons_chars` in review config)
+- History pruning budget defaults to 24K tokens (configurable via `max_history_tokens`)
+- Added initial prompt size logging for context window diagnostics
+
 ## [0.20] - 2026-02-10
 
 ### Fixed
