@@ -6,6 +6,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [0.22] - 2026-02-10
+
+### Fixed
+- **CRITICAL**: Fix response validator rejecting valid short ACTION responses. `_validate_response()` flagged any response under 50 chars as "truncated", but valid ACTIONs like `ACTION: LIST_DIR bin/cpuset` are only 28 chars. This caused the AI to loop indefinitely: emit valid ACTION → rejected as incomplete → retry → rejected again. Short responses containing a parseable ACTION keyword now pass through.
+
 ## [0.21] - 2026-02-10
 
 ### Fixed
