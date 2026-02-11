@@ -2101,14 +2101,16 @@ class ReviewLoop:
         """Initialize the conversation with system prompt, bootstrap, lessons, and index."""
         system_prompt = self._build_system_prompt()
         
-        # Load LESSONS.md to provide context of past mistakes
+        # Load LESSONS.md to provide context of past mistakes.
+        # Budget: leave room for system prompt (~8K chars), bootstrap (~6K chars),
+        # and at least 50% of context for conversation history + output.
+        max_lessons_chars = int(self.review_config.get('max_lessons_chars', 4000))
         lessons_content = ""
         if self.lessons_file.exists():
             try:
                 lessons_content = self.lessons_file.read_text(encoding='utf-8')
-                # Truncate if too long (keep last 8000 chars = ~20-30 lessons)
-                if len(lessons_content) > 8000:
-                    lessons_content = "...[earlier lessons truncated]...\n\n" + lessons_content[-8000:]
+                if len(lessons_content) > max_lessons_chars:
+                    lessons_content = "...[earlier lessons truncated]...\n\n" + lessons_content[-max_lessons_chars:]
             except Exception as e:
                 logger.warning(f"Failed to load LESSONS.md: {e}")
                 lessons_content = ""
@@ -2158,6 +2160,12 @@ Check this list before every EDIT_FILE action to ensure you're not repeating a d
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": init_message},
         ]
+
+        # Log initial prompt size for context window diagnostics
+        total_chars = len(system_prompt) + len(init_message)
+        est_tokens = total_chars // 4
+        logger.info(f"Initial prompt: ~{est_tokens} tokens ({total_chars} chars) "
+                    f"[system={len(system_prompt)//4}t, user={len(init_message)//4}t]")
     
     def _build_system_prompt(self) -> str:
         """Build the system prompt for the AI."""
@@ -4782,9 +4790,20 @@ TO FIX:
                         )
                     })
 
-            # Prune history if getting too long
-            if len(self.history) > 42:
-                self.history = self.history[:2] + self.history[-40:]
+            # Prune history to stay within model context budget.
+            # Use char count / 4 as token estimate. Reserve 25% of context
+            # for output + safety margin, use the rest for history.
+            max_history_tokens = self.review_config.get('max_history_tokens', 24000)
+            max_history_chars = max_history_tokens * 4
+            total_chars = sum(len(msg.get('content', '')) for msg in self.history)
+            if total_chars > max_history_chars and len(self.history) > 4:
+                # Keep system prompt [0], init message [1], and trim from oldest
+                preserved = self.history[:2]
+                recent = self.history[2:]
+                while sum(len(m.get('content', '')) for m in preserved + recent) > max_history_chars and len(recent) > 2:
+                    recent = recent[2:]  # Drop oldest exchange (assistant + user pair)
+                self.history = preserved + recent
+                logger.info(f"Pruned history to {len(self.history)} messages (~{sum(len(m.get('content', '')) for m in self.history) // 4} tokens)")
         
         # ALWAYS clean up dirty state before ending
         self._cleanup_dirty_state()
