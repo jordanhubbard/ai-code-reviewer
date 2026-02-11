@@ -6,6 +6,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [0.20] - 2026-02-10
+
+### Fixed
+- **CRITICAL**: Fix startup hang on large repositories - `_init_beads_manager()` was running `bd create` as a subprocess for each of 8264 reviewable directories at startup, blocking for minutes before the review loop could start. Switched to lazy on-demand creation: beads issues are now created when the AI first SET_SCOPEs to a directory, making startup near-instant.
+
+### Changed
+- `BeadsManager.mark_in_progress/mark_open/mark_completed` now lazily create directory issues via `_ensure_directory_issue()` if they don't exist yet
+- `ensure_directories()` retained only for `_rescan_for_new_directories()` (small batches during forever mode)
+
 ## [0.19] - 2026-02-10
 
 ### Fixed
