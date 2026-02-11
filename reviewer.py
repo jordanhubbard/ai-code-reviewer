@@ -1390,8 +1390,39 @@ class BeadsManager:
         issue = self.issues.get(directory)
         return issue.get('id') if issue else None
 
-    def mark_in_progress(self, directory: str) -> None:
+    def _ensure_directory_issue(self, directory: str) -> Optional[str]:
+        """Lazily create a beads issue for a directory if one doesn't exist yet."""
         issue_id = self._get_issue_id(directory)
+        if issue_id:
+            return issue_id
+        description = (
+            f"AI code review of all files in {directory} directory "
+            f"(relative to source root: {self.repo_root})"
+        )
+        output = self._run_bd([
+            'create',
+            f'Review directory: {directory}',
+            '--description', description,
+            '-t', 'task',
+            '-p', '2',
+            '--json'
+        ])
+        if not output:
+            return None
+        try:
+            issue = json.loads(output)
+            self.issues[directory] = {
+                'id': issue.get('id'),
+                'status': issue.get('status', 'open'),
+                'title': issue.get('title'),
+            }
+            return issue.get('id')
+        except json.JSONDecodeError:
+            logger.warning("Failed to parse bd create output for %s", directory)
+            return None
+
+    def mark_in_progress(self, directory: str) -> None:
+        issue_id = self._ensure_directory_issue(directory)
         if not issue_id:
             return
         output = self._run_bd(['update', issue_id, '--status', 'in_progress', '--json'])
@@ -1399,7 +1430,7 @@ class BeadsManager:
             self.issues[directory]['status'] = 'in_progress'
 
     def mark_open(self, directory: str) -> None:
-        issue_id = self._get_issue_id(directory)
+        issue_id = self._ensure_directory_issue(directory)
         if not issue_id:
             return
         output = self._run_bd(['update', issue_id, '--status', 'open', '--json'])
@@ -1407,7 +1438,7 @@ class BeadsManager:
             self.issues[directory]['status'] = 'open'
 
     def mark_completed(self, directory: str, commit_hash: str) -> None:
-        issue_id = self._get_issue_id(directory)
+        issue_id = self._ensure_directory_issue(directory)
         if not issue_id:
             return
         reason = f"Completed via commit {commit_hash}"
@@ -2015,11 +2046,9 @@ class ReviewLoop:
                 # Clear the issues so we create new ones for this source tree
                 manager.issues = {}
             
-            created = manager.ensure_directories(list(self.index.entries.keys()))
-            if created:
-                print(f"    Beads: created {created} new directory issues")
-            else:
-                print("    Beads: all directories already tracked")
+            tracked = len(manager.issues)
+            total = len(self.index.entries)
+            print(f"    Beads: {tracked}/{total} directories already tracked (lazy creation for rest)")
             return manager
         except BeadsMigrationError as exc:
             print("\nWARNING: Beads migration failed; continuing without beads integration")
