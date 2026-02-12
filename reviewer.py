@@ -4538,15 +4538,36 @@ TO FIX:
             
             # Check if stuck on current directory too long
             if directory_iterations > self.max_iterations_per_directory:
-                print(f"\n*** WARNING: Exceeded {self.max_iterations_per_directory} iterations on {self.session.current_directory}")
-                print("*** Cleaning up and moving to next directory...")
+                stuck_dir = self.session.current_directory
+                print(f"\n*** WARNING: Exceeded {self.max_iterations_per_directory} iterations on {stuck_dir}")
                 self._cleanup_dirty_state()
-                # Force AI to move on
-                self.history.append({
-                    "role": "user", 
-                    "content": f"TIMEOUT: You have spent too many iterations on {self.session.current_directory}. "
-                              f"This directory is being skipped. Use SET_SCOPE to move to the next directory."
-                })
+                if self.forever_mode:
+                    # In forever mode, rotate to next directory but don't abandon this one
+                    next_dir = self.index.get_next_pending()
+                    if next_dir and next_dir != stuck_dir:
+                        print(f"*** Rotating to next directory: {next_dir} (will return to {stuck_dir} later)")
+                        logger.info(f"Forever mode: rotating from {stuck_dir} ({directory_iterations} iterations) to {next_dir}")
+                        if self.beads:
+                            self.beads.mark_open(stuck_dir)
+                        auto_action = {'action': 'SET_SCOPE', 'directory': next_dir}
+                        result = self._execute_action(auto_action)
+                        self.history.append({"role": "user", "content": result})
+                    else:
+                        # No other directory to rotate to; reset counter and keep going
+                        print(f"*** No other directories available, continuing with {stuck_dir}")
+                        logger.info(f"Forever mode: no rotation target, resetting iteration counter for {stuck_dir}")
+                        self.history.append({
+                            "role": "user",
+                            "content": f"You have spent {directory_iterations} iterations on {stuck_dir}. "
+                                       f"Try a different approach or review different files."
+                        })
+                else:
+                    print("*** Cleaning up and moving to next directory...")
+                    self.history.append({
+                        "role": "user",
+                        "content": f"TIMEOUT: You have spent too many iterations on {stuck_dir}. "
+                                   f"This directory is being skipped. Use SET_SCOPE to move to the next directory."
+                    })
                 directory_iterations = 0
                 continue
             
@@ -4556,9 +4577,10 @@ TO FIX:
                 dir_progress = f"{self.session.directories_completed} (forever mode)"
             else:
                 dir_progress = f"{self.session.directories_completed}/{self.target_directories}" if self.target_directories > 0 else f"{self.session.directories_completed}"
-            logger.info(f"Step {step} | Dir {dir_progress} | {self.session.current_directory or 'No scope'} ({directory_iterations}/{self.max_iterations_per_directory})")
+            iter_display = f"{directory_iterations}" if self.forever_mode else f"{directory_iterations}/{self.max_iterations_per_directory}"
+            logger.info(f"Step {step} | Dir {dir_progress} | {self.session.current_directory or 'No scope'} (iter {iter_display})")
             print(f"\n{'='*70}")
-            print(f"STEP {step} | Directories: {dir_progress} | Current: {self.session.current_directory or 'None'} ({directory_iterations}/{self.max_iterations_per_directory})")
+            print(f"STEP {step} | Directories: {dir_progress} | Current: {self.session.current_directory or 'None'} (iter {iter_display})")
             if progress_summary:
                 print(f"\n{progress_summary}")
             print('='*70)
