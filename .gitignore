@@ -30,3 +30,6 @@ personas/*/logs/
 # Internal operations log for debugging and improving the tool
 .reviewer-log/
 
+# Vibe MCP state
+.vibe/
+
