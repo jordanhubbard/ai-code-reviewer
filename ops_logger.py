@@ -30,6 +30,7 @@ class EventType(str, Enum):
     FILE_REVIEWED = "file_reviewed"
     EDIT_SUCCESS = "edit_success"
     EDIT_FAILURE = "edit_failure"
+    BUILD_START = "build_start"
     BUILD_SUCCESS = "build_success"
     BUILD_FAILURE = "build_failure"
     COMMIT_SUCCESS = "commit_success"
@@ -195,6 +196,14 @@ class OpsLogger:
             message=error,
         ))
     
+    def build_start(self, build_command: Optional[str] = None) -> None:
+        """Log build start with timestamp."""
+        self._write(LogEvent(
+            event_type=EventType.BUILD_START,
+            directory=self._current_directory,
+            message=f"Build started: {build_command}" if build_command else "Build started",
+        ))
+
     def build_success(
         self,
         duration_seconds: float,
@@ -369,6 +378,7 @@ class OpsLogger:
             "total_events": len(events),
             "sessions": 0,
             "directories_completed": 0,
+            "build_starts": 0,
             "build_successes": 0,
             "build_failures": 0,
             "edit_successes": 0,
@@ -383,6 +393,8 @@ class OpsLogger:
                 summary["sessions"] += 1
             elif event_type == "directory_complete":
                 summary["directories_completed"] += 1
+            elif event_type == "build_start":
+                summary["build_starts"] += 1
             elif event_type == "build_success":
                 summary["build_successes"] += 1
             elif event_type == "build_failure":

@@ -3012,8 +3012,11 @@ Output ONLY the lesson entry, nothing else."""
         command = self.builder.config.build_command
         source_root = self.builder.config.source_root
         
+        build_timestamp = datetime.datetime.now().isoformat()
+        self.ops.build_start(command)
+        
         print("\n" + "=" * 60)
-        print("RUNNING BUILD")
+        print(f"RUNNING BUILD [{build_timestamp}]")
         print("=" * 60)
         print(f"Command: {command}")
         print(f"Directory: {source_root}")
@@ -3047,11 +3050,12 @@ Output ONLY the lesson entry, nothing else."""
             raw_output = ''.join(output_lines)
             errors, warnings = ErrorParser.parse_output(raw_output)
             
+            end_timestamp = datetime.datetime.now().isoformat()
             print("\n" + "=" * 60)
             if process.returncode == 0:
-                print(f"BUILD SUCCEEDED in {elapsed:.1f}s ({len(warnings)} warnings)")
+                print(f"BUILD SUCCEEDED in {elapsed:.1f}s ({len(warnings)} warnings) [{end_timestamp}]")
             else:
-                print(f"BUILD FAILED in {elapsed:.1f}s ({len(errors)} errors, {len(warnings)} warnings)")
+                print(f"BUILD FAILED in {elapsed:.1f}s ({len(errors)} errors, {len(warnings)} warnings) [{end_timestamp}]")
             print("=" * 60 + "\n")
             
             return BuildResult(
@@ -4744,8 +4748,28 @@ TO FIX:
             if action['action'] == 'HALT':
                 # In forever mode, reject HALT if open beads remain
                 if self.forever_mode and self.beads and self.beads.has_open_work():
+                    if not hasattr(self.session, 'consecutive_halt_rejections'):
+                        self.session.consecutive_halt_rejections = 0
+                    self.session.consecutive_halt_rejections += 1
+
                     open_dirs = self.beads.get_open_directories()
                     next_dir = self.index.get_next_pending() or open_dirs[0]
+
+                    MAX_HALT_REJECTIONS = 3
+                    if self.session.consecutive_halt_rejections >= MAX_HALT_REJECTIONS:
+                        logger.warning(
+                            f"HALT rejected {self.session.consecutive_halt_rejections} times "
+                            f"- auto-setting scope to {next_dir}"
+                        )
+                        print(f"\n*** HALT loop detected ({self.session.consecutive_halt_rejections} rejections) "
+                              f"- automatically setting scope to: {next_dir}")
+                        self.session.consecutive_halt_rejections = 0
+                        auto_action = {'action': 'SET_SCOPE', 'directory': next_dir}
+                        result = self._execute_action(auto_action)
+                        logger.info(f"Auto SET_SCOPE result: {result[:100]}...")
+                        self.history.append({"role": "user", "content": result})
+                        continue
+
                     msg = (
                         f"HALT_REJECTED: Forever mode active with {len(open_dirs)} "
                         f"directories still open.\n"
@@ -4756,6 +4780,10 @@ TO FIX:
                 logger.info("Received HALT. Stopping.")
                 break
             
+            # Reset HALT rejection counter on any non-HALT action
+            if hasattr(self.session, 'consecutive_halt_rejections'):
+                self.session.consecutive_halt_rejections = 0
+
             result = self._execute_action(action)
             logger.info(f"Action result: {result[:100]}...")
 
@@ -4955,7 +4983,11 @@ def preflight_sanity_check(
     from build_executor import BuildResult
     
     try:
+        print(f"Starting preflight build [{datetime.datetime.now().isoformat()}]")
+        if ops_logger:
+            ops_logger.build_start(builder.config.build_command)
         result = builder.run_build(capture_output=True)
+        print(f"Preflight build finished [{datetime.datetime.now().isoformat()}]")
         
         if result.success:
             print("\n" + "=" * 70)
@@ -5029,8 +5061,11 @@ def preflight_sanity_check(
             reverted_commits.append(commit_info)
             
             # Try building again
-            print("Testing build...")
+            print(f"Testing build... [{datetime.datetime.now().isoformat()}]")
+            if ops_logger:
+                ops_logger.build_start(builder.config.build_command)
             result = builder.run_build(capture_output=True)
+            print(f"Recovery build finished [{datetime.datetime.now().isoformat()}]")
             
             if result.success:
                 print("\n" + "=" * 70)
