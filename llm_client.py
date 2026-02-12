@@ -204,18 +204,29 @@ class MultiHostClient:
         with self._concurrency_lock:
             if new_limit == self._effective_max_parallel:
                 return
-            if new_limit < self._effective_max_parallel:
-                reduction = self._effective_max_parallel - new_limit
-                self._pending_limit_reduction += reduction
+
+            old_limit = self._effective_max_parallel
+            if new_limit < old_limit:
+                reduction = old_limit - new_limit
                 # Drain available permits to reduce capacity immediately.
+                # Only drain permits that are currently free (non-blocking).
+                drained = 0
                 for _ in range(reduction):
                     acquired = self._concurrency_sem.acquire(blocking=False)
                     if acquired:
-                        self._pending_limit_reduction -= 1
+                        drained += 1
                     else:
                         break
+                # Any remaining reduction is deferred to future releases,
+                # but never defer more than (new_limit - 1) to guarantee
+                # at least 1 permit can always be acquired.
+                remaining = reduction - drained
+                safe_max_pending = max(0, new_limit - 1)
+                self._pending_limit_reduction = min(
+                    self._pending_limit_reduction + remaining, safe_max_pending
+                )
             else:
-                increase = new_limit - self._effective_max_parallel
+                increase = new_limit - old_limit
                 # If we're reducing capacity later, offset that first.
                 if self._pending_limit_reduction > 0:
                     offset = min(increase, self._pending_limit_reduction)
@@ -224,6 +235,10 @@ class MultiHostClient:
                 for _ in range(increase):
                     self._concurrency_sem.release()
             self._effective_max_parallel = new_limit
+            logger.info(
+                f"Concurrency limit changed: {old_limit} -> {new_limit} "
+                f"(pending_reduction={self._pending_limit_reduction})"
+            )
 
     def _release_slot(self) -> None:
         with self._concurrency_lock:
@@ -566,7 +581,8 @@ class MultiHostClient:
         if not acquired:
             raise LLMConnectionError(
                 f"Timed out waiting for available slot "
-                f"({self._effective_max_parallel} max parallel requests)"
+                f"(limit={self._effective_max_parallel}, "
+                f"pending_reduction={self._pending_limit_reduction})"
             )
         
         try:
@@ -577,7 +593,7 @@ class MultiHostClient:
                 host = self._get_next_host()
                 attempts += 1
                 try:
-                    logger.debug(f"Routing chat request to {host.url} ({host.backend})")
+                    logger.info(f"Sending chat request to {host.url} ({host.backend}, model={host.model})")
                     return host.client.chat(messages, max_tokens, temperature)
                 except VLLMModelNotFoundError as exc:
                     new_model = self._renegotiate_host_model(host, exc)
@@ -801,16 +817,33 @@ class MultiHostClient:
         """
         Validate a host connection for health check recovery.
 
+        Uses a short timeout to avoid blocking the health check thread
+        for minutes when a host is unreachable (e.g., DNS/mDNS for .local
+        addresses can block far longer than TCP connect timeouts).
+
         Returns:
             True if connection is valid, False otherwise
         """
-        try:
-            # Use existing validation from client implementations
+        import concurrent.futures
+
+        timeout = self.config.health_check_timeout
+
+        def _do_validate():
             if host.backend == 'vllm':
                 host.client._validate_connection()
-            else:  # ollama
+            else:
                 host.client._validate_connection()
+
+        try:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+                future = executor.submit(_do_validate)
+                future.result(timeout=timeout)
             return True
+        except concurrent.futures.TimeoutError:
+            logger.debug(
+                f"Health check timed out for {host.url} after {timeout}s"
+            )
+            return False
         except Exception as e:
             logger.debug(f"Health check failed for {host.url}: {e}")
             return False
@@ -873,7 +906,6 @@ class MultiHostClient:
         """Background thread loop for health checks."""
         logger.info("Health check thread started")
         last_status_log = datetime.now()
-        status_log_interval = timedelta(minutes=5)
 
         while not self._shutdown_event.is_set():
             # Wake every 5 seconds to check for work
@@ -888,15 +920,19 @@ class MultiHostClient:
             except Exception as e:
                 logger.error(f"Error in health check loop: {e}", exc_info=True)
 
-            # Periodic status logging
-            if datetime.now() - last_status_log >= status_log_interval:
-                with self._host_lock:
-                    healthy = len(self._vllm_hosts) + len(self._ollama_hosts)
-                    unhealthy = len(self._unhealthy_hosts)
+            # Log status more frequently when hosts are unhealthy
+            with self._host_lock:
+                healthy = len(self._vllm_hosts) + len(self._ollama_hosts)
+                unhealthy = len(self._unhealthy_hosts)
+                unhealthy_urls = list(self._unhealthy_hosts.keys())
+            interval = timedelta(minutes=1) if unhealthy > 0 else timedelta(minutes=5)
+            if datetime.now() - last_status_log >= interval:
                 if healthy > 0 or unhealthy > 0:
-                    logger.info(
-                        f"Connection pool status: {healthy} healthy, {unhealthy} unhealthy"
-                    )
+                    msg = f"Connection pool: {healthy} healthy, {unhealthy} unhealthy"
+                    if unhealthy_urls:
+                        msg += f" ({', '.join(unhealthy_urls)})"
+                    msg += f" | concurrency={self._effective_max_parallel}"
+                    logger.info(msg)
                 last_status_log = datetime.now()
 
         logger.info("Health check thread stopped")
