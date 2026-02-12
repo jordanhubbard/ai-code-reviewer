@@ -234,27 +234,58 @@ release: test
 		echo "ERROR: gh CLI not authenticated. Run 'gh auth login' first."; \
 		exit 1; \
 	fi
-	@# Get latest release version and bump it
-	@LATEST=$$(gh release list --limit 1 --json tagName --jq '.[0].tagName // empty' 2>/dev/null | sed 's/^v//'); \
-	if [ -z "$$LATEST" ]; then \
+	@# Determine next version from the HIGHEST of local tags and GitHub releases
+	@LATEST_TAG=$$(git tag -l 'v0.*' | sed 's/^v//' | sort -t. -k1,1n -k2,2n | tail -1); \
+	LATEST_RELEASE=$$(gh release list --limit 1 --json tagName --jq '.[0].tagName // empty' 2>/dev/null | sed 's/^v//'); \
+	if [ -z "$$LATEST_TAG" ] && [ -z "$$LATEST_RELEASE" ]; then \
 		NEW_VERSION="0.1"; \
-		echo "No previous release found. Starting at v$$NEW_VERSION"; \
+		echo "No previous version found. Starting at v$$NEW_VERSION"; \
 	else \
-		MAJOR=$$(echo "$$LATEST" | cut -d. -f1); \
-		MINOR=$$(echo "$$LATEST" | cut -d. -f2); \
+		TAG_MINOR=$$(echo "$${LATEST_TAG:-0.0}" | cut -d. -f2); \
+		REL_MINOR=$$(echo "$${LATEST_RELEASE:-0.0}" | cut -d. -f2); \
+		if [ "$$TAG_MINOR" -gt "$$REL_MINOR" ] 2>/dev/null; then \
+			HIGHEST="$$LATEST_TAG"; \
+		else \
+			HIGHEST="$$LATEST_RELEASE"; \
+		fi; \
+		MAJOR=$$(echo "$$HIGHEST" | cut -d. -f1); \
+		MINOR=$$(echo "$$HIGHEST" | cut -d. -f2); \
 		NEW_MINOR=$$((MINOR + 1)); \
 		NEW_VERSION="$$MAJOR.$$NEW_MINOR"; \
-		echo "Previous release: v$$LATEST -> New release: v$$NEW_VERSION"; \
+		echo "Highest existing version: v$$HIGHEST -> New release: v$$NEW_VERSION"; \
 	fi; \
 	echo ""; \
+	if git rev-parse "v$$NEW_VERSION" >/dev/null 2>&1; then \
+		echo "ERROR: Tag v$$NEW_VERSION already exists locally."; \
+		echo "  Points to: $$(git log v$$NEW_VERSION --oneline -1)"; \
+		echo "  HEAD is:   $$(git log HEAD --oneline -1)"; \
+		echo "  To fix: git tag -d v$$NEW_VERSION && git push origin :refs/tags/v$$NEW_VERSION"; \
+		exit 1; \
+	fi; \
+	if gh release view "v$$NEW_VERSION" >/dev/null 2>&1; then \
+		echo "ERROR: GitHub release v$$NEW_VERSION already exists."; \
+		echo "  To fix: gh release delete v$$NEW_VERSION --yes"; \
+		exit 1; \
+	fi; \
 	echo "Creating tag v$$NEW_VERSION..."; \
-	git tag -a "v$$NEW_VERSION" -m "Release v$$NEW_VERSION"; \
+	if ! git tag -a "v$$NEW_VERSION" -m "Release v$$NEW_VERSION"; then \
+		echo "ERROR: Failed to create tag v$$NEW_VERSION"; \
+		exit 1; \
+	fi; \
 	echo "Pushing tag to origin..."; \
-	git push origin "v$$NEW_VERSION"; \
+	if ! git push origin "v$$NEW_VERSION"; then \
+		echo "ERROR: Failed to push tag. Cleaning up local tag..."; \
+		git tag -d "v$$NEW_VERSION"; \
+		exit 1; \
+	fi; \
 	echo "Creating GitHub release..."; \
-	gh release create "v$$NEW_VERSION" \
+	if ! gh release create "v$$NEW_VERSION" \
 		--title "v$$NEW_VERSION" \
-		--generate-notes; \
+		--generate-notes; then \
+		echo "ERROR: Failed to create GitHub release. Tag v$$NEW_VERSION was pushed."; \
+		echo "  To clean up: git tag -d v$$NEW_VERSION && git push origin :refs/tags/v$$NEW_VERSION"; \
+		exit 1; \
+	fi; \
 	echo ""; \
 	echo "✓ Release v$$NEW_VERSION created successfully!"; \
 	echo "  View at: $$(gh release view v$$NEW_VERSION --json url --jq '.url')"
