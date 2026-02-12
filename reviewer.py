@@ -894,6 +894,16 @@ class BeadsMigrationError(RuntimeError):
 class BeadsManager:
     """Lightweight wrapper around the bd CLI for directory tracking."""
 
+    CLOSED_STATUSES = {
+        'closed',
+        'done',
+        'completed',
+        'canceled',
+        'cancelled',
+        'archived',
+        'resolved',
+    }
+
     def __init__(
         self,
         source_root: Path,
@@ -1317,6 +1327,20 @@ class BeadsManager:
                 'title': issue.get('title'),
             }
 
+    def refresh_issues(self) -> None:
+        if not self.enabled:
+            return
+        self.issues = {}
+        self._load_existing_issues()
+        if self.issues:
+            self.wrong_source_tree = self._check_for_wrong_source_tree()
+
+    def _is_open_status(self, status: Optional[str]) -> bool:
+        normalized = (status or '').strip().lower()
+        if not normalized:
+            return True
+        return normalized not in self.CLOSED_STATUSES
+
     @staticmethod
     def _extract_directory(issue: Dict[str, Any]) -> Optional[str]:
         title = (issue.get('title') or '').strip()
@@ -1449,7 +1473,7 @@ class BeadsManager:
     def has_open_work(self) -> bool:
         """Return True if any directory review bead is still open or in_progress."""
         return any(
-            issue.get('status') in ('open', 'in_progress')
+            self._is_open_status(issue.get('status'))
             for issue in self.issues.values()
         )
 
@@ -1457,14 +1481,14 @@ class BeadsManager:
         """Return directory names that have open or in_progress beads."""
         return [
             directory for directory, issue in self.issues.items()
-            if issue.get('status') in ('open', 'in_progress')
+            if self._is_open_status(issue.get('status'))
         ]
 
     def get_open_count(self) -> int:
         """Return count of non-closed directory review beads."""
         return sum(
             1 for issue in self.issues.values()
-            if issue.get('status') in ('open', 'in_progress')
+            if self._is_open_status(issue.get('status'))
         )
 
     def create_systemic_issue(
@@ -4820,6 +4844,8 @@ TO FIX:
             # Check if we're in forever mode and no more work remains
             if self.forever_mode:
                 next_pending = self.index.get_next_pending()
+                if self.beads and next_pending is None and self.session.current_directory is None:
+                    self.beads.refresh_issues()
                 beads_open = self.beads.has_open_work() if self.beads else False
                 if next_pending is None and not beads_open and self.session.current_directory is None:
                     # All known work is done - re-scan for new directories
