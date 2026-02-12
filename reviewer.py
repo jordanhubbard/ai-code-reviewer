@@ -4591,7 +4591,13 @@ TO FIX:
                 self.session.llm_retry_backoff = 5  # Start with 5 second backoff
             
             try:
+                history_chars = sum(len(m.get('content', '')) for m in self.history)
+                history_tokens_est = history_chars // 4
+                print(f"Waiting for LLM response (~{history_tokens_est} tokens in context)...", flush=True)
+                llm_start = time.time()
                 response = self.ollama.chat(self.history)
+                llm_elapsed = time.time() - llm_start
+                print(f"LLM responded in {llm_elapsed:.1f}s")
                 # Reset retry counters on success
                 self.session.llm_retry_count = 0
                 self.session.llm_retry_backoff = 5
