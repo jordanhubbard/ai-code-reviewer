@@ -64,7 +64,7 @@ class PooledHTTPClient:
             self._client = httpx.Client(
                 limits=limits,
                 timeout=timeout,
-                http2=True,  # Enable HTTP/2 for better performance
+                http2=False,  # HTTP/2 disabled (requires h2 package)
                 follow_redirects=True,
             )
             logger.info(
