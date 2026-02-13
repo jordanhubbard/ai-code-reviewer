@@ -9,6 +9,7 @@ Provides early validation of server connectivity and model availability.
 import json
 import logging
 import os
+import re
 import time
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Any
@@ -34,6 +35,72 @@ class VLLMConnectionError(VLLMError):
 class VLLMModelNotFoundError(VLLMError):
     """Raised when the requested model is not available on the server."""
     pass
+
+
+class VLLMContextLimitError(VLLMError):
+    """Raised when the request exceeds the model's context window."""
+
+    def __init__(
+        self,
+        *,
+        max_model_len: int,
+        input_tokens: int,
+        requested_max_tokens: Optional[int] = None,
+        raw_message: str = "",
+    ):
+        self.max_model_len = int(max_model_len)
+        self.input_tokens = int(input_tokens)
+        self.requested_max_tokens = int(requested_max_tokens) if requested_max_tokens is not None else None
+        self.raw_message = raw_message
+        super().__init__(self.__str__())
+
+    @property
+    def max_completion_tokens(self) -> int:
+        return self.max_model_len - self.input_tokens
+
+    def suggested_max_tokens(self, *, buffer_tokens: int = 32, min_tokens: int = 16) -> int:
+        return max(int(min_tokens), int(self.max_completion_tokens) - int(buffer_tokens))
+
+    def __str__(self) -> str:
+        base = (
+            f"vLLM request exceeds context window: model_limit={self.max_model_len} "
+            f"input_tokens={self.input_tokens} max_completion_tokens={self.max_completion_tokens}"
+        )
+        if self.requested_max_tokens is not None:
+            base += f" requested_max_tokens={self.requested_max_tokens}"
+        if self.raw_message:
+            base += f" ({self.raw_message})"
+        return base
+
+
+_VLLM_CONTEXT_LIMIT_RE = re.compile(
+    r"maximum context length is\s+(\d+)\s+tokens\s+and\s+your\s+request\s+has\s+(\d+)\s+input\s+tokens",
+    re.IGNORECASE,
+)
+_VLLM_REQUESTED_MAX_TOKENS_RE = re.compile(r"too\s+large:\s*(\d+)", re.IGNORECASE)
+
+
+def _parse_vllm_context_limit_error_message(message: str) -> Optional[tuple[int, int, Optional[int]]]:
+    """Parse vLLM/OpenAI-style context limit errors.
+
+    Returns:
+        (max_model_len, input_tokens, requested_max_tokens) if recognized, else None.
+    """
+    if not message:
+        return None
+    match = _VLLM_CONTEXT_LIMIT_RE.search(message)
+    if not match:
+        return None
+    max_model_len = int(match.group(1))
+    input_tokens = int(match.group(2))
+    requested: Optional[int] = None
+    req = _VLLM_REQUESTED_MAX_TOKENS_RE.search(message)
+    if req:
+        try:
+            requested = int(req.group(1))
+        except (TypeError, ValueError):
+            requested = None
+    return max_model_len, input_tokens, requested
 
 
 @dataclass
@@ -115,6 +182,19 @@ class VLLMClient:
                     raise VLLMModelNotFoundError(
                         f"Model not found on {url}: {error_body}"
                     ) from e
+                if e.code == 400:
+                    parsed = _parse_vllm_context_limit_error_message(error_body)
+                    if parsed:
+                        max_model_len, input_tokens, requested = parsed
+                        if not self.config.max_model_len:
+                            self.config.max_model_len = int(max_model_len)
+                            logger.info(f"Learned model context length from error: {self.config.max_model_len} tokens")
+                        raise VLLMContextLimitError(
+                            max_model_len=max_model_len,
+                            input_tokens=input_tokens,
+                            requested_max_tokens=requested,
+                            raw_message=error_body,
+                        ) from e
                 raise VLLMConnectionError(
                     f"HTTP {e.code} from {url}: {error_body}"
                 ) from e
@@ -145,6 +225,19 @@ class VLLMClient:
                 raise VLLMModelNotFoundError(
                     f"Model not found on {url}: {error_body}"
                 ) from e
+            if e.code == 400:
+                parsed = _parse_vllm_context_limit_error_message(error_body)
+                if parsed:
+                    max_model_len, input_tokens, requested = parsed
+                    if not self.config.max_model_len:
+                        self.config.max_model_len = int(max_model_len)
+                        logger.info(f"Learned model context length from error: {self.config.max_model_len} tokens")
+                    raise VLLMContextLimitError(
+                        max_model_len=max_model_len,
+                        input_tokens=input_tokens,
+                        requested_max_tokens=requested,
+                        raw_message=error_body,
+                    ) from e
             raise VLLMConnectionError(
                 f"HTTP {e.code} from {url}: {error_body}"
             ) from e
@@ -204,6 +297,19 @@ class VLLMClient:
                 raise VLLMModelNotFoundError(
                     f"Model not found on {url}: {error_body}"
                 ) from e
+            if e.code == 400:
+                parsed = _parse_vllm_context_limit_error_message(error_body)
+                if parsed:
+                    max_model_len, input_tokens, requested = parsed
+                    if not self.config.max_model_len:
+                        self.config.max_model_len = int(max_model_len)
+                        logger.info(f"Learned model context length from error: {self.config.max_model_len} tokens")
+                    raise VLLMContextLimitError(
+                        max_model_len=max_model_len,
+                        input_tokens=input_tokens,
+                        requested_max_tokens=requested,
+                        raw_message=error_body,
+                    ) from e
             raise VLLMConnectionError(
                 f"HTTP {e.code} from {url}: {error_body}"
             ) from e

@@ -26,7 +26,7 @@ from ollama_client import (
 )
 from vllm_client import (
     VLLMClient, VLLMConfig, VLLMError,
-    VLLMConnectionError, VLLMModelNotFoundError
+    VLLMConnectionError, VLLMModelNotFoundError, VLLMContextLimitError
 )
 
 logger = logging.getLogger(__name__)
@@ -603,6 +603,22 @@ class MultiHostClient:
                 try:
                     logger.info(f"Sending chat request to {host.url} ({host.backend}, model={host.model})")
                     return host.client.chat(messages, max_tokens, temperature)
+                except VLLMContextLimitError as exc:
+                    # This is a request sizing issue, not a host health issue.
+                    suggested = exc.suggested_max_tokens()
+                    if suggested <= 0:
+                        last_error = exc
+                        continue
+                    logger.warning(
+                        f"vLLM context limit hit on {host.url}; retrying with max_tokens={suggested}"
+                    )
+                    try:
+                        return host.client.chat(messages, suggested, temperature)
+                    except Exception as retry_exc:
+                        last_error = retry_exc
+                        if self._is_host_failure(retry_exc):
+                            self._mark_host_unhealthy(host, retry_exc)
+                        continue
                 except VLLMModelNotFoundError as exc:
                     new_model = self._renegotiate_host_model(host, exc)
                     if new_model:
@@ -662,6 +678,21 @@ class MultiHostClient:
                 try:
                     logger.debug(f"Routing generate request to {host.url} ({host.backend})")
                     return host.client.generate(prompt, max_tokens, temperature)
+                except VLLMContextLimitError as exc:
+                    suggested = exc.suggested_max_tokens()
+                    if suggested <= 0:
+                        last_error = exc
+                        continue
+                    logger.warning(
+                        f"vLLM context limit hit on {host.url}; retrying with max_tokens={suggested}"
+                    )
+                    try:
+                        return host.client.generate(prompt, suggested, temperature)
+                    except Exception as retry_exc:
+                        last_error = retry_exc
+                        if self._is_host_failure(retry_exc):
+                            self._mark_host_unhealthy(host, retry_exc)
+                        continue
                 except VLLMModelNotFoundError as exc:
                     new_model = self._renegotiate_host_model(host, exc)
                     if new_model:
