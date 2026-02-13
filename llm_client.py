@@ -108,6 +108,8 @@ class MultiHostConfig:
     health_check_interval: int = 30
     health_check_max_interval: int = 300
     health_check_timeout: int = 10
+    connection_pooling: bool = True
+    max_http_connections: int = 16
 
 
 class MultiHostClient:
@@ -490,7 +492,10 @@ class MultiHostClient:
                     temperature=self.config.temperature,
                     extra_options=self.config.extra_options,
                 )
-                client = VLLMClient(vllm_config)
+                client = VLLMClient(
+                    vllm_config,
+                    enable_connection_pooling=self.config.connection_pooling
+                )
                 return HostConfig(
                     url=url,
                     backend='vllm',
@@ -525,7 +530,10 @@ class MultiHostClient:
                     ps_monitor_interval=self.config.ps_monitor_interval,
                     max_parallel_requests=1,  # Managed at MultiHostClient level
                 )
-                client = OllamaClient(ollama_config)
+                client = OllamaClient(
+                    ollama_config,
+                    enable_connection_pooling=self.config.connection_pooling
+                )
                 return HostConfig(
                     url=url,
                     backend='ollama',
@@ -1071,6 +1079,14 @@ def create_client_from_config(config_dict: Dict[str, Any]) -> MultiHostClient:
     if not isinstance(health_check_cfg, dict):
         health_check_cfg = {}
 
+    # Parse performance config from review.performance section
+    review_config = config_dict.get('review', {})
+    if not isinstance(review_config, dict):
+        review_config = {}
+    perf_config = review_config.get('performance', {})
+    if not isinstance(perf_config, dict):
+        perf_config = {}
+
     config = MultiHostConfig(
         hosts=hosts,
         models=models,
@@ -1090,6 +1106,8 @@ def create_client_from_config(config_dict: Dict[str, Any]) -> MultiHostClient:
         health_check_interval=_coerce_int(health_check_cfg.get('interval', 30), 30),
         health_check_max_interval=_coerce_int(health_check_cfg.get('max_interval', 300), 300),
         health_check_timeout=_coerce_int(health_check_cfg.get('timeout', 10), 10),
+        connection_pooling=_coerce_bool(perf_config.get('connection_pooling', True), True),
+        max_http_connections=_coerce_int(perf_config.get('max_http_connections', 16), 16),
     )
     
     return MultiHostClient(config)

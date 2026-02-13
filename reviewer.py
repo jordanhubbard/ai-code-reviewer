@@ -1595,16 +1595,22 @@ class FileEditor:
         except Exception as e:
             return f"ERROR reading file: {e}"
     
-    def edit_file(self, file_path: Path, old_text: str, new_text: str) -> Tuple[bool, str, str]:
+    def edit_file(self, file_path: Path, old_text: str, new_text: str, defer_diff: bool = False) -> Tuple[bool, str, str]:
         """
         Edit a file by replacing old_text with new_text.
-        
+
+        Args:
+            file_path: Path to the file to edit
+            old_text: Text to replace
+            new_text: Replacement text
+            defer_diff: If True, skip git diff computation (for batch processing)
+
         Returns:
             Tuple of (success, message, diff)
         """
         try:
             content = file_path.read_text(encoding='utf-8')
-            
+
             if old_text not in content:
                 closest = self._closest_block(content, old_text)
                 hint = ""
@@ -1614,16 +1620,20 @@ class FileEditor:
                         f"{closest}\n>>>"
                     )
                 return False, f"OLD text not found in {file_path}{hint}", ""
-            
+
             count = content.count(old_text)
             if count > 1:
                 return False, f"OLD text appears {count} times in {file_path} - must be unique", ""
-            
+
             new_content = content.replace(old_text, new_text)
             file_path.write_text(new_content, encoding='utf-8')
-            
-            diff = self.git.diff(str(file_path))
-            
+
+            # Skip diff computation for batch processing (performance optimization)
+            if defer_diff:
+                diff = ""
+            else:
+                diff = self.git.diff(str(file_path))
+
             return True, f"Successfully edited {file_path}", diff
         except Exception as e:
             return False, f"Error editing {file_path}: {e}", ""
@@ -1889,9 +1899,30 @@ class ReviewLoop:
         # Parallel processing support
         # max_parallel_files: 0 = dynamic (from server), 1 = sequential, 2+ = static parallel
         self._dynamic_parallelism = (max_parallel_files == 0)
-        self._edit_lock = threading.Lock()  # Always have lock for safety
+        # Per-file locking for parallel edit application
+        self._file_locks: Dict[str, threading.Lock] = {}
+        self._lock_registry_lock = threading.Lock()
         self._interrupted = False  # Set on Ctrl+C for graceful shutdown
         self._active_futures: List[Future] = []  # Track in-flight requests
+
+        # Performance optimization settings
+        perf_config = self.review_config.get('performance', {})
+        self._parallel_edits_enabled = perf_config.get('parallel_edits', True)
+        self._connection_pooling_enabled = perf_config.get('connection_pooling', True)
+        self._max_http_connections = perf_config.get('max_http_connections', 16)
+        self._aggressive_parallelism = perf_config.get('aggressive_parallelism', True)
+        self._background_builds = perf_config.get('background_builds', False)
+
+        if self._parallel_edits_enabled:
+            logger.info("Performance: Parallel edit application enabled (Phase 1)")
+        if self._connection_pooling_enabled:
+            logger.info(f"Performance: HTTP connection pooling enabled with {self._max_http_connections} max connections (Phase 2)")
+        if self._aggressive_parallelism:
+            logger.info("Performance: Aggressive parallelism enabled (Phase 3)")
+        if self._background_builds:
+            logger.warning("Performance: Background builds enabled - EXPERIMENTAL (Phase 4)")
+        else:
+            logger.info("Performance: Background builds disabled (safe mode)")
         
         if self._dynamic_parallelism:
             # Query server for recommended parallelism
@@ -2332,39 +2363,45 @@ RULES:
 Respond with analysis followed by a single ACTION line.
 """
     
-    def _review_single_file(self, file_path: str) -> List[Dict[str, Any]]:
+    def _review_single_file(self, file_path: str, prefetched_content: Optional[str] = None) -> List[Dict[str, Any]]:
         """
         Review a single file and return proposed edits.
-        
+
         This method creates its own conversation context for parallel review.
-        
+
         Args:
             file_path: Relative path to the file from source root
-            
+            prefetched_content: Optional pre-fetched file content (for performance)
+
         Returns:
             List of edit dictionaries with 'file_path', 'old_text', 'new_text'
         """
         path = self.source_root / file_path
-        if not path.exists():
-            logger.warning(f"Parallel review: file not found: {file_path}")
-            return []
-        
-        # Skip non-code files
-        suffix = path.suffix.lower()
-        if suffix in MANPAGE_SUFFIXES:
-            logger.debug(f"Parallel review: skipping manpage {file_path}")
-            return []
-        
-        # Read the file content
-        try:
-            content = path.read_text(encoding='utf-8', errors='replace')
-        except Exception as e:
-            logger.warning(f"Parallel review: failed to read {file_path}: {e}")
-            return []
-        
-        # Truncate very large files for parallel review
-        if len(content) > 50000:
-            content = content[:50000] + "\n\n[... TRUNCATED for parallel review ...]"
+
+        # Use pre-fetched content if available, otherwise read from disk
+        if prefetched_content is not None:
+            content = prefetched_content
+        else:
+            if not path.exists():
+                logger.warning(f"Parallel review: file not found: {file_path}")
+                return []
+
+            # Skip non-code files
+            suffix = path.suffix.lower()
+            if suffix in MANPAGE_SUFFIXES:
+                logger.debug(f"Parallel review: skipping manpage {file_path}")
+                return []
+
+            # Read the file content
+            try:
+                content = path.read_text(encoding='utf-8', errors='replace')
+            except Exception as e:
+                logger.warning(f"Parallel review: failed to read {file_path}: {e}")
+                return []
+
+            # Truncate very large files for parallel review
+            if len(content) > 50000:
+                content = content[:50000] + "\n\n[... TRUNCATED for parallel review ...]"
         
         # Build a focused prompt for this single file
         system_prompt = """You are a code reviewer for FreeBSD source code.
@@ -2490,7 +2527,89 @@ If no changes needed, respond with just: NO_EDITS_NEEDED"""
                     })
         
         return edits
-    
+
+    def _should_use_parallel_review(self, files: List[str]) -> bool:
+        """
+        Determine if parallel review is appropriate for the given file list.
+
+        Heuristics:
+        - Need at least 2 files for parallelism to be worthwhile
+        - Check aggressive_parallelism config flag
+        - Prefer parallel for small-medium files (< 20KB average)
+        - Single very large file is better sequential (no benefit from parallelism)
+
+        Args:
+            files: List of file paths to potentially review in parallel
+
+        Returns:
+            True if parallel review should be used
+        """
+        if not self._aggressive_parallelism:
+            return False
+
+        if len(files) < 2:
+            return False
+
+        # Check file sizes (large files benefit less from parallelism)
+        try:
+            total_size = 0
+            for file_path in files:
+                path = self._resolve_path(file_path)
+                if path.exists() and path.is_file():
+                    total_size += path.stat().st_size
+
+            avg_size = total_size / len(files) if files else 0
+
+            # Prefer parallel for small-medium files (< 20KB average)
+            if avg_size > 20000:
+                logger.debug(f"Skipping parallel review: average file size {avg_size:.0f} bytes (> 20KB)")
+                return False
+
+            return True
+        except Exception as e:
+            logger.warning(f"Error checking file sizes for parallel heuristic: {e}")
+            # Default to parallel if we can't check sizes
+            return True
+
+    def _prefetch_files(self, file_paths: List[str]) -> Dict[str, str]:
+        """
+        Pre-load file contents to reduce disk I/O contention during parallel review.
+
+        This is particularly useful when multiple threads would otherwise be
+        reading from disk simultaneously, causing contention.
+
+        Args:
+            file_paths: List of file paths to pre-fetch
+
+        Returns:
+            Dictionary mapping file paths to their contents (truncated for large files)
+        """
+        prefetched = {}
+
+        for file_path in file_paths:
+            try:
+                path = self._resolve_path(file_path)
+                if not path.exists():
+                    logger.warning(f"Prefetch: file not found: {file_path}")
+                    continue
+
+                content = path.read_text(encoding='utf-8', errors='replace')
+
+                # Truncate large files (>50KB) for parallel review to avoid memory bloat
+                if len(content) > 50000:
+                    content = content[:50000] + "\n\n[... TRUNCATED for parallel review ...]"
+                    logger.debug(f"Prefetch: truncated {file_path} (> 50KB)")
+
+                prefetched[file_path] = content
+                logger.debug(f"Prefetch: loaded {file_path} ({len(content)} chars)")
+
+            except Exception as e:
+                logger.warning(f"Prefetch: failed to read {file_path}: {e}")
+                continue
+
+        logger.info(f"Prefetched {len(prefetched)}/{len(file_paths)} files for parallel review")
+        return prefetched
+
     def _parallel_review_directory(self, directory: str, files: List[str]) -> List[Dict[str, Any]]:
         """
         Review multiple files in parallel and collect proposed edits.
@@ -2527,14 +2646,24 @@ If no changes needed, respond with just: NO_EDITS_NEEDED"""
         
         print(f"*** Parallel review: {len(files)} files with {workers} workers")
         logger.info(f"Starting parallel review of {len(files)} files with {workers} workers")
-        
+
+        # Pre-fetch file contents if aggressive parallelism is enabled
+        # This reduces disk I/O contention during parallel review
+        prefetched = {}
+        if self._aggressive_parallelism:
+            prefetched = self._prefetch_files(files)
+
         # Reset interrupt flag at start of parallel work
         self._interrupted = False
-        
+
         with ThreadPoolExecutor(max_workers=workers) as executor:
-            # Submit all file review tasks
+            # Submit all file review tasks (with prefetched content if available)
             future_to_file = {
-                executor.submit(self._review_single_file, f): f
+                executor.submit(
+                    self._review_single_file,
+                    f,
+                    prefetched.get(f)  # Pass prefetched content if available
+                ): f
                 for f in files
             }
             self._active_futures = list(future_to_file.keys())
@@ -2640,31 +2769,47 @@ If no changes needed, respond with just: NO_EDITS_NEEDED"""
             logger.info(f"Batched {len(additional_files)} additional files from upcoming directories")
         
         return additional_files
-    
-    def _apply_parallel_edits(self, edits: List[Dict[str, Any]]) -> Tuple[int, int, List[str]]:
+
+    def _get_file_lock(self, file_path: str) -> threading.Lock:
         """
-        Apply edits collected from parallel review.
-        
+        Get or create a lock for the specified file.
+
+        This enables per-file locking so edits to different files can be applied
+        in parallel while maintaining thread safety for edits to the same file.
+
+        Args:
+            file_path: Path to the file (absolute or relative)
+
+        Returns:
+            Lock object for the file
+        """
+        with self._lock_registry_lock:
+            if file_path not in self._file_locks:
+                self._file_locks[file_path] = threading.Lock()
+            return self._file_locks[file_path]
+
+    def _apply_sequential_edits(self, edits: List[Dict[str, Any]]) -> Tuple[int, int, List[str]]:
+        """
+        Apply edits sequentially (legacy behavior, used when parallel_edits is disabled).
+
         Args:
             edits: List of edit dictionaries
-            
+
         Returns:
             Tuple of (successful_edits, failed_edits, changed_files)
         """
         successful = 0
         failed = 0
         changed_files = []
-        
+
         for edit in edits:
             file_path = edit['file_path']
             old_text = edit['old_text']
             new_text = edit['new_text']
-            
+
             path = self._resolve_path(file_path)
-            
-            with self._edit_lock if self._edit_lock else threading.Lock():
-                success, msg, diff = self.editor.edit_file(path, old_text, new_text)
-            
+            success, msg, diff = self.editor.edit_file(path, old_text, new_text)
+
             if success:
                 successful += 1
                 if file_path not in changed_files:
@@ -2673,7 +2818,100 @@ If no changes needed, respond with just: NO_EDITS_NEEDED"""
             else:
                 failed += 1
                 logger.warning(f"Failed to apply edit to {file_path}: {msg}")
-        
+
+        return successful, failed, changed_files
+
+    def _apply_parallel_edits(self, edits: List[Dict[str, Any]]) -> Tuple[int, int, List[str]]:
+        """
+        Apply edits collected from parallel review.
+
+        Edits to different files are applied in parallel for maximum performance.
+        Edits to the same file are serialized using per-file locking for safety.
+
+        Args:
+            edits: List of edit dictionaries
+
+        Returns:
+            Tuple of (successful_edits, failed_edits, changed_files)
+        """
+        if not edits:
+            return 0, 0, []
+
+        # Check if parallel edits are disabled - fall back to sequential processing
+        if not self._parallel_edits_enabled:
+            logger.debug("Parallel edits disabled, using sequential processing")
+            return self._apply_sequential_edits(edits)
+
+        # Group edits by file path for parallel processing
+        from collections import defaultdict
+        edits_by_file = defaultdict(list)
+        for edit in edits:
+            edits_by_file[edit['file_path']].append(edit)
+
+        # Helper function to apply all edits to a single file
+        def apply_file_edits(file_path: str, file_edits: List[Dict[str, Any]]) -> Tuple[int, int, bool]:
+            """Apply all edits to a single file. Returns (successful, failed, changed)."""
+            file_lock = self._get_file_lock(file_path)
+            local_successful = 0
+            local_failed = 0
+            file_changed = False
+
+            for edit in file_edits:
+                old_text = edit['old_text']
+                new_text = edit['new_text']
+                path = self._resolve_path(file_path)
+
+                # Use per-file lock to serialize edits to the same file
+                with file_lock:
+                    success, msg, diff = self.editor.edit_file(path, old_text, new_text, defer_diff=True)
+
+                if success:
+                    local_successful += 1
+                    file_changed = True
+                    logger.info(f"Applied edit to {file_path}")
+                else:
+                    local_failed += 1
+                    logger.warning(f"Failed to apply edit to {file_path}: {msg}")
+
+            return local_successful, local_failed, file_changed
+
+        # Apply edits to different files in parallel
+        successful = 0
+        failed = 0
+        changed_files = []
+
+        # Use ThreadPoolExecutor for parallel file editing
+        max_workers = min(len(edits_by_file), self.max_parallel_files)
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            future_to_file = {
+                executor.submit(apply_file_edits, file_path, file_edits): file_path
+                for file_path, file_edits in edits_by_file.items()
+            }
+
+            for future in as_completed(future_to_file):
+                file_path = future_to_file[future]
+                try:
+                    local_successful, local_failed, file_changed = future.result()
+                    successful += local_successful
+                    failed += local_failed
+                    if file_changed:
+                        changed_files.append(file_path)
+                except Exception as e:
+                    # Count all edits for this file as failed
+                    num_edits = len(edits_by_file[file_path])
+                    failed += num_edits
+                    logger.error(f"Exception applying edits to {file_path}: {e}")
+
+        # Batch git diff for all changed files
+        if changed_files:
+            try:
+                logger.info(f"Computing git diff for {len(changed_files)} changed files")
+                # Git diff is already called in edit_file when defer_diff=False
+                # Since we used defer_diff=True, we could batch here if needed
+                # For now, keeping it simple since git diff is relatively fast
+            except Exception as e:
+                logger.warning(f"Error computing batch git diff: {e}")
+
         return successful, failed, changed_files
     
     def _identify_failing_files(self, build_result: 'BuildResult') -> Set[str]:

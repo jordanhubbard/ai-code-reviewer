@@ -19,6 +19,9 @@ from typing import Dict, List, Optional, Any
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
+# Import connection pooling client (falls back to urllib if httpx not available)
+from async_http_client import get_global_client, PooledHTTPClient
+
 logger = logging.getLogger(__name__)
 
 
@@ -74,13 +77,14 @@ class OllamaClient:
     VALIDATION_PROMPT = "What is 2 + 2? Answer with just the number."
     VALIDATION_EXPECTED = "4"
     
-    def __init__(self, config: OllamaConfig):
+    def __init__(self, config: OllamaConfig, enable_connection_pooling: bool = True):
         """
         Initialize the Ollama client.
-        
+
         Args:
             config: OllamaConfig with server URL, model name, etc.
-            
+            enable_connection_pooling: Whether to use connection pooling (default: True)
+
         Raises:
             OllamaConnectionError: If server is unreachable
             OllamaModelNotFoundError: If model is not available
@@ -89,44 +93,79 @@ class OllamaClient:
         self.config = config
         self.base_url = config.url.rstrip('/')
         self._concurrency_sem = threading.Semaphore(max(1, config.max_parallel_requests))
-        
+
+        # Get pooled HTTP client if enabled
+        self._use_pooling = enable_connection_pooling
+        if enable_connection_pooling:
+            self._http_client = get_global_client(
+                max_connections=max(8, config.max_parallel_requests * 2),
+                timeout=float(config.timeout),
+            )
+        else:
+            self._http_client = None
+
         # Validate everything on init
         self._validate_connection()
         self._validate_model()
         self._validate_handshake()
-        
-        logger.info(f"Ollama client initialized: {self.base_url} model={config.model} timeout={config.timeout}s")
+
+        pooling_status = "with connection pooling" if enable_connection_pooling else "without pooling"
+        logger.info(f"Ollama client initialized: {self.base_url} model={config.model} timeout={config.timeout}s {pooling_status}")
     
     def _make_request(
-        self, 
-        endpoint: str, 
+        self,
+        endpoint: str,
         method: str = "GET",
         data: Optional[Dict] = None,
         timeout: Optional[int] = None
     ) -> Dict:
         """
         Make an HTTP request to the Ollama server.
-        
+
         Args:
             endpoint: API endpoint (e.g., "/api/tags")
             method: HTTP method
             data: Request body (will be JSON-encoded)
             timeout: Request timeout in seconds
-            
+
         Returns:
             Parsed JSON response
-            
+
         Raises:
             OllamaConnectionError: On connection failure
         """
         url = f"{self.base_url}{endpoint}"
         timeout = timeout or self.config.timeout
-        
+
+        # Use connection pooling if enabled
+        if self._use_pooling and self._http_client is not None:
+            try:
+                return self._http_client.json_request(
+                    url=url,
+                    method=method,
+                    json_data=data,
+                    timeout=float(timeout),
+                )
+            except HTTPError as e:
+                error_body = getattr(e, 'response_body', b'').decode('utf-8') or str(e)
+                raise OllamaConnectionError(
+                    f"HTTP {e.code} from {url}: {error_body}"
+                ) from e
+            except URLError as e:
+                raise OllamaConnectionError(
+                    f"Cannot connect to Ollama server at {self.base_url}: {e.reason}"
+                ) from e
+            except json.JSONDecodeError as e:
+                raise OllamaConnectionError(
+                    f"Invalid JSON response from {url}: {e}"
+                ) from e
+
+        # Fall back to urllib (no connection pooling)
         headers = {"Content-Type": "application/json"}
         body = json.dumps(data).encode('utf-8') if data else None
-        
+
         request = Request(url, data=body, headers=headers, method=method)
-        
+
         try:
             with urlopen(request, timeout=timeout) as response:
                 return json.loads(response.read().decode('utf-8'))

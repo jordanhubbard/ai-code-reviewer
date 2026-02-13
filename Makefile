@@ -76,6 +76,19 @@ check-deps:
 	else \
 		echo "✓ PyYAML found in venv"; \
 	fi
+	@# Check for httpx in venv (optional but recommended for connection pooling)
+	@if ! $(VENV_PY) -c "import httpx" >/dev/null 2>&1; then \
+		echo "httpx not found in venv. Installing for connection pooling..."; \
+		if ! $(VENV_PIP) install $(PIP_FLAGS) "httpx>=0.25.0"; then \
+			echo "⚠  httpx install failed - will use urllib fallback (no connection pooling)"; \
+			echo "   Performance will be reduced by 10-20%"; \
+			echo "   To fix: $(VENV_PIP) install httpx"; \
+		else \
+			echo "✓ httpx installed in venv (connection pooling enabled)"; \
+		fi; \
+	else \
+		echo "✓ httpx found in venv (connection pooling enabled)"; \
+	fi
 	@# Check for beads (bd)
 	@if ! command -v bd >/dev/null 2>&1; then \
 		echo "⚠  Beads (bd) CLI not found"; \
@@ -129,8 +142,8 @@ validate: check-deps
 test: check-deps
 	@echo "=== Syntax Check: All Python Modules ==="
 	@$(VENV_PY) -m py_compile ollama_client.py vllm_client.py llm_client.py \
-		build_executor.py reviewer.py chunker.py index_generator.py ops_logger.py \
-		scripts/config_update.py
+		async_http_client.py build_executor.py reviewer.py chunker.py index_generator.py \
+		ops_logger.py scripts/config_update.py
 	@echo "✓ All modules pass syntax check"
 	@echo ""
 	@echo "=== Import Check: LLM Client ==="

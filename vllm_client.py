@@ -15,6 +15,9 @@ from typing import Dict, List, Optional, Any
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
+# Import connection pooling client (falls back to urllib if httpx not available)
+from async_http_client import get_global_client, PooledHTTPClient
+
 logger = logging.getLogger(__name__)
 
 
@@ -53,30 +56,42 @@ class VLLMClient:
     Validates connectivity and model availability on initialization.
     """
     
-    def __init__(self, config: VLLMConfig, skip_validation: bool = False):
+    def __init__(self, config: VLLMConfig, skip_validation: bool = False, enable_connection_pooling: bool = True):
         """
         Initialize the vLLM client.
-        
+
         Args:
             config: VLLMConfig with server URL, model name, etc.
             skip_validation: Skip model validation (useful for probing)
-            
+            enable_connection_pooling: Whether to use connection pooling (default: True)
+
         Raises:
             VLLMConnectionError: If server is unreachable
             VLLMModelNotFoundError: If model is not available
         """
         self.config = config
         self.base_url = config.url.rstrip('/')
-        
+
+        # Get pooled HTTP client if enabled
+        self._use_pooling = enable_connection_pooling
+        if enable_connection_pooling:
+            self._http_client = get_global_client(
+                max_connections=16,
+                timeout=float(config.timeout),
+            )
+        else:
+            self._http_client = None
+
         if not skip_validation:
             self._validate_connection()
             self._validate_model()
-        
-        logger.info(f"vLLM client initialized: {self.base_url} model={config.model}")
+
+        pooling_status = "with connection pooling" if enable_connection_pooling else "without pooling"
+        logger.info(f"vLLM client initialized: {self.base_url} model={config.model} {pooling_status}")
     
     def _make_request(
-        self, 
-        endpoint: str, 
+        self,
+        endpoint: str,
         method: str = "GET",
         data: Optional[Dict] = None,
         timeout: Optional[int] = None
@@ -84,15 +99,43 @@ class VLLMClient:
         """Make an HTTP request to the vLLM server."""
         url = f"{self.base_url}{endpoint}"
         timeout = timeout or self.config.timeout
-        
+
+        # Use connection pooling if enabled
+        if self._use_pooling and self._http_client is not None:
+            try:
+                return self._http_client.json_request(
+                    url=url,
+                    method=method,
+                    json_data=data,
+                    timeout=float(timeout),
+                )
+            except HTTPError as e:
+                error_body = getattr(e, 'response_body', b'').decode('utf-8') or str(e)
+                if e.code == 404 and 'does not exist' in error_body.lower():
+                    raise VLLMModelNotFoundError(
+                        f"Model not found on {url}: {error_body}"
+                    ) from e
+                raise VLLMConnectionError(
+                    f"HTTP {e.code} from {url}: {error_body}"
+                ) from e
+            except URLError as e:
+                raise VLLMConnectionError(
+                    f"Cannot connect to vLLM server at {self.base_url}: {e.reason}"
+                ) from e
+            except json.JSONDecodeError as e:
+                raise VLLMConnectionError(
+                    f"Invalid JSON response from {url}: {e}"
+                ) from e
+
+        # Fall back to urllib (no connection pooling)
         headers = {
             "Content-Type": "application/json",
             "Accept": "application/json",
         }
         body = json.dumps(data).encode('utf-8') if data else None
-        
+
         request = Request(url, data=body, headers=headers, method=method)
-        
+
         try:
             with urlopen(request, timeout=timeout) as response:
                 return json.loads(response.read().decode('utf-8'))

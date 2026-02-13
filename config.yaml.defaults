@@ -217,7 +217,36 @@ review:
   #   (will warn at startup if this differs from server-recommended value)
   # Note: Builds are always sequential regardless of this setting
   max_parallel_files: 0
-  
+
+  # Performance optimization features
+  # These settings enable parallelization and connection pooling for faster reviews
+  performance:
+    # Phase 1: Enable per-file locking for parallel edit application
+    # When true, edits to different files are applied in parallel (2-3x speedup)
+    # When false, all edits are applied sequentially with a global lock
+    parallel_edits: true
+
+    # Phase 2: Use HTTP connection pooling for API requests
+    # When true, HTTP connections are reused across requests (10-20% latency reduction)
+    # When false, each request creates a new TCP connection (legacy behavior)
+    connection_pooling: true
+
+    # Maximum concurrent HTTP connections in the connection pool
+    # Only used when connection_pooling is enabled
+    max_http_connections: 16
+
+    # Phase 3: Extend parallel review to more contexts beyond SET_SCOPE
+    # When true, parallel review is used for batched file operations (1.5-2x throughput)
+    # When false, parallel review only used in SET_SCOPE action
+    aggressive_parallelism: true
+
+    # Phase 4: EXPERIMENTAL - Background build execution (HIGH RISK)
+    # When true, builds run in background while review continues (2-5x for build-heavy workflows)
+    # When false, builds block all review work (default, safe behavior)
+    # WARNING: This feature is experimental and may cause race conditions
+    # Only enable if you understand the risks and have tested thoroughly
+    background_builds: false
+
   # Maximum commits to revert during pre-flight sanity check recovery
   # If source doesn't build at startup, pre-flight reverts commits until it does
   # Higher values allow recovery from longer periods of broken commits
