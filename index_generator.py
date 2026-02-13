@@ -22,6 +22,54 @@ from datetime import datetime
 import re
 
 
+# ============================================================================
+# Constants
+# ============================================================================
+
+class Status:
+    """Status values for directory entries."""
+    PENDING = "pending"
+    CURRENT = "current"
+    DONE = "done"
+    SKIPPED = "skipped"
+
+
+class StatusMarker:
+    """Markdown checkbox markers for each status."""
+    PENDING = " "
+    CURRENT = ">"
+    DONE = "x"
+    SKIPPED = "-"
+
+
+# Bidirectional mappings between status and marker
+STATUS_TO_MARKER = {
+    Status.PENDING: StatusMarker.PENDING,
+    Status.CURRENT: StatusMarker.CURRENT,
+    Status.DONE: StatusMarker.DONE,
+    Status.SKIPPED: StatusMarker.SKIPPED,
+}
+
+MARKER_TO_STATUS = {
+    StatusMarker.PENDING: Status.PENDING,
+    StatusMarker.CURRENT: Status.CURRENT,
+    StatusMarker.DONE: Status.DONE,
+    StatusMarker.SKIPPED: Status.SKIPPED,
+}
+
+# Regex patterns for parsing index file
+CURRENT_POSITION_PATTERN = re.compile(r'CURRENT POSITION: `([^`]+)`')
+INDEX_ENTRY_PATTERN = re.compile(
+    r'- \[(.)\] `([^`]+)` \((\d+) \.c, (\d+) \.h, (\d+) lines\)'
+    r'(?: - (\d{4}-\d{2}-\d{2}))?'
+    r'(?: - (.+))?$'
+)
+
+
+# ============================================================================
+# Utility Functions
+# ============================================================================
+
 def is_git_ignored(repo_root: Path, path: str) -> bool:
     """Check if a path is ignored by .gitignore."""
     # Always ignore .git directory
@@ -46,7 +94,7 @@ class DirectoryEntry:
     c_files: int = 0             # Number of .c files
     h_files: int = 0             # Number of .h files
     total_lines: int = 0         # Approximate line count
-    status: str = "pending"      # pending, current, done, skipped
+    status: str = Status.PENDING # pending, current, done, skipped
     reviewed_date: Optional[str] = None
     notes: str = ""
 
@@ -176,128 +224,177 @@ class ReviewIndex:
         # Sort entries
         self.entries = DirectoryEntryMap(dict(sorted(self.entries.items())))
     
-    def _scan_directory(self, path: Path, prefix: str, 
+    def _scan_directory(self, path: Path, prefix: str,
                         existing_status: Dict) -> None:
         """Recursively scan for directories with C source."""
         try:
             for item in sorted(path.iterdir()):
-                if not item.is_dir():
+                if not self._should_process_directory(item):
                     continue
-                if item.name.startswith('.'):
-                    continue
-                
-                # CRITICAL: Prevent self-review if ai-code-reviewer is in the source tree
-                if item.name in ['ai-code-reviewer', 'angry-ai']:
-                    continue
-                
+
                 rel_path = f"{prefix}/{item.name}"
-                
+
                 # Skip directories that are gitignored
                 if is_git_ignored(self.source_root, rel_path):
                     continue
-                
-                c_files = []
-                h_files = []
-                reviewable_found = False
-                try:
-                    for child in item.iterdir():
-                        if not child.is_file() or child.name.startswith('.'):
-                            continue
-                        
-                        # Skip gitignored files
-                        child_rel = f"{rel_path}/{child.name}"
-                        if is_git_ignored(self.source_root, child_rel):
-                            continue
-                        
-                        name = child.name
-                        suffix = child.suffix.lower()
 
-                        # Skip excluded file types (test data, output files, etc.)
-                        if suffix in EXCLUDED_SUFFIXES:
-                            continue
+                # Scan directory contents
+                c_files, h_files, reviewable_found = self._scan_directory_contents(item, rel_path)
 
-                        if name in REVIEWABLE_SPECIAL_FILES:
-                            reviewable_found = True
-                        if suffix == '.c':
-                            c_files.append(child)
-                            reviewable_found = True
-                        elif suffix == '.h':
-                            h_files.append(child)
-                            reviewable_found = True
-                        elif suffix in REVIEWABLE_SUFFIXES:
-                            reviewable_found = True
-                except PermissionError:
-                    reviewable_found = False
-                
                 if reviewable_found:
-                    total_lines = 0
-                    for f in c_files + h_files:
-                        try:
-                            total_lines += sum(1 for _ in open(f, 'rb'))
-                        except OSError:
-                            pass
-                    
+                    total_lines = self._count_lines(c_files + h_files)
+
                     entry = DirectoryEntry(
                         path=rel_path,
                         c_files=len(c_files),
                         h_files=len(h_files),
                         total_lines=total_lines,
                     )
-                    
+
                     # Restore existing status
-                    if rel_path in existing_status:
-                        entry.status, entry.reviewed_date, entry.notes = \
-                            existing_status[rel_path]
-                    
+                    self._restore_existing_status(entry, rel_path, existing_status)
+
                     self.entries[rel_path] = entry
-                
+
                 # Recurse into subdirectories (for lib/libc/*, etc.)
                 if item.is_dir():
                     self._scan_directory(item, rel_path, existing_status)
-                    
+
         except PermissionError:
             pass
+
+    def _should_process_directory(self, item: Path) -> bool:
+        """Check if a directory should be processed."""
+        if not item.is_dir():
+            return False
+        if item.name.startswith('.'):
+            return False
+        # CRITICAL: Prevent self-review if ai-code-reviewer is in the source tree
+        if item.name in ['ai-code-reviewer', 'angry-ai']:
+            return False
+        return True
+
+    def _scan_directory_contents(self, directory: Path, rel_path: str) -> tuple:
+        """Scan a directory's contents and identify reviewable files."""
+        c_files = []
+        h_files = []
+        reviewable_found = False
+
+        try:
+            for child in directory.iterdir():
+                if not child.is_file() or child.name.startswith('.'):
+                    continue
+
+                # Skip gitignored files
+                child_rel = f"{rel_path}/{child.name}"
+                if is_git_ignored(self.source_root, child_rel):
+                    continue
+
+                if self._is_file_reviewable(child, c_files, h_files):
+                    reviewable_found = True
+
+        except PermissionError:
+            reviewable_found = False
+
+        return c_files, h_files, reviewable_found
+
+    def _is_file_reviewable(self, file_path: Path, c_files: List[Path],
+                           h_files: List[Path]) -> bool:
+        """Determine if a file is reviewable and update file lists."""
+        name = file_path.name
+        suffix = file_path.suffix.lower()
+
+        # Skip excluded file types (test data, output files, etc.)
+        if suffix in EXCLUDED_SUFFIXES:
+            return False
+
+        if name in REVIEWABLE_SPECIAL_FILES:
+            return True
+
+        if suffix == '.c':
+            c_files.append(file_path)
+            return True
+        elif suffix == '.h':
+            h_files.append(file_path)
+            return True
+        elif suffix in REVIEWABLE_SUFFIXES:
+            return True
+
+        return False
+
+    def _count_lines(self, files: List[Path]) -> int:
+        """Count total lines across all files."""
+        total_lines = 0
+        for f in files:
+            try:
+                total_lines += sum(1 for _ in open(f, 'rb'))
+            except OSError:
+                pass
+        return total_lines
+
+    def _restore_existing_status(self, entry: DirectoryEntry, rel_path: str,
+                                 existing_status: Dict) -> None:
+        """Restore existing status from previous index."""
+        if rel_path in existing_status:
+            entry.status, entry.reviewed_date, entry.notes = existing_status[rel_path]
     
     def _load(self) -> None:
         """Load index from file."""
         if not self.index_path.exists():
             return
-        
+
         content = self.index_path.read_text()
-        
-        # Parse current position
-        pos_match = re.search(r'CURRENT POSITION: `([^`]+)`', content)
+        self.current_position = self._parse_current_position(content)
+        self._parse_entries(content)
+
+    def _parse_current_position(self, content: str) -> Optional[str]:
+        """Parse the current position marker from index content."""
+        pos_match = CURRENT_POSITION_PATTERN.search(content)
         if pos_match:
-            self.current_position = pos_match.group(1)
-        
-        # Parse entries
-        # Format: - [x] `bin/cat` (2 .c, 1 .h, 450 lines) - 2024-01-15 - notes
-        entry_re = re.compile(
-            r'- \[(.)\] `([^`]+)` \((\d+) \.c, (\d+) \.h, (\d+) lines\)'
-            r'(?: - (\d{4}-\d{2}-\d{2}))?'
-            r'(?: - (.+))?$'
-        )
-        
+            return pos_match.group(1)
+        return None
+
+    def _parse_entries(self, content: str) -> None:
+        """Parse all directory entries from index content."""
         for line in content.split('\n'):
-            match = entry_re.match(line.strip())
-            if match:
-                marker, path, c_files, h_files, lines, date, notes = match.groups()
-                
-                status_map = {'x': 'done', '>': 'current', '-': 'skipped', ' ': 'pending'}
-                
-                self.entries[path] = DirectoryEntry(
-                    path=path,
-                    c_files=int(c_files),
-                    h_files=int(h_files),
-                    total_lines=int(lines),
-                    status=status_map.get(marker, 'pending'),
-                    reviewed_date=date,
-                    notes=notes.strip() if notes else "",
-                )
+            entry = self._parse_entry_line(line.strip())
+            if entry:
+                self.entries[entry.path] = entry
+
+    def _parse_entry_line(self, line: str) -> Optional[DirectoryEntry]:
+        """Parse a single entry line into a DirectoryEntry object."""
+        match = INDEX_ENTRY_PATTERN.match(line)
+        if not match:
+            return None
+
+        marker, path, c_files, h_files, lines, date, notes = match.groups()
+        status = MARKER_TO_STATUS.get(marker, Status.PENDING)
+
+        return DirectoryEntry(
+            path=path,
+            c_files=int(c_files),
+            h_files=int(h_files),
+            total_lines=int(lines),
+            status=status,
+            reviewed_date=date,
+            notes=notes.strip() if notes else "",
+        )
     
     def save(self) -> None:
         """Save index to file."""
-        lines = [
+        lines = []
+        lines.extend(self._format_header())
+        lines.extend(self._format_statistics())
+        lines.extend(self._format_current_position())
+        lines.extend(self._format_directory_groups())
+
+        new_content = '\n'.join(lines)
+        if self._should_write_file(new_content):
+            self.index_path.write_text(new_content)
+
+    def _format_header(self) -> List[str]:
+        """Format the file header section."""
+        return [
             "# FreeBSD Source Review Index",
             "",
             "This file tracks review progress across the source tree.",
@@ -312,69 +409,85 @@ class ReviewIndex:
             "- `[-]` Skipped - no changes needed or deferred",
             "",
         ]
-        
-        # Statistics
+
+    def _format_statistics(self) -> List[str]:
+        """Format the progress statistics section."""
         total = len(self.entries)
-        done = sum(1 for e in self.entries.values() if e.status == 'done')
-        skipped = sum(1 for e in self.entries.values() if e.status == 'skipped')
+        done = sum(1 for e in self.entries.values() if e.status == Status.DONE)
+        skipped = sum(1 for e in self.entries.values() if e.status == Status.SKIPPED)
         pending = total - done - skipped
-        
-        lines.extend([
+
+        return [
             "## Progress",
             f"- Total directories: {total}",
             f"- Completed: {done} ({100*done//total if total else 0}%)",
             f"- Skipped: {skipped}",
             f"- Remaining: {pending}",
             "",
-        ])
-        
-        # Current position
+        ]
+
+    def _format_current_position(self) -> List[str]:
+        """Format the current position section."""
         if self.current_position:
-            lines.extend([
+            return [
                 "## Current Position",
                 f"CURRENT POSITION: `{self.current_position}`",
                 "",
-            ])
-        
-        # Group by top-level directory
+            ]
+        return []
+
+    def _format_directory_groups(self) -> List[str]:
+        """Format all directory group sections."""
+        lines = []
         for top_dir in self.TOP_DIRS:
-            group = {k: v for k, v in self.entries.items() 
-                    if k.startswith(f"{top_dir}/")}
-            
-            if not group:
-                continue
-            
-            group_done = sum(1 for e in group.values() if e.status == 'done')
-            
-            lines.extend([
-                f"## {top_dir}/ ({group_done}/{len(group)} done)",
-                "",
-            ])
-            
-            for path, entry in sorted(group.items()):
-                marker_map = {'done': 'x', 'current': '>', 'skipped': '-', 'pending': ' '}
-                marker = marker_map.get(entry.status, ' ')
-                
-                line = f"- [{marker}] `{entry.path}` ({entry.c_files} .c, {entry.h_files} .h, {entry.total_lines} lines)"
-                
-                if entry.reviewed_date:
-                    line += f" - {entry.reviewed_date}"
-                if entry.notes:
-                    line += f" - {entry.notes}"
-                
-                lines.append(line)
-            
-            lines.append("")
-        
-        new_content = '\n'.join(lines)
-        if self.index_path.exists():
-            try:
-                current_content = self.index_path.read_text()
-            except Exception:
-                current_content = None
-            if current_content and self._normalize_index_text(current_content) == self._normalize_index_text(new_content):
-                return
-        self.index_path.write_text(new_content)
+            group_lines = self._format_directory_group(top_dir)
+            lines.extend(group_lines)
+        return lines
+
+    def _format_directory_group(self, top_dir: str) -> List[str]:
+        """Format a single directory group section."""
+        group = {k: v for k, v in self.entries.items()
+                if k.startswith(f"{top_dir}/")}
+
+        if not group:
+            return []
+
+        group_done = sum(1 for e in group.values() if e.status == Status.DONE)
+        lines = [
+            f"## {top_dir}/ ({group_done}/{len(group)} done)",
+            "",
+        ]
+
+        for path, entry in sorted(group.items()):
+            lines.append(self._format_entry_line(entry))
+
+        lines.append("")
+        return lines
+
+    def _format_entry_line(self, entry: DirectoryEntry) -> str:
+        """Format a single entry line."""
+        marker = STATUS_TO_MARKER.get(entry.status, StatusMarker.PENDING)
+        line = f"- [{marker}] `{entry.path}` ({entry.c_files} .c, {entry.h_files} .h, {entry.total_lines} lines)"
+
+        if entry.reviewed_date:
+            line += f" - {entry.reviewed_date}"
+        if entry.notes:
+            line += f" - {entry.notes}"
+
+        return line
+
+    def _should_write_file(self, new_content: str) -> bool:
+        """Determine if the file should be written based on content changes."""
+        if not self.index_path.exists():
+            return True
+
+        try:
+            current_content = self.index_path.read_text()
+        except Exception:
+            return True
+
+        # Only write if content has changed (ignoring timestamp)
+        return self._normalize_index_text(current_content) != self._normalize_index_text(new_content)
 
     @staticmethod
     def _normalize_index_text(content: str) -> str:
@@ -384,86 +497,86 @@ class ReviewIndex:
     def get_next_pending(self) -> Optional[str]:
         """Get the next pending directory to review."""
         for path, entry in self.entries.items():
-            if entry.status == 'pending':
+            if entry.status == Status.PENDING:
                 return path
         return None
-    
+
     def get_current(self) -> Optional[str]:
         """Get the directory currently being reviewed."""
         for path, entry in self.entries.items():
-            if entry.status == 'current':
+            if entry.status == Status.CURRENT:
                 return path
         return self.current_position
-    
+
     def set_current(self, path: str) -> None:
         """Set a directory as currently being reviewed."""
         # Clear any existing current
         for entry in self.entries.values():
-            if entry.status == 'current':
-                entry.status = 'pending'
-        
+            if entry.status == Status.CURRENT:
+                entry.status = Status.PENDING
+
         if path in self.entries:
-            self.entries[path].status = 'current'
+            self.entries[path].status = Status.CURRENT
         self.current_position = path
-    
+
     def mark_done(self, path: str, notes: str = "") -> None:
         """Mark a directory as completed."""
         if path in self.entries:
-            self.entries[path].status = 'done'
+            self.entries[path].status = Status.DONE
             self.entries[path].reviewed_date = datetime.now().strftime('%Y-%m-%d')
             if notes:
                 self.entries[path].notes = notes
-        
+
         # Move current position to next
         self.current_position = self.get_next_pending()
-    
+
     def mark_skipped(self, path: str, reason: str = "") -> None:
         """Mark a directory as skipped."""
         if path in self.entries:
-            self.entries[path].status = 'skipped'
+            self.entries[path].status = Status.SKIPPED
             self.entries[path].notes = reason
-    
+
     def get_summary_for_ai(self) -> str:
         """
         Generate a concise summary for the AI to understand position.
         """
         current = self.get_current()
         next_pending = self.get_next_pending()
-        
-        done = sum(1 for e in self.entries.values() if e.status == 'done')
+
+        done = sum(1 for e in self.entries.values() if e.status == Status.DONE)
         total = len(self.entries)
-        
+
         lines = [
             "=== REVIEW INDEX SUMMARY ===",
             f"Progress: {done}/{total} directories completed ({100*done//total if total else 0}%)",
             "",
         ]
-        
+
         if current:
             lines.append(f"CURRENT: {current}")
-        
+
         if next_pending and next_pending != current:
             lines.append(f"NEXT: {next_pending}")
-        
+
         # Show recent completions
-        recent = [e for e in self.entries.values() 
-                 if e.status == 'done' and e.reviewed_date]
+        recent = [e for e in self.entries.values()
+                 if e.status == Status.DONE and e.reviewed_date]
         recent.sort(key=lambda e: e.reviewed_date or '', reverse=True)
-        
+
         if recent[:3]:
             lines.append("")
             lines.append("Recently completed:")
             for e in recent[:3]:
                 lines.append(f"  ✓ {e.path} ({e.reviewed_date})")
-        
+
         # Show next few pending
-        pending = [e.path for e in self.entries.values() if e.status == 'pending']
+        pending = [e.path for e in self.entries.values() if e.status == Status.PENDING]
         if pending[:5]:
             lines.append("")
             lines.append("Next in queue:")
             for p in pending[:5]:
                 lines.append(f"  → {p}")
-        
+
         return '\n'.join(lines)
 
 
