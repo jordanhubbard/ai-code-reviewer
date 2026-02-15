@@ -7,6 +7,10 @@
     "attempts": 1,
     "last_attempt": "2026-01-19T21:19:03.637226"
   },
+  "bin/ps": {
+    "attempts": 1,
+    "last_attempt": "2026-02-13T10:17:03.444925"
+  },
   "bin/sh/bltin": {
     "attempts": 1,
     "last_attempt": "2026-01-22T12:04:37.557442"
