@@ -244,6 +244,35 @@ def _basic_yaml_parse(config_path: Path) -> Dict[str, Any]:
     return result
 
 
+def _normalize_branch_list(value: Any) -> List[str]:
+    if isinstance(value, str):
+        trimmed = value.strip()
+        return [trimmed] if trimmed else []
+    if isinstance(value, list):
+        branches = []
+        for item in value:
+            if isinstance(item, str):
+                trimmed = item.strip()
+                if trimmed:
+                    branches.append(trimmed)
+        return branches
+    return []
+
+
+def get_branch_preferences(config: Dict[str, Any]) -> Tuple[Optional[str], List[str]]:
+    source_config = config.get('source', {})
+    if not isinstance(source_config, dict):
+        source_config = {}
+    branches = _normalize_branch_list(
+        source_config.get('branches') or source_config.get('allowed_branches')
+    )
+    branch = source_config.get('branch') or source_config.get('preferred_branch')
+    if not branches:
+        branches = _normalize_branch_list(branch)
+    preferred = branches[0] if branches else (branch.strip() if isinstance(branch, str) else None)
+    return preferred, branches
+
+
 @dataclass
 class ReviewSession:
     """Tracks state of a review session with hierarchical progress."""
@@ -583,7 +612,12 @@ class GitHelper:
         branch = fallback_branch or self.get_default_remote_branch()
         return f'origin/{branch}' if branch else None
 
-    def ensure_repository_ready(self, preferred_branch: str = 'main', allow_rebase: bool = False) -> Tuple[bool, str]:
+    def ensure_repository_ready(
+        self,
+        preferred_branch: Optional[str] = None,
+        allow_rebase: bool = False,
+        allowed_branches: Optional[List[str]] = None,
+    ) -> Tuple[bool, str]:
         """Abort unfinished operations, ensure on a branch, optionally sync with upstream."""
         actions: List[str] = []
 
@@ -602,8 +636,25 @@ class GitHelper:
         branch = self.get_current_branch()
         target_branch = preferred_branch or self.get_default_remote_branch()
         if branch == 'HEAD' or not branch:
+            if allowed_branches and target_branch not in allowed_branches:
+                target_branch = allowed_branches[0]
             worktree_path = self._get_worktree_path_for_branch(target_branch)
-            if worktree_path:
+            if preferred_branch or allowed_branches:
+                if worktree_path:
+                    return False, (
+                        f"Branch '{target_branch}' is already checked out at {worktree_path}"
+                    )
+                code, output = self._run(['checkout', target_branch])
+                if code != 0 and self._should_stash_tool_paths(output):
+                    ok, stash_msg = self._stash_tool_paths_for_checkout()
+                    if not ok:
+                        return False, stash_msg or f'Failed to stash tool files: {output}'
+                    actions.append(stash_msg)
+                    code, output = self._run(['checkout', target_branch])
+                if code != 0:
+                    return False, f'Failed to checkout {target_branch}: {output}'
+                actions.append(f'checked out {target_branch}')
+            elif worktree_path:
                 base_ref = self._resolve_branch_ref(target_branch) or 'HEAD'
                 fallback_branch = self._make_fallback_branch(target_branch)
                 code, output = self._run(['checkout', '-b', fallback_branch, base_ref])
@@ -646,6 +697,20 @@ class GitHelper:
                 else:
                     actions.append(f'checked out {target_branch}')
         else:
+            if allowed_branches and branch not in allowed_branches:
+                return False, (
+                    "Current branch '{}' is not in allowed branches: {}".format(
+                        branch,
+                        ", ".join(allowed_branches),
+                    )
+                )
+            if preferred_branch and branch != preferred_branch:
+                return False, (
+                    "Current branch '{}' does not match configured branch '{}'".format(
+                        branch,
+                        preferred_branch,
+                    )
+                )
             target_branch = branch
 
         # Ensure there are no unmerged files lingering
@@ -842,7 +907,7 @@ class GitHelper:
         
         return sorted(files)
 
-    def recover_repository(self) -> bool:
+    def recover_repository(self, preferred_branch: Optional[str] = None) -> bool:
         """Attempt automatic recovery from corrupt git state."""
         print("\n*** AUTOMATED GIT RECOVERY INITIATED ***")
         success = True
@@ -862,13 +927,18 @@ class GitHelper:
         # Step 2: abort any in-progress rebase/merge
         _run_step("Aborting unfinished rebase", ['rebase', '--abort'], ignore_failure=True)
 
+        fallback_branch = preferred_branch or self.get_default_remote_branch()
+
         # Determine upstream
-        upstream_ref = 'origin/main'
+        upstream_ref = f'origin/{fallback_branch}'
         code, upstream = self._run(['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}'])
         if code == 0 and upstream.strip():
             upstream_ref = upstream.strip()
         else:
-            print("    NOTE: Unable to detect upstream branch automatically; defaulting to origin/main")
+            print(
+                "    NOTE: Unable to detect upstream branch automatically; "
+                f"defaulting to {upstream_ref}"
+            )
 
         # Step 3: fetch latest from origin
         if not _run_step("Fetching latest refs", ['fetch', 'origin'], ignore_failure=False):
@@ -878,10 +948,6 @@ class GitHelper:
         reset_ok = _run_step(f"Resetting to {upstream_ref}", ['reset', '--hard', upstream_ref])
         if not reset_ok:
             success = False
-            if upstream_ref != 'origin/main':
-                print("    Attempting fallback reset to origin/main ...")
-                if _run_step("Resetting to origin/main", ['reset', '--hard', 'origin/main']):
-                    success = True
 
         print("*** AUTOMATED GIT RECOVERY {} ***".format("SUCCEEDED" if success else "FAILED"))
         return success
@@ -1785,6 +1851,8 @@ class ReviewLoop:
         log_dir: Optional[Path] = None,
         ops_logger: Optional[OpsLogger] = None,
         forever_mode: bool = False,
+        preferred_branch: Optional[str] = None,
+        allowed_branches: Optional[List[str]] = None,
     ):
         self.ollama = ollama_client
         self.builder = build_executor
@@ -1795,6 +1863,8 @@ class ReviewLoop:
         self.max_parallel_files = max_parallel_files
         self.review_config = review_config or {}
         self.forever_mode = forever_mode
+        self.preferred_branch = preferred_branch
+        self.allowed_branches = allowed_branches or []
         
         # Persona files (behavior templates - shared across projects)
         self.bootstrap_file = persona_dir / "AI_START_HERE.md"
@@ -3350,7 +3420,11 @@ Output ONLY the lesson entry, nothing else."""
         """Stage all changes, commit with message, and push."""
         print("\n*** Committing changes...")
 
-        ok, prep_msg = self.git.ensure_repository_ready(allow_rebase=False)
+        ok, prep_msg = self.git.ensure_repository_ready(
+            preferred_branch=self.preferred_branch,
+            allow_rebase=False,
+            allowed_branches=self.allowed_branches,
+        )
         if not ok:
             return False, f"Repository not ready: {prep_msg}"
         if prep_msg:
@@ -3384,7 +3458,10 @@ Output ONLY the lesson entry, nothing else."""
                 return False, f"Failed to rebase during push retry: {rebase_output}"
             success, output = self.git.push()
             if not success:
-                self.git.ensure_repository_ready()
+                self.git.ensure_repository_ready(
+                    preferred_branch=self.preferred_branch,
+                    allowed_branches=self.allowed_branches,
+                )
                 return False, f"Failed to push after retry: {output}"
         
         print("*** Pushed successfully!")
@@ -4772,7 +4849,7 @@ TO FIX:
             print("\n*** WARNING: Unable to read git status:")
             print(f"    {exc}")
             print("    (repository may be in the middle of a rebase or have a corrupt index)")
-            if self.git.recover_repository():
+            if self.git.recover_repository(preferred_branch=self.preferred_branch):
                 try:
                     status = self.git.show_status()
                 except GitCommandError as exc2:
@@ -5173,6 +5250,7 @@ def preflight_sanity_check(
     git: GitHelper,
     max_reverts: int = 100,
     ops_logger: Optional[OpsLogger] = None,
+    preferred_branch: Optional[str] = None,
 ) -> bool:
     """
     Pre-flight sanity check: Verify source builds before starting review.
@@ -5214,7 +5292,7 @@ def preflight_sanity_check(
         print("ERROR: Unable to read git status for pre-flight:")
         print(f"  {exc}")
         print("\nThe FreeBSD source tree appears to have a corrupt git index or an interrupted rebase.")
-        recovered = git.recover_repository()
+        recovered = git.recover_repository(preferred_branch=preferred_branch)
         if recovered:
             try:
                 changes = git.show_status()
@@ -5230,7 +5308,11 @@ def preflight_sanity_check(
                 return False
         else:
             print("Automatic git recovery did not succeed. Manual repair required.")
-            print("Suggested commands: 'git clean -fdx', 'git rebase --abort', 'git fetch', 'git reset --hard origin/main'.")
+            fallback_branch = preferred_branch or git.get_default_remote_branch()
+            print(
+                "Suggested commands: 'git clean -fdx', 'git rebase --abort', "
+                f"'git fetch', 'git reset --hard origin/{fallback_branch}'."
+            )
             if ops_logger:
                 ops_logger.error(
                     "git status failed during preflight and auto-recover",
@@ -5687,6 +5769,7 @@ Examples:
     git_helper = GitHelper(source_root)
     
     review_config = config.get('review', {})
+    preferred_branch, allowed_branches = get_branch_preferences(config)
     
     # Load persona directory (contains all agent files)
     persona_name = review_config.get('persona', 'personas/default')
@@ -5721,7 +5804,14 @@ Examples:
         # Get max_reverts from config, default to 100
         max_reverts = review_config.get('max_reverts', 100)
         
-        if not preflight_sanity_check(builder, source_root, git_helper, max_reverts=max_reverts, ops_logger=ops_logger):
+        if not preflight_sanity_check(
+            builder,
+            source_root,
+            git_helper,
+            max_reverts=max_reverts,
+            ops_logger=ops_logger,
+            preferred_branch=preferred_branch,
+        ):
             logger.error("Pre-flight check failed. Cannot proceed safely.")
             logger.error("Use --skip-preflight to bypass this check (not recommended)")
             sys.exit(1)
@@ -5730,15 +5820,10 @@ Examples:
         print("\n⚠️  WARNING: Pre-flight check skipped!")
         print("   If source doesn't build, AI may make things worse.\n")
 
-    source_config = config.get('source', {})
-    preferred_branch = (
-        source_config.get('branch')
-        or source_config.get('preferred_branch')
-        or None
-    )
     ready, ready_msg = git_helper.ensure_repository_ready(
-        preferred_branch=preferred_branch or 'main',
+        preferred_branch=preferred_branch,
         allow_rebase=not git_helper.has_changes(),
+        allowed_branches=allowed_branches,
     )
     if not ready:
         logger.error(f"Unable to prepare source tree: {ready_msg}")
@@ -5756,6 +5841,8 @@ Examples:
         max_iterations_per_directory=review_config.get('max_iterations_per_directory', 200),
         max_parallel_files=review_config.get('max_parallel_files', 1),
         forever_mode=args.forever,
+        preferred_branch=preferred_branch,
+        allowed_branches=allowed_branches,
     )
     
     try:
