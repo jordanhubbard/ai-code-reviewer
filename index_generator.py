@@ -327,7 +327,8 @@ class ReviewIndex:
         total_lines = 0
         for f in files:
             try:
-                total_lines += sum(1 for _ in open(f, 'rb'))
+                with open(f, 'rb') as fh:
+                    total_lines += sum(1 for _ in fh)
             except OSError:
                 pass
         return total_lines

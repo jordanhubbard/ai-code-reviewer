@@ -2099,12 +2099,15 @@ class ReviewLoop:
                     logger.warning(f"Could not copy {legacy_path} to {target_path}: {e}")
                     continue
             
-            # Remove legacy file after successful migration
-            try:
-                legacy_path.unlink()
-                logger.info(f"Removed legacy file: {legacy_path}")
-            except Exception as e:
-                logger.warning(f"Could not remove legacy file {legacy_path}: {e}")
+            # Remove legacy file after successful migration.
+            # IMPORTANT: Never delete persona template files shipped with the tool.
+            # Only clean up legacy per-project locations inside the source tree.
+            if location_desc != "persona directory":
+                try:
+                    legacy_path.unlink()
+                    logger.info(f"Removed legacy file: {legacy_path}")
+                except Exception as e:
+                    logger.warning(f"Could not remove legacy file {legacy_path}: {e}")
         
         # Try to remove .angry-ai/ directory if empty
         old_dir = source_root / ".angry-ai"
@@ -4311,6 +4314,37 @@ Output ONLY the lesson entry, nothing else."""
                 return f"HALT_REJECTED: You have uncommitted changes in {self.session.current_directory}.\n" \
                        f"Changed files: {', '.join(self.session.changed_files)}\n" \
                        f"Run BUILD to validate and commit these changes first."
+
+            # 1.5. In forever mode, HALT is only allowed when NO work remains.
+            # This prevents the AI from stopping early when there are still pending
+            # directories (or an in-progress CURRENT scope).
+            if self.forever_mode:
+                next_pending = self.index.get_next_pending()
+                current_dir = self.session.current_directory
+                current_incomplete = False
+                if current_dir:
+                    entry = self.index.entries.get(current_dir)
+                    if entry is None:
+                        current_incomplete = True
+                    else:
+                        # Only DONE/SKIPPED are considered complete
+                        if entry.status not in {'done', 'skipped'}:
+                            current_incomplete = True
+
+                if next_pending is not None or current_incomplete:
+                    suggestion = next_pending or current_dir or self.index.get_current() or "<dir>"
+                    details = []
+                    if current_dir:
+                        status = self.index.entries.get(current_dir).status if current_dir in self.index.entries else 'untracked'
+                        details.append(f"Current scope: {current_dir} (status: {status})")
+                    if next_pending:
+                        details.append(f"Next pending: {next_pending}")
+                    detail_text = "\n".join(details) if details else "Pending work remains."
+                    return (
+                        "HALT_REJECTED: Forever mode is active and there is still work remaining.\n\n"
+                        f"{detail_text}\n\n"
+                        f"Next: ACTION: SET_SCOPE {suggestion}"
+                    )
             
             # 2. Check if no directories have been completed
             if self.session.directories_completed == 0:
@@ -5113,39 +5147,46 @@ TO FIX:
                 continue
             
             if action['action'] == 'HALT':
-                # In forever mode, reject HALT if open beads remain
-                if self.forever_mode and self.beads and self.beads.has_open_work():
-                    if not hasattr(self.session, 'consecutive_halt_rejections'):
-                        self.session.consecutive_halt_rejections = 0
-                    self.session.consecutive_halt_rejections += 1
+                # IMPORTANT: Always route HALT through _execute_action so validation is consistent
+                # (e.g., forever mode should not stop when pending work remains).
+                result = self._execute_action(action)
+                logger.info(f"HALT result: {result[:100]}...")
 
-                    open_dirs = self.beads.get_open_directories()
-                    next_dir = self.index.get_next_pending() or open_dirs[0]
+                # Track/mitigate HALT loops (AI repeatedly tries to stop)
+                if not hasattr(self.session, 'consecutive_halt_rejections'):
+                    self.session.consecutive_halt_rejections = 0
 
-                    MAX_HALT_REJECTIONS = 3
-                    if self.session.consecutive_halt_rejections >= MAX_HALT_REJECTIONS:
+                if result.startswith('HALT_ACKNOWLEDGED'):
+                    self.history.append({"role": "user", "content": result})
+                    logger.info("HALT acknowledged. Stopping.")
+                    break
+
+                # HALT rejected: keep going
+                self.session.consecutive_halt_rejections += 1
+                self.history.append({"role": "user", "content": result})
+
+                if self.forever_mode and self.session.consecutive_halt_rejections >= 3:
+                    next_dir = self.index.get_next_pending()
+                    if self.beads and self.beads.has_open_work():
+                        open_dirs = self.beads.get_open_directories()
+                        if open_dirs:
+                            next_dir = next_dir or open_dirs[0]
+                    if next_dir:
                         logger.warning(
                             f"HALT rejected {self.session.consecutive_halt_rejections} times "
                             f"- auto-setting scope to {next_dir}"
                         )
-                        print(f"\n*** HALT loop detected ({self.session.consecutive_halt_rejections} rejections) "
-                              f"- automatically setting scope to: {next_dir}")
+                        print(
+                            f"\n*** HALT loop detected ({self.session.consecutive_halt_rejections} rejections) "
+                            f"- automatically setting scope to: {next_dir}"
+                        )
                         self.session.consecutive_halt_rejections = 0
                         auto_action = {'action': 'SET_SCOPE', 'directory': next_dir}
-                        result = self._execute_action(auto_action)
-                        logger.info(f"Auto SET_SCOPE result: {result[:100]}...")
-                        self.history.append({"role": "user", "content": result})
-                        continue
+                        auto_result = self._execute_action(auto_action)
+                        logger.info(f"Auto SET_SCOPE result: {auto_result[:100]}...")
+                        self.history.append({"role": "user", "content": auto_result})
 
-                    msg = (
-                        f"HALT_REJECTED: Forever mode active with {len(open_dirs)} "
-                        f"directories still open.\n"
-                        f"Next: ACTION: SET_SCOPE {next_dir}\n"
-                    )
-                    self.history.append({"role": "user", "content": msg})
-                    continue
-                logger.info("Received HALT. Stopping.")
-                break
+                continue
             
             # Reset HALT rejection counter on any non-HALT action
             if hasattr(self.session, 'consecutive_halt_rejections'):
