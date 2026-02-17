@@ -12,210 +12,259 @@ This will check for:
 - Python 3 ✓
 - pip ✓
 - PyYAML ✓
-- Beads (bd) CLI ⚠️ (optional but recommended)
 
-### 2. Install Beads (Optional but Recommended)
+### 2. Create config.yaml
 
-Beads provides issue tracking and progress management for AI agents.
-
+**Recommended (interactive):**
 ```bash
-# Install beads
-# Visit: https://github.com/steveyegge/beads
-# Follow the installation instructions there
-
-# After installation, initialize beads in your source tree
-cd /path/to/your/source/tree
-bd onboard
+make config-init
 ```
 
-### 3. Create config.yaml
-
-On first run, the system will create `config.yaml` from defaults:
-
+**Or manual:**
 ```bash
-make run
+cp config.yaml.defaults config.yaml
+vim config.yaml
 ```
 
-You'll see:
-```
-*** Created config.yaml from defaults
-*** IMPORTANT: Edit config.yaml to configure:
-***   1. Ollama server URL (ollama.url)
-***   2. Source root path (source.root)
-***   3. Build command (source.build_command)
-```
-
-The system will exit with an error because the default source tree is not configured.
-
-### 4. Edit config.yaml
-
-Open `config.yaml` and configure:
+### 3. Edit config.yaml
 
 ```yaml
-# 1. Ollama server (REQUIRED)
-ollama:
-  url: "http://your-ollama-server:11434"
-  model: "qwen2.5-coder:32b"
+# 1. LLM server (REQUIRED)
+llm:
+  hosts:
+    - "http://your-llm-server"  # vLLM (:8000) or Ollama (:11434)
+  models:
+    - "nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16"
+    - "qwen2.5-coder:32b"
 
 # 2. Source tree (REQUIRED)
 source:
-  # Path to your source code
-  # Use absolute path or relative to this config file
-  root: "/Users/you/freebsd-src"  # CHANGE THIS!
-  
-  # Build command to validate changes
-  # This runs in the source.root directory
-  build_command: "sudo make -j$(sysctl -n hw.ncpu) buildworld"
-  
-  # Build timeout (adjust for your project)
-  build_timeout: 7200  # 2 hours for FreeBSD buildworld
+  root: "/path/to/your/source"  # CHANGE THIS!
+  build_command: "make -j$(nproc)"  # YOUR build command
+  build_timeout: 600
 
-# 3. Review settings (OPTIONAL)
+# 3. Agent selection (OPTIONAL)
 review:
-  persona: "personas/freebsd-angry-ai"
-  target_directories: 10
-  max_iterations_per_directory: 200
+  persona: "personas/freebsd-angry-ai"  # See available agents below
 ```
 
-### 5. Validate Ollama Connection
+### 4. Validate Connection
 
 ```bash
 python3 reviewer.py --validate-only
 ```
 
-This will check:
-- Can connect to Ollama server
-- Model is available
-- Configuration is valid
-
-### 6. Run the Reviewer
+### 5. Run
 
 ```bash
 make run
 ```
 
 Or with verbose logging:
-
 ```bash
 make run-verbose
 ```
 
-## Common Issues
+## Available Agents
 
-### "Source root does not appear to be a buildable project"
+Agents define the AI's review personality. Each is configured in [Oracle Agent Spec](https://oracle.github.io/agent-spec/) format.
 
-**Problem**: The `source.root` in config.yaml doesn't point to a valid source tree.
+| Agent | Focus | Use When |
+|-------|-------|----------|
+| `personas/freebsd-angry-ai` | Security, style(9) | Production audits (default) |
+| `personas/security-hawk` | Vulnerabilities | Security-critical code |
+| `personas/performance-cop` | Speed, algorithms | Performance optimization |
+| `personas/friendly-mentor` | Learning | Training, onboarding |
+| `personas/example` | Balanced | General code review |
 
-**Solution**: Edit config.yaml and set source.root to your actual source code directory:
+### Agent Configuration
+
+Each agent is defined in `personas/<name>/agent.yaml`:
 
 ```yaml
-source:
-  root: "/Users/you/freebsd-src"  # Must contain a Makefile or CMakeLists.txt
+component_type: Agent
+agentspec_version: "26.1.0"
+name: "Agent Name"
+description: "What this agent does"
+system_prompt: |
+  Your instructions and personality...
+inputs:
+  - title: "codebase_path"
+    type: "string"
+outputs:
+  - title: "review_summary"
+    type: "string"
 ```
 
-### "Beads (bd) CLI not found"
+### Validate Agent
 
-**Problem**: The beads command-line tool is not installed.
-
-**Solution**: 
-- Option 1: Install beads from https://github.com/steveyegge/beads
-- Option 2: Continue without beads (issue tracking will be disabled)
-
-### "WARNING: Existing beads appear to be for a different source tree"
-
-**Problem**: The `.beads/` directory contains issues for a different source tree.
-
-**Solution**: Choose one:
-1. Clear old beads: `bd close --all`
-2. Start fresh: `rm -rf .beads && bd onboard`
-3. Point config.yaml to the correct source tree
-
-### Build hangs or takes forever
-
-**Problem**: The build command is running on the wrong source tree or build is actually very slow.
-
-**Solutions**:
-1. Verify source.root points to the correct directory
-2. Test your build command manually first:
-   ```bash
-   cd /your/source/root
-   make buildworld  # or whatever your build command is
-   ```
-3. Adjust build_timeout in config.yaml if your build is legitimately slow
-4. Use --skip-preflight to skip the initial build check (not recommended)
+```bash
+python3 persona_validator.py personas/security-hawk
+```
 
 ## Configuration Examples
 
 ### FreeBSD Source Tree
-
 ```yaml
 source:
   root: "/usr/src"
   build_command: "sudo make -j$(sysctl -n hw.ncpu) buildworld"
   build_timeout: 7200
+review:
+  persona: "personas/freebsd-angry-ai"
 ```
 
 ### Linux Kernel
-
 ```yaml
 source:
   root: "/usr/src/linux"
   build_command: "make -j$(nproc)"
   build_timeout: 1800
+review:
+  persona: "personas/security-hawk"
 ```
 
 ### Rust Project
-
 ```yaml
 source:
   root: "/home/you/my-rust-project"
   build_command: "cargo build --release"
   build_timeout: 600
-```
-
-### CMake Project
-
-```yaml
-source:
-  root: "/home/you/my-cmake-project"
-  build_command: "cmake --build build --parallel"
-  build_timeout: 900
+review:
+  persona: "personas/performance-cop"
 ```
 
 ### Python Project
-
 ```yaml
 source:
   root: "/home/you/my-python-project"
   build_command: "python -m pytest"
   build_timeout: 300
+review:
+  persona: "personas/friendly-mentor"
 ```
+
+## Creating Custom Agents
+
+1. Copy an existing agent:
+   ```bash
+   cp -r personas/example personas/my-agent
+   ```
+
+2. Edit `personas/my-agent/agent.yaml`:
+   ```yaml
+   component_type: Agent
+   agentspec_version: "26.1.0"
+   name: "My Custom Agent"
+   description: "Specialized for my needs"
+   
+   system_prompt: |
+     You are a code reviewer specialized in...
+     
+     ## Your Focus
+     - Item 1
+     - Item 2
+     
+     ## Your Personality
+     - Trait 1
+     - Trait 2
+   
+   inputs:
+     - title: "codebase_path"
+       type: "string"
+   
+   outputs:
+     - title: "review_summary"
+       type: "string"
+   ```
+
+3. Validate:
+   ```bash
+   python3 persona_validator.py personas/my-agent
+   ```
+
+4. Use in config.yaml:
+   ```yaml
+   review:
+     persona: "personas/my-agent"
+   ```
+
+## Common Issues
+
+### "Source root does not appear to be a buildable project"
+
+**Solution**: Set `source.root` to your actual source directory:
+```yaml
+source:
+  root: "/path/to/your/source"
+```
+
+### "No agent configuration found"
+
+**Solution**: Each agent needs an `agent.yaml` file:
+```bash
+ls personas/freebsd-angry-ai/agent.yaml
+```
+
+### Build hangs or takes forever
+
+**Solutions**:
+1. Verify `source.root` points to the correct directory
+2. Test your build command manually first
+3. Adjust `build_timeout` in config.yaml
+4. Use `--skip-preflight` to skip initial build check
+
+### Agent validation fails
+
+**Solution**: Check your agent.yaml format:
+```bash
+python3 persona_validator.py personas/your-agent
+```
+
+Required fields:
+- `component_type: Agent`
+- `name`
+- `system_prompt`
+
+## File Locations
+
+### Agent Configurations
+```
+personas/<name>/
+├── agent.yaml    # Agent Spec configuration (required)
+└── README.md     # Agent documentation (optional)
+```
+
+### Per-Project Data (in source tree)
+```
+<source-root>/.ai-code-reviewer/
+├── LESSONS.md        # Learned patterns
+├── REVIEW-SUMMARY.md # Progress tracking
+└── logs/             # Session logs
+```
+
+### Logs
+- Session logs: `.reviewer-log/make-run-*.log`
+- Operations log: `.reviewer-log/ops.jsonl`
 
 ## Next Steps
 
 After successful setup:
 
-1. The system will generate a review index of your source tree
-2. It will run a pre-flight build check to ensure the source builds
-3. The AI will start reviewing code directory by directory
-4. Progress is tracked in:
-   - `.ai-code-reviewer/REVIEW-INDEX.md` - Directory completion status
-   - `personas/*/REVIEW-SUMMARY.md` - Detailed review history
-   - `personas/*/LESSONS.md` - Patterns learned from mistakes
-   - `.beads/` - Issue tracking database (if beads is installed)
+1. The system generates a review index of your source tree
+2. Runs a pre-flight build check
+3. AI starts reviewing code directory by directory
+4. Progress tracked in `<source>/.ai-code-reviewer/`
 
 ## Getting Help
 
-- Check the logs: `.ai-code-reviewer/logs/`
+- Check logs: `.reviewer-log/`
 - Enable verbose mode: `make run-verbose`
-- Review the persona files in `personas/freebsd-angry-ai/`
-- Check for git conflicts: `git status`
+- Validate agent: `python3 persona_validator.py personas/<name>`
+- Check git status: `git status`
 
-## Advanced Configuration
+## References
 
-See `config.yaml.defaults` for all available options including:
-- Ollama batching and GPU settings
-- Parallel file processing
-- Custom persona directories
-- Operations logging
-- Skip patterns for files to ignore
+- [Oracle Agent Spec](https://oracle.github.io/agent-spec/26.1.0/)
+- [README.md](README.md) - Full documentation
+- [AGENTS.md](AGENTS.md) - AI agent instructions

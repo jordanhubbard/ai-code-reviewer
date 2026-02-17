@@ -4,23 +4,44 @@
 
 This document explains where different types of files are stored and why.
 
-## Three Categories of Files
+## Two Categories of Files
 
-### 1. Persona Files (Templates) - `personas/<name>/`
+### 1. Agent Configurations - `personas/<name>/`
 
-**Location**: `ai-code-reviewer/personas/freebsd-angry-ai/`  
-**Purpose**: Reusable AI behavior templates  
+**Location**: `ai-code-reviewer/personas/<agent-name>/`  
+**Purpose**: Reusable AI agent configurations  
 **Git**: Committed to ai-code-reviewer repo  
-**Shared**: YES - same persona can review multiple projects
+**Shared**: YES - same agent can review multiple projects
 
 Files:
-- `AI_START_HERE.md` - Bootstrap instructions for the AI
-- `PERSONA.md` - Personality and behavior rules
-- `HANDOVER.md` - Session handoff protocol
-- `@AGENTS.md`, `AGENTS.md` - Agent instructions
-- `logs/` - Per-session conversation logs
+- `agent.yaml` - Agent Spec configuration (required)
+- `README.md` - Agent documentation (optional)
 
-**Why here?**: Personas are templates that define HOW to review, not WHAT was reviewed.
+**Format**: [Oracle Agent Spec](https://oracle.github.io/agent-spec/26.1.0/)
+
+```yaml
+component_type: Agent
+agentspec_version: "26.1.0"
+name: "Agent Name"
+description: "What this agent does"
+metadata:
+  focus_areas: [security, performance]
+inputs:
+  - title: "codebase_path"
+    type: "string"
+outputs:
+  - title: "review_summary"
+    type: "string"
+system_prompt: |
+  Your complete instructions...
+llm_config:
+  component_type: OpenAiCompatibleConfig
+  name: "{{llm_name}}"
+  url: "{{llm_url}}"
+  model_id: "{{model_id}}"
+```
+
+**Why here?**: Agents are templates that define HOW to review, not WHAT was reviewed.
 
 ### 2. Source-Specific Files (Per-Project) - `<source-root>/.ai-code-reviewer/`
 
@@ -32,13 +53,13 @@ Files:
 Files:
 - `LESSONS.md` - Mistakes learned from THIS codebase
 - `REVIEW-SUMMARY.md` - Progress and history for THIS project
+- `REVIEW-INDEX.md` - Directory completion status
 - `logs/` - Build logs and detailed output (gitignored)
 
 **Why here?**: 
-- Lessons are specific to the codebase (e.g., "FreeBSD uses strtonum, not atoi")
+- Lessons are specific to the codebase
 - Review progress is per-project
-- Multiple projects can use the same persona but have separate histories
-- Named after the tool (not persona-specific)
+- Multiple projects can use the same agent but have separate histories
 
 Example:
 ```
@@ -46,55 +67,39 @@ Example:
 /home/user/linux/.ai-code-reviewer/LESSONS.md       # Linux-specific lessons
 ```
 
-### 3. Issue Tracking (Per-Project) - `<source-root>/.beads/`
+## Directory Structure
 
-**Location**: `<your-source-tree>/.beads/`  
-**Purpose**: Issue tracking database (if beads installed)  
-**Git**: Usually gitignored, syncs to separate branch  
-**Shared**: NO - each project has its own
-
-**Why here?**: Beads tracks work items for the specific codebase being reviewed.
-
-## Migration from Old Structure
-
-### Before (WRONG)
 ```
-ai-code-reviewer/
-├── personas/
-│   └── freebsd-angry-ai/
-│       ├── AI_START_HERE.md  ✓ (template)
-│       ├── LESSONS.md        ✗ (per-project data in template!)
-│       └── REVIEW-SUMMARY.md ✗ (per-project data in template!)
-```
+ai-code-reviewer/                    # Tool directory
+├── personas/                        # Agent configurations
+│   ├── freebsd-angry-ai/
+│   │   ├── agent.yaml              # Agent Spec config
+│   │   └── README.md               # Documentation
+│   ├── security-hawk/
+│   │   └── agent.yaml
+│   ├── performance-cop/
+│   │   └── agent.yaml
+│   ├── friendly-mentor/
+│   │   └── agent.yaml
+│   └── example/
+│       └── agent.yaml
+├── reviewer.py                      # Main review loop
+├── persona_validator.py             # Agent Spec validator
+├── config.yaml                      # Your configuration
+└── .reviewer-log/                   # Internal logs
 
-**Problem**: If you review multiple projects with the same persona, lessons and summaries would get mixed together.
-
-### After (CORRECT)
-```
-ai-code-reviewer/
-├── personas/
-│   └── freebsd-angry-ai/
-│       ├── AI_START_HERE.md  ✓ (template)
-│       ├── PERSONA.md        ✓ (template)
-│       └── logs/             ✓ (session logs)
-
-/usr/src/freebsd/              # Source tree being reviewed
+/usr/src/freebsd/                    # Source tree being reviewed
 ├── .ai-code-reviewer/
-│   ├── LESSONS.md             ✓ (FreeBSD-specific)
-│   └── REVIEW-SUMMARY.md      ✓ (FreeBSD-specific)
-└── .beads/                    ✓ (FreeBSD work items)
-
-/home/user/linux/              # Another source tree
-├── .ai-code-reviewer/
-│   ├── LESSONS.md             ✓ (Linux-specific)
-│   └── REVIEW-SUMMARY.md      ✓ (Linux-specific)
-└── .beads/                    ✓ (Linux work items)
+│   ├── LESSONS.md                   # FreeBSD-specific lessons
+│   ├── REVIEW-SUMMARY.md            # FreeBSD review history
+│   └── logs/                        # Session logs
+└── [source files...]
 ```
 
 ## Use Cases
 
 ### Single Project Review
-Most common case - one project, one persona:
+Most common case - one project, one agent:
 ```yaml
 # config.yaml
 source:
@@ -105,7 +110,7 @@ review:
 
 Lessons go to: `/usr/src/freebsd/.ai-code-reviewer/LESSONS.md`
 
-### Multiple Projects, Same Persona
+### Multiple Projects, Same Agent
 Review different codebases with the same review style:
 
 **Config for FreeBSD**:
@@ -113,7 +118,7 @@ Review different codebases with the same review style:
 source:
   root: "/usr/src/freebsd"
 review:
-  persona: "personas/freebsd-angry-ai"
+  persona: "personas/security-hawk"
 ```
 
 **Config for Linux**:
@@ -121,79 +126,94 @@ review:
 source:
   root: "/home/user/linux"
 review:
-  persona: "personas/freebsd-angry-ai"  # Same persona!
+  persona: "personas/security-hawk"  # Same agent!
 ```
 
 Result:
-- Persona templates are shared (AI behavior)
-- Lessons are separate (different codebases have different patterns)
+- Agent configuration is shared (AI behavior)
+- Lessons are separate (different codebases)
 - Progress tracking is separate
 
-### Multiple Projects, Different Personas
+### Multiple Projects, Different Agents
 Different review styles for different projects:
 
-**Aggressive security review for FreeBSD**:
 ```yaml
+# Aggressive security for production
 source:
   root: "/usr/src/freebsd"
 review:
   persona: "personas/security-hawk"
 ```
 
-**Friendly mentor for your project**:
 ```yaml
+# Friendly mentor for learning project
 source:
   root: "/home/user/my-project"
 review:
   persona: "personas/friendly-mentor"
 ```
 
+## Validating Agents
+
+```bash
+# Validate agent configuration
+python3 persona_validator.py personas/security-hawk
+
+# Output:
+# [OK] Agent validated: Security Hawk
+#   Agent Spec version: 26.1.0
+#   Description: A paranoid security auditor...
+#   Focus areas: input-validation, memory-safety, ...
+```
+
+## Creating New Agents
+
+1. Copy existing agent:
+   ```bash
+   cp -r personas/example personas/my-agent
+   ```
+
+2. Edit `personas/my-agent/agent.yaml`
+
+3. Validate:
+   ```bash
+   python3 persona_validator.py personas/my-agent
+   ```
+
+4. Use in config.yaml:
+   ```yaml
+   review:
+     persona: "personas/my-agent"
+   ```
+
 ## Gitignore Recommendations
 
 ### In ai-code-reviewer repo
 ```gitignore
-# Already configured
 config.yaml              # User-specific
-personas/*/logs/         # Session logs
-.beads/                  # If you review ai-code-reviewer itself
-.reviewer-log/           # Internal ops logs
+.reviewer-log/           # Internal logs
 ```
 
 ### In source trees being reviewed
 ```gitignore
-# Recommended additions
 .ai-code-reviewer/logs/  # Build logs (large)
-.beads/                  # If not syncing to branch
 
 # Keep these committed (if desired)
-# .ai-code-reviewer/LESSONS.md       # Team lessons learned
+# .ai-code-reviewer/LESSONS.md       # Team lessons
 # .ai-code-reviewer/REVIEW-SUMMARY.md # Review history
 ```
 
-## Benefits of New Structure
+## Benefits of This Structure
 
-1. **Clean Separation**: Templates vs. per-project data
-2. **Reusable Personas**: Same review style across projects
+1. **Clean Separation**: Agent configs vs. per-project data
+2. **Reusable Agents**: Same review style across projects
 3. **Project-Specific Learning**: Lessons stay with the codebase
 4. **Multi-Project Support**: Review multiple codebases easily
-5. **Team Collaboration**: Commit lessons to share with team
-6. **Source Tree Integrity**: Everything in `.ai-code-reviewer/` is self-contained
-7. **Tool-Branded**: Named after the tool, not a specific persona
+5. **Standardized Format**: Oracle Agent Spec for interoperability
+6. **Easy Sharing**: Agents are self-contained YAML files
 
-## Automatic Migration
+## References
 
-The system automatically migrates files from legacy locations on first run:
-
-**Legacy locations checked:**
-1. `personas/<persona>/LESSONS.md` (oldest)
-2. `personas/<persona>/REVIEW-SUMMARY.md` (oldest)
-3. `.angry-ai/LESSONS.md` (previous)
-4. `.angry-ai/REVIEW-SUMMARY.md` (previous)
-
-**Migration behavior:**
-- If file found in legacy location → copies to `.ai-code-reviewer/`
-- If file already exists in new location → merges content with separator
-- Removes legacy files after successful migration
-- Shows migration summary on startup
-
-**You don't need to do anything** - the tool handles migration automatically!
+- [Oracle Agent Spec](https://oracle.github.io/agent-spec/26.1.0/)
+- [README.md](../README.md) - Full documentation
+- [AGENTS.md](../AGENTS.md) - AI agent instructions

@@ -1,159 +1,65 @@
-# FreeBSD Angry AI Persona
+# FreeBSD Commit Blocker
 
-**"The FreeBSD Commit Blocker"** - Ruthless security auditor persona
+**Ruthless security auditor for production code**
 
-## What is a Persona?
+## Overview
 
-A persona defines the AI's:
-- **Behavior**: How it reviews code (aggressive, friendly, security-focused, etc.)
-- **Knowledge**: Lessons learned from previous reviews
-- **Memory**: Progress tracking and review history
+A brutally adversarial, zero-tolerance senior FreeBSD committer who blocks bad commits. Has decades of experience enforcing FreeBSD standards and is the last line of defense against garbage code.
 
-## This Persona
+## Configuration
 
-**Character**: Unforgiving senior FreeBSD committer who blocks bad commits
+This agent is configured in [Oracle Agent Spec](https://oracle.github.io/agent-spec/26.1.0/) format.
 
-**Focus**:
-- Security vulnerabilities
-- style(9) compliance
-- POSIX correctness
-- Buffer overflows, TOCTOU races, integer overflows
-- Proper error handling
+```bash
+# Validate configuration
+python3 persona_validator.py personas/freebsd-angry-ai
 
-**Tone**: Professional but ruthless - "If it looks wrong, it IS wrong"
-
-## Files in This Persona
-
-### Core Files
-
-- **AI_START_HERE.md**: Bootstrap instructions the AI sees first
-- **PERSONA.md**: Full personality definition and review standards
-- **HANDOVER.md**: Workflow protocol and handover instructions
-
-### Learning & Memory
-
-- **LESSONS.md**: Bug patterns discovered during reviews
-  - Updated automatically when build fails
-  - AI learns from mistakes
-
-- **REVIEW-SUMMARY.md**: Progress tracking
-  - Directories completed
-  - Files fixed
-  - Bugs found
-  - Updated after each successful build
-
-### Agent Hints
-
-- **AGENTS.md**: Instructions for AI agents
-- **@AGENTS.md**: Quick reference card
-
-### Logs
-
-- **logs/**: Conversation logs for each review session
-  - One file per step
-  - Includes prompts and responses
-
-## Using This Persona
-
-In `config.yaml`:
-```yaml
+# Use in config.yaml (default)
 review:
   persona: "personas/freebsd-angry-ai"
 ```
 
-## Creating Your Own Persona
+## Focus Areas
 
-```bash
-# Copy this persona as a template
-cp -r personas/freebsd-angry-ai personas/my-persona
+- **Security**: Buffer overflows, TOCTOU races, integer overflows
+- **style(9) Compliance**: FreeBSD coding standards
+- **POSIX Correctness**: Portable, standards-compliant code
+- **Memory Safety**: Use-after-free, double-free, leaks
+- **Concurrency**: Lock ordering, race conditions
 
-# Edit the core files
-vim personas/my-persona/AI_START_HERE.md  # Bootstrap
-vim personas/my-persona/PERSONA.md        # Personality
+## Personality
 
-# Update config
-vim config.yaml  # persona: "personas/my-persona"
-```
+- **Blunt and hostile** - peer review, not mentorship
+- **Zero tolerance** - if it looks wrong, it IS wrong
+- **Pedantic** - every style violation matters
+- **Skeptical** - assumes bugs until proven otherwise
+- **Fearless** - calls out garbage code regardless of author
 
-### Persona Ideas
+## Verdicts
 
-- **security-hawk**: Paranoid security auditor
-- **performance-cop**: Obsessed with speed/efficiency
-- **friendly-helper**: Encouraging mentor who teaches
-- **refactor-bot**: Focuses on code quality/maintainability
-- **test-enforcer**: Demands tests for everything
+- **COMMIT BLOCKER**: Security issues, build breaks, policy violations
+- **NEEDS MAJOR REVISION**: Significant correctness or style issues
+- **NEEDS MINOR REVISION**: Style violations, minor bugs
+- **ACCEPTABLE**: Meets standards (rare)
 
-## Why Personas Live Here
+## When to Use
 
-**Keeps source tree clean!**
+- Production security audits
+- FreeBSD source tree reviews
+- Security-critical infrastructure
+- Pre-release hardening
+- Compliance requirements
 
-Without personas:
-```
-freebsd-src/
-├── REVIEW-SUMMARY.md      ← Pollutes source
-├── AI_START_HERE.md       ← Pollutes source  
-├── .ai-code-reviewer/logs/ ← Logs in source
-└── bin/chmod/chmod.c
-```
+## Battle-Tested
 
-With personas:
-```
-freebsd-src/
-└── bin/chmod/chmod.c      ← Only code changes!
+This agent has found real security vulnerabilities:
+- Buffer overflows
+- TOCTOU race conditions
+- Integer overflow bugs
+- Missing error handling
 
-angry-ai/personas/freebsd-angry-ai/
-├── REVIEW-SUMMARY.md      ← Agent data
-├── AI_START_HERE.md       ← Agent data
-└── logs/                   ← Agent data
-```
+## See Also
 
-**Benefit**: Source tree git history shows ONLY code changes, not AI review metadata!
-
-## Switching Personas
-
-You can have multiple personas and switch between them:
-
-```yaml
-# config.yaml
-
-# Angry auditor for security review
-persona: "personas/freebsd-angry-ai"
-
-# Friendly helper for mentoring
-# persona: "personas/friendly-mentor"
-
-# Performance focused for optimization
-# persona: "personas/performance-hawk"
-```
-
-Each persona maintains its own:
-- Learned lessons
-- Progress tracking
-- Conversation logs
-
-## Sharing Personas
-
-Personas are portable! Share them:
-
-```bash
-# Export
-tar czf freebsd-angry-ai.tar.gz personas/freebsd-angry-ai/
-
-# Import (in someone else's setup)
-tar xzf freebsd-angry-ai.tar.gz -C angry-ai/personas/
-```
-
-Or version control them separately:
-
-```bash
-cd personas/freebsd-angry-ai
-git init
-git remote add origin https://github.com/you/freebsd-angry-persona.git
-```
-
-## Credits
-
-Created by: AI reviewers running on the FreeBSD source tree
-Purpose: Ruthless security audit of entire FreeBSD codebase
-Success: Found and fixed buffer overflows, TOCTOU races, integer overflows
-
+- [Oracle Agent Spec](https://oracle.github.io/agent-spec/26.1.0/)
+- [FreeBSD style(9)](https://www.freebsd.org/cgi/man.cgi?query=style&sektion=9)
+- [AGENTS.md](../../AGENTS.md) - AI agent instructions

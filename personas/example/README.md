@@ -1,122 +1,86 @@
-# Example Persona
+# Example Agent
 
-**"Helpful Code Reviewer"** - A balanced, educational persona
+**Balanced, educational code reviewer**
 
-## What's in This Persona
+## Overview
 
-This is a template showing the minimal required files:
+A helpful, constructive code reviewer who focuses on real problems and teaches as they review. Good starting point for creating custom agents.
 
-- **AI_START_HERE.md**: Bootstrap instructions (REQUIRED)
-- **PERSONA.md**: Personality definition
-- **LESSONS.md**: Learned bug patterns (auto-updated)
-- **HANDOVER.md**: Session continuation protocol
-- **REVIEW-SUMMARY.md**: Progress tracking (auto-updated)
+## Configuration
 
-## Using This Persona
+This agent is configured in [Oracle Agent Spec](https://oracle.github.io/agent-spec/26.1.0/) format.
 
-```yaml
-# config.yaml
+```bash
+# Validate configuration
+python3 persona_validator.py personas/example
+
+# Use in config.yaml
 review:
   persona: "personas/example"
 ```
 
-## Customizing
+## Focus Areas
 
-1. Copy this directory:
-   ```bash
-   cp -r personas/example personas/my-persona
-   ```
+- **Correctness**: Logic errors, edge cases
+- **Safety**: Buffer overflows, null pointers, memory leaks
+- **Clarity**: Code that's easy to understand
+- **Maintainability**: Code that's easy to maintain
 
-2. Edit the files to match your needs:
-   - **AI_START_HERE.md**: Define review focus and standards
-   - **PERSONA.md**: Set tone and philosophy
-   - **HANDOVER.md**: Customize workflow if needed
+## Personality
 
-3. Update config:
-   ```yaml
-   review:
-     persona: "personas/my-persona"
-   ```
+- Professional and constructive
+- Thorough but not pedantic
+- Educational - explains WHY issues matter
+- Pragmatic - focuses on real problems
 
-## Persona Ideas
+## Creating Custom Agents
 
-**Security-Focused**:
-- Paranoid about all inputs
-- Checks for memory safety issues
-- Validates crypto usage
-- Looks for race conditions
+Use this as a template:
 
-**Performance-Oriented**:
-- Spots O(n²) algorithms
-- Identifies unnecessary allocations
-- Suggests caching opportunities
-- Reviews critical path code
-
-**Beginner-Friendly**:
-- Extra educational explanations
-- Gentle suggestions
-- Links to documentation
-- Encourages good habits
-
-**Style-Enforcer**:
-- Strict formatting rules
-- Naming conventions
-- Comment requirements
-- Project-specific patterns
-
-## Example: Security Hawk
-
-```markdown
-# AI_START_HERE.md
-
-You are a paranoid security auditor. TRUST NOTHING.
-
-## Your Mission
-
-Find security vulnerabilities:
-- Buffer overflows
-- Integer overflows
-- TOCTOU races
-- Injection attacks
-- Cryptographic mistakes
-
-## Your Personality
-
-Assume all input is hostile. Assume all programmers make mistakes.
-Better to be safe than sorry.
-
-"If it CAN fail, it WILL fail in production."
-```
-
-## File Purposes
-
-| File | Purpose | Updated By |
-|------|---------|-----------|
-| AI_START_HERE.md | AI bootstrap instructions | Manual |
-| PERSONA.md | Personality definition | Manual |
-| LESSONS.md | Learned bug patterns | AI (auto) |
-| HANDOVER.md | Workflow protocol | Manual |
-| REVIEW-SUMMARY.md | Progress tracking | AI (auto) |
-| logs/ | Conversation logs | AI (auto) |
-
-## Tips
-
-1. **Start simple**: Use this example, modify gradually
-2. **Be specific**: Clear instructions = better reviews
-3. **Give examples**: Show the AI what you want
-4. **Iterate**: Run on a small codebase first, refine
-
-## Sharing Personas
-
-Personas are portable! Share with:
 ```bash
-tar czf my-persona.tar.gz personas/my-persona/
+# Copy this agent
+cp -r personas/example personas/my-agent
+
+# Edit the configuration
+vim personas/my-agent/agent.yaml
+
+# Validate
+python3 persona_validator.py personas/my-agent
 ```
 
-Or version control separately:
-```bash
-cd personas/my-persona
-git init
-git remote add origin https://github.com/you/my-persona.git
+## Agent Spec Format
+
+The `agent.yaml` file follows Oracle Agent Spec:
+
+```yaml
+component_type: Agent
+agentspec_version: "26.1.0"
+name: "Agent Name"
+description: "What this agent does"
+
+metadata:
+  focus_areas: [correctness, safety]
+
+inputs:
+  - title: "codebase_path"
+    type: "string"
+
+outputs:
+  - title: "review_summary"
+    type: "string"
+
+system_prompt: |
+  Your instructions...
+
+llm_config:
+  component_type: OpenAiCompatibleConfig
+  name: "{{llm_name}}"
+  url: "{{llm_url}}"
+  model_id: "{{model_id}}"
 ```
 
+## See Also
+
+- [Oracle Agent Spec](https://oracle.github.io/agent-spec/26.1.0/)
+- [AGENTS.md](../../AGENTS.md) - AI agent instructions
+- [README.md](../../README.md) - Full documentation
