@@ -46,9 +46,12 @@ from typing import Dict, List, Optional, Any, Tuple, Set
 import json
 
 # Import new validation and metrics modules
-from persona_validator import PersonaValidator
+from persona_validator import AgentSpecValidator, load_agent_spec
 from build_validator import BuildValidator
 from persona_metrics import PersonaMetricsTracker
+
+# Backward compatibility alias
+PersonaValidator = AgentSpecValidator
 
 logger = logging.getLogger(__name__)
 
@@ -1866,8 +1869,23 @@ class ReviewLoop:
         self.preferred_branch = preferred_branch
         self.allowed_branches = allowed_branches or []
         
-        # Persona files (behavior templates - shared across projects)
-        self.bootstrap_file = persona_dir / "AI_START_HERE.md"
+        # Load agent spec (supports both agent.yaml and legacy AI_START_HERE.md)
+        self.agent_spec = load_agent_spec(persona_dir)
+        
+        # Determine bootstrap file for legacy compatibility
+        agent_yaml = persona_dir / "agent.yaml"
+        agent_json = persona_dir / "agent.json"
+        legacy_bootstrap = persona_dir / "AI_START_HERE.md"
+        
+        if agent_yaml.exists():
+            self.bootstrap_file = agent_yaml
+            self.using_agent_spec = True
+        elif agent_json.exists():
+            self.bootstrap_file = agent_json
+            self.using_agent_spec = True
+        else:
+            self.bootstrap_file = legacy_bootstrap
+            self.using_agent_spec = False
         
         # Source-specific files (lessons learned and progress - per project)
         # These live in the source tree so each project has its own history
@@ -1924,10 +1942,19 @@ class ReviewLoop:
         self.current_chunk_index: int = 0  # Which chunk we're on
         self.chunked_file_path: Optional[Path] = None  # Path of file being chunked
         
-        # Load bootstrap content
-        self.bootstrap_content = self.bootstrap_file.read_text(encoding='utf-8')
+        # Load bootstrap content (system_prompt from agent spec, or raw markdown)
+        if self.using_agent_spec and self.agent_spec:
+            self.bootstrap_content = self.agent_spec.get('system_prompt', '')
+            self.agent_name = self.agent_spec.get('name', persona_dir.name)
+            self.agent_description = self.agent_spec.get('description', '')
+            logger.info(f"Loaded Agent Spec: {self.agent_name}")
+        else:
+            self.bootstrap_content = self.bootstrap_file.read_text(encoding='utf-8')
+            self.agent_name = persona_dir.name
+            self.agent_description = ''
+            logger.info(f"Loaded legacy persona: {self.agent_name}")
 
-        # Validate persona
+        # Validate agent/persona
         print("*** Validating persona...")
         is_valid, validation_report = PersonaValidator.validate_and_report(persona_dir)
         if not is_valid:
@@ -5809,19 +5836,32 @@ Examples:
     persona_dir = config_dir / persona_name
     
     if not persona_dir.exists():
-        logger.error(f"Persona directory not found: {persona_dir}")
+        logger.error(f"Agent directory not found: {persona_dir}")
         logger.error(f"Expected structure: {persona_dir}/")
-        logger.error(f"  - AI_START_HERE.md (bootstrap)")
-        logger.error(f"  - LESSONS.md (learned patterns)")
-        logger.error(f"  - REVIEW-SUMMARY.md (progress)")
+        logger.error(f"  - agent.yaml (Agent Spec format, preferred)")
+        logger.error(f"  OR")
+        logger.error(f"  - AI_START_HERE.md (legacy format)")
         sys.exit(1)
     
-    # Validate required persona files
-    bootstrap_file = persona_dir / "AI_START_HERE.md"
-    if not bootstrap_file.exists():
-        logger.error(f"Bootstrap file not found: {bootstrap_file}")
-        logger.error(f"Persona must contain AI_START_HERE.md")
+    # Check for agent spec file (agent.yaml or agent.json) or legacy format
+    agent_yaml = persona_dir / "agent.yaml"
+    agent_json = persona_dir / "agent.json"
+    legacy_bootstrap = persona_dir / "AI_START_HERE.md"
+    
+    if not agent_yaml.exists() and not agent_json.exists() and not legacy_bootstrap.exists():
+        logger.error(f"No agent configuration found in: {persona_dir}")
+        logger.error(f"Expected one of:")
+        logger.error(f"  - agent.yaml (Agent Spec format, preferred)")
+        logger.error(f"  - agent.json (Agent Spec format)")
+        logger.error(f"  - AI_START_HERE.md (legacy format)")
+        logger.error(f"\nSee: https://oracle.github.io/agent-spec/ for Agent Spec format")
         sys.exit(1)
+    
+    if agent_yaml.exists() or agent_json.exists():
+        logger.info(f"Using Agent Spec format: {persona_name}")
+    else:
+        logger.warning(f"Using legacy persona format: {persona_name}")
+        logger.warning("Consider migrating to Agent Spec format (agent.yaml)")
     
     logger.info(f"Using persona: {persona_name}")
     

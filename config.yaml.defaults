@@ -179,23 +179,31 @@ review:
   chunk_threshold: 400          # Lines before file is chunked (default: 400)
   chunk_size: 250               # Maximum lines per chunk (default: 250)
   
-  # Persona directory (contains AI behavior, lessons, progress tracking)
-  # Structure: personas/<name>/
-  #   - AI_START_HERE.md (bootstrap/instructions)
-  #   - PERSONA.md (personality definition)
-  #   - LESSONS.md (learned bug patterns)
-  #   - HANDOVER.md (workflow protocol)
-  #   - REVIEW-SUMMARY.md (progress tracking)
-  #   - AGENTS.md, @AGENTS.md (agent hints)
+  # Agent directory (contains agent behavior configuration)
   #
-  # Available personas:
+  # AGENT SPEC FORMAT (preferred):
+  #   Structure: personas/<name>/
+  #     - agent.yaml (Agent Spec configuration - all settings in one file)
+  #   See: https://oracle.github.io/agent-spec/26.1.0/
+  #
+  # LEGACY FORMAT (still supported):
+  #   Structure: personas/<name>/
+  #     - AI_START_HERE.md (bootstrap/instructions)
+  #     - PERSONA.md (personality definition)
+  #     - HANDOVER.md (workflow protocol)
+  #
+  # Available agents:
   #   - freebsd-angry-ai: Ruthless security auditor (default, battle-tested)
+  #   - security-hawk: Paranoid security specialist
+  #   - performance-cop: Speed optimization expert
+  #   - friendly-mentor: Educational, encouraging reviewer
   #   - example: Balanced, educational template
   #
   # Benefits:
   #   - Source tree stays clean (only code changes)
-  #   - Multiple personas (security-focused, performance, friendly)
-  #   - Portable personas (share/version separately)
+  #   - Multiple agents (security-focused, performance, friendly)
+  #   - Portable agents (share/version separately)
+  #   - Agent Spec format is standardized and interoperable
   persona: "personas/freebsd-angry-ai"
   
   # Target number of directories to complete per session
