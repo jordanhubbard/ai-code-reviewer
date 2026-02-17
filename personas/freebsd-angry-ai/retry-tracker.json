@@ -23,6 +23,10 @@
     "attempts": 1,
     "last_attempt": "2026-01-25T02:58:58.083790"
   },
+  "sbin/fdisk": {
+    "attempts": 3,
+    "last_attempt": "2026-02-17T03:11:48.504212"
+  },
   "sbin/geom/misc": {
     "attempts": 1,
     "last_attempt": "2026-02-02T12:12:01.430230"
