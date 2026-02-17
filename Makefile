@@ -33,7 +33,12 @@ all: help
 # Create project-local virtual environment
 venv:
 	@echo "Ensuring virtual environment at $(VENV)..."
-	@if [ ! -d "$(VENV)" ]; then \
+	@# Check if venv exists AND is functional (python binary works)
+	@if [ ! -d "$(VENV)" ] || ! $(VENV_PY) --version >/dev/null 2>&1; then \
+		if [ -d "$(VENV)" ]; then \
+			echo "Existing venv is broken (stale Python). Recreating..."; \
+			rm -rf "$(VENV)"; \
+		fi; \
 		echo "Creating virtual environment..."; \
 		$(PYTHON) -m venv "$(VENV)"; \
 	fi

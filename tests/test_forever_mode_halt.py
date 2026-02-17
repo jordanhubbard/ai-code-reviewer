@@ -40,7 +40,7 @@ class _FakeLLM:
 class ForeverModeHaltTests(unittest.TestCase):
     def test_forever_mode_does_not_stop_on_rejected_halt(self) -> None:
         persona_dir = Path(__file__).resolve().parents[1] / "personas" / "friendly-mentor"
-        self.assertTrue((persona_dir / "AI_START_HERE.md").exists())
+        self.assertTrue((persona_dir / "agent.yaml").exists())
 
         with TemporaryDirectory() as tmp:
             root = Path(tmp)
