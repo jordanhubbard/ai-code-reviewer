@@ -185,7 +185,7 @@ run-verbose: check-deps
 
 # Run in forever mode (review all directories until complete)
 run-forever: check-deps
-	$(VENV_PY) reviewer.py --config config.yaml --forever
+	@$(PYTHON) scripts/make_run_forever.py
 
 #
 # Validation targets

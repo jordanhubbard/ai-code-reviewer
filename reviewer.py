@@ -4984,29 +4984,18 @@ TO FIX:
                 if is_recoverable and self.forever_mode:
                     # In forever mode, recoverable errors should retry, not stop
                     self.session.llm_retry_count += 1
-                    max_retries = 10  # Give up after 10 consecutive failures
-                    
-                    if self.session.llm_retry_count > max_retries:
-                        # Too many retries - commit lessons and emergency stop
-                        self._commit_lessons_and_continue(f"LLM error after {max_retries} retries")
-                        self._emergency_stop(
-                            error_type, 
-                            error_msg,
-                            f"Failed {max_retries} consecutive times. Error type: {description}"
-                        )
-                        break
                     
                     # Calculate backoff with exponential increase, capped at 5 minutes
                     backoff = min(self.session.llm_retry_backoff, 300)
                     self.session.llm_retry_backoff = min(self.session.llm_retry_backoff * 2, 300)
                     
                     print(f"\n{'='*60}")
-                    print(f"⚠️  RECOVERABLE ERROR (attempt {self.session.llm_retry_count}/{max_retries})")
+                    print(f"⚠️  RECOVERABLE ERROR (attempt {self.session.llm_retry_count})")
                     print('='*60)
                     print(f"Error type: {error_type}")
                     print(f"Description: {description}")
                     print(f"\nThis error is recoverable. Retrying in {backoff} seconds...")
-                    print(f"Forever mode continues automatically.")
+                    print("Forever mode continues automatically (will retry indefinitely).")
                     print('='*60)
                     
                     # Commit any pending lessons before we wait
