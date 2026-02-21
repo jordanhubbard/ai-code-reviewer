@@ -296,6 +296,18 @@ release: test
 		git status --short; \
 		exit 1; \
 	fi
+	@# Check for unpushed commits on the current branch
+	@BRANCH=$$(git rev-parse --abbrev-ref HEAD); \
+	if ! git rev-parse --verify "origin/$$BRANCH" >/dev/null 2>&1; then \
+		echo "ERROR: Branch '$$BRANCH' has no upstream. Push it first: git push -u origin $$BRANCH"; \
+		exit 1; \
+	fi; \
+	UNPUSHED=$$(git rev-list "origin/$$BRANCH..HEAD" --count); \
+	if [ "$$UNPUSHED" -gt 0 ]; then \
+		echo "ERROR: $$UNPUSHED unpushed commit(s) on branch '$$BRANCH'. Run 'git push' first."; \
+		git log "origin/$$BRANCH..HEAD" --oneline; \
+		exit 1; \
+	fi
 	@# Check gh CLI is available and authenticated
 	@if ! command -v gh >/dev/null 2>&1; then \
 		echo "ERROR: gh CLI not found. Install from https://cli.github.com/"; \
