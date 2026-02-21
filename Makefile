@@ -26,15 +26,15 @@ TOKENHUB_PORT   ?= 8090
 # TOKENHUB_URL priority: env var / make command-line > config.yaml > localhost:8090
 # Reading config.yaml here prevents the hardcoded default from masking a
 # user-configured URL when TOKENHUB_URL is not set in the environment.
-ifndef TOKENHUB_URL
-  _CFG_TH_URL := $(shell [ -f config.yaml ] && \
-      $(PYTHON) -c "import yaml; d=yaml.safe_load(open('config.yaml')); print((d.get('tokenhub') or {}).get('url') or '')" 2>/dev/null)
-  ifeq ($(strip $(_CFG_TH_URL)),)
-    TOKENHUB_URL := http://localhost:8090
-  else
-    TOKENHUB_URL := $(_CFG_TH_URL)
-  endif
-endif
+.ifndef TOKENHUB_URL
+_CFG_TH_URL != [ -f config.yaml ] && \
+    $(PYTHON) -c "import yaml; d=yaml.safe_load(open('config.yaml')); print((d.get('tokenhub') or {}).get('url') or '')" 2>/dev/null || true
+.if empty(_CFG_TH_URL)
+TOKENHUB_URL = http://localhost:8090
+.else
+TOKENHUB_URL = $(_CFG_TH_URL)
+.endif
+.endif
 
 # No directory variables needed - make runs from Makefile location
 # All paths are relative to the Makefile
