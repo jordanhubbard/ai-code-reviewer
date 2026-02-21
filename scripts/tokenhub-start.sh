@@ -9,12 +9,12 @@
 #   5. None of the above → exit with an error and instructions
 #
 # Usage: scripts/tokenhub-start.sh [PORT] [HEALTHZ_URL]
-#   PORT        – host port to expose (default: 8080)
+#   PORT        – host port to expose (default: 8090)
 #   HEALTHZ_URL – URL to poll for health (default: http://localhost:PORT/healthz)
 
 set -euo pipefail
 
-PORT="${1:-8080}"
+PORT="${1:-8090}"
 HEALTHZ_URL="${2:-http://localhost:${PORT}/healthz}"
 TOKENHUB_DIR="${HOME}/Src/tokenhub"
 CONTAINER_NAME="tokenhub"

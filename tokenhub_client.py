@@ -15,7 +15,7 @@ requires only a one-line import change.
 
 Configuration (config.yaml):
     tokenhub:
-      url: "http://localhost:8080"
+      url: "http://localhost:8090"
       api_key: ""          # Bearer token; or set TOKENHUB_API_KEY env var
       # model_hint: ""     # Optional routing hint; blank = let tokenhub decide
 
@@ -385,7 +385,7 @@ def create_client_from_config(config_dict: Dict[str, Any]) -> TokenHubClient:
     # URL and API key (env vars take priority)
     url = (
         os.environ.get("TOKENHUB_URL")
-        or str(th_cfg.get("url") or "http://localhost:8080")
+        or str(th_cfg.get("url") or "http://localhost:8090")
     ).rstrip("/")
 
     api_key = (

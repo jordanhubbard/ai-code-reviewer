@@ -21,8 +21,8 @@ FREEBSD_PYYAML_PKG?=py311-pyyaml
 # TokenHub settings (override with env vars or on the make command line)
 TOKENHUB_DIR    ?= $(HOME)/Src/tokenhub
 TOKENHUB_BIN    ?= $(TOKENHUB_DIR)/bin/tokenhub
-TOKENHUB_URL    ?= http://localhost:8080
-TOKENHUB_PORT   ?= 8080
+TOKENHUB_URL    ?= http://localhost:8090
+TOKENHUB_PORT   ?= 8090
 
 # No directory variables needed - make runs from Makefile location
 # All paths are relative to the Makefile
@@ -389,7 +389,7 @@ help:
 	@echo "  make tokenhub-status  Check if TokenHub is reachable"
 	@echo "  make tokenhub-build   Build the TokenHub binary from ~/Src/tokenhub"
 	@echo ""
-	@echo "  Override URL:  make run TOKENHUB_URL=http://my-server:8080"
+	@echo "  Override URL:  make run TOKENHUB_URL=http://my-server:8090"
 	@echo "  Override port: make tokenhub-start TOKENHUB_PORT=9090"
 	@echo ""
 	@echo "Usage:"
@@ -415,8 +415,8 @@ help:
 	@echo "Options:"
 	@echo "  CONFIG=path       Use alternate config file (default: config.yaml)"
 	@echo "  PYTHON=path       Use alternate Python interpreter (default: python3)"
-	@echo "  TOKENHUB_URL=url  TokenHub base URL (default: http://localhost:8080)"
-	@echo "  TOKENHUB_PORT=n   Local port for tokenhub-start (default: 8080)"
+	@echo "  TOKENHUB_URL=url  TokenHub base URL (default: http://localhost:8090)"
+	@echo "  TOKENHUB_PORT=n   Local port for tokenhub-start (default: 8090)"
 	@echo ""
 	@echo "Requirements:"
 	@echo "  - Python 3.8+ with PyYAML (auto-installed by check-deps)"

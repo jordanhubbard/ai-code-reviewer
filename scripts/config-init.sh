@@ -27,7 +27,7 @@ CYAN='\033[0;36m'
 NC='\033[0m' # No Color
 
 # Default values
-DEFAULT_TOKENHUB_URL="http://localhost:8080"
+DEFAULT_TOKENHUB_URL="http://localhost:8090"
 DEFAULT_TOKENHUB_API_KEY=""
 DEFAULT_TIMEOUT=600
 DEFAULT_MAX_TOKENS=4096
@@ -381,7 +381,7 @@ configure_tokenhub() {
             local cport
             cport=$(docker port "$existing_container_id" 8080/tcp 2>/dev/null \
                 | grep -o ':[0-9]*' | head -1 | tr -d ':' || true)
-            [[ -z "$cport" ]] && cport="8080"
+            [[ -z "$cport" ]] && cport="8090"
             local cstatus2
             cstatus2=$(docker inspect --format '{{.State.Status}}' \
                 "$existing_container_id" 2>/dev/null || echo "unknown")
@@ -402,8 +402,8 @@ configure_tokenhub() {
 
         3)  # New container
             echo ""
-            read -e -p "  Host port to expose (default: 8080): " -i "8080" cport
-            [[ -z "$cport" ]] && cport="8080"
+            read -e -p "  Host port to expose (default: 8090): " -i "8090" cport
+            [[ -z "$cport" ]] && cport="8090"
 
             if _start_container "$cport"; then
                 TOKENHUB_URL="http://localhost:${cport}"
@@ -417,8 +417,8 @@ configure_tokenhub() {
 
         4)  # Binary
             echo ""
-            read -e -p "  Port to listen on (default: 8080): " -i "8080" bport
-            [[ -z "$bport" ]] && bport="8080"
+            read -e -p "  Port to listen on (default: 8090): " -i "8090" bport
+            [[ -z "$bport" ]] && bport="8090"
 
             if _start_binary "$bport"; then
                 TOKENHUB_URL="http://localhost:${bport}"
