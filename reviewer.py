@@ -4615,17 +4615,15 @@ Output ONLY the lesson entry, nothing else."""
         
         if error_type == 'model_not_found':
             print("""
-The specified AI model does not exist on the LLM server.
+The requested model hint does not match any model available through TokenHub.
 This is a configuration issue that requires manual intervention.
 
 TO FIX:
-1. Check your LLM server for available models:
-   - For Ollama: ollama list
-   - For vLLM: check your server's model directory
-2. Update config.yaml with a valid model name:
-   llm:
-     models:
-       - "your-model-name-here"
+1. Check available models via TokenHub:
+   make tokenhub-status   # confirm TokenHub is reachable
+2. Update config.yaml with a valid model hint (or clear it to let TokenHub choose):
+   tokenhub:
+     model_hint: ""   # blank = TokenHub picks automatically
 3. Restart the review: make run-forever
 """)
         elif error_type == 'auth_failed':
@@ -5048,12 +5046,12 @@ TO FIX:
                     if error_type == 'timeout':
                         print(f"\nThe model took longer than {self.ollama.config.timeout}s to respond.")
                         print("Solutions:")
-                        print(f"1. Increase timeout in config.yaml: llm.timeout")
+                        print(f"1. Increase timeout in config.yaml: tokenhub.timeout")
                         print("2. Review smaller files first")
                         print("3. Use --forever mode for automatic retry")
                     elif error_type == 'model_not_found':
-                        print("\nTo see available models, check your LLM server.")
-                        print("Then update config.yaml llm.models with valid model names.")
+                        print("\nTo see available models, check your TokenHub instance.")
+                        print("Update config.yaml tokenhub.model_hint or leave blank to let TokenHub choose.")
                     print('='*60)
                     break
             

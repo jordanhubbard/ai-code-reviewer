@@ -7,66 +7,42 @@ from pathlib import Path
 # Map of (path, old_value) -> new_value for defaults that have changed
 # Format: ("section.subsection.key", old_default) -> new_default
 CHANGED_DEFAULTS = {
-    ("ollama.ps_monitor_interval", 5): 0,  # Changed: too verbose
-    ("ollama.timeout", 300): 600,  # Changed: prevent timeouts on large files
-    ("llm.ps_monitor_interval", 5): 0,  # Changed: too verbose
-    ("llm.timeout", 300): 600,  # Changed: prevent timeouts on large files
+    ("tokenhub.timeout", 300): 600,  # Changed: prevent timeouts on large files
 }
 
 
-def migrate_ollama_to_llm(config):
+def migrate_llm_to_tokenhub(config):
     """
-    Migrate legacy 'ollama' config section to new 'llm' format.
-    
-    Returns True if migration was performed.
+    Migrate request parameters from the deprecated 'llm' section into 'tokenhub'.
+
+    Handles both:
+      - Legacy 'ollama' section (pre-TokenHub era)
+      - 'llm' section with timeout/max_tokens/temperature (now lives in tokenhub:)
+
+    Returns True if any migration was performed.
     """
+    migrated = False
+    th = config.setdefault('tokenhub', {})
+
+    # ── ollama → tokenhub ────────────────────────────────────────────────────
+    if 'ollama' in config:
+        ollama = config['ollama']
+        for key in ('timeout', 'max_tokens', 'temperature'):
+            if key in ollama and key not in th:
+                th[key] = ollama[key]
+        del config['ollama']
+        migrated = True
+
+    # ── llm → tokenhub ───────────────────────────────────────────────────────
     if 'llm' in config:
-        # Already has new format
-        return False
-    
-    if 'ollama' not in config:
-        # No config to migrate
-        return False
-    
-    ollama = config['ollama']
-    
-    # Get the base URL and extract host (port is now auto-expanded by llm_client)
-    old_url = ollama.get('url', 'http://localhost:11434')
-    
-    # Extract just the host without port - llm_client will auto-expand to try
-    # both vLLM (:8000) and Ollama (:11434) ports automatically
-    import re
-    url_match = re.match(r'(https?://[^:/]+)(:\d+)?(/.*)?', old_url)
-    if url_match:
-        base_host = url_match.group(1)  # e.g., "http://10.11.100.116"
-        # Just use the base host - port auto-expansion handles the rest
-        hosts = [base_host]
-    else:
-        # Fallback if URL parsing fails
-        hosts = [old_url]
-    
-    models = [ollama.get('model', 'qwen2.5-coder:32b')]
-    
-    # Add new preferred model if not already present
-    preferred_model = 'nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16'
-    if preferred_model not in models:
-        models.insert(0, preferred_model)
-    
-    config['llm'] = {
-        'hosts': hosts,
-        'models': models,
-        'timeout': ollama.get('timeout', 600),
-        'max_tokens': ollama.get('max_tokens', 4096),
-        'temperature': ollama.get('temperature', 0.1),
-        'ps_monitor_interval': ollama.get('ps_monitor_interval', 0),
-        'batching': ollama.get('batching', {}),
-        'options': ollama.get('options', {}),
-    }
-    
-    # Remove old ollama section (it's now deprecated)
-    del config['ollama']
-    
-    return True
+        llm = config['llm']
+        for key in ('timeout', 'max_tokens', 'temperature'):
+            if key in llm and key not in th:
+                th[key] = llm[key]
+        del config['llm']
+        migrated = True
+
+    return migrated
 
 def merge_dicts(defaults, config, path="", added=None, updated=None):
     """Recursively merge defaults into config, adding new keys and updating changed defaults."""
@@ -118,23 +94,21 @@ def main():
     with open(config_path) as f:
         config = yaml.safe_load(f)
     
-    # First, migrate ollama -> llm if needed
-    migrated = migrate_ollama_to_llm(config)
+    # First, migrate legacy sections into tokenhub: if needed
+    migrated = migrate_llm_to_tokenhub(config)
     if migrated:
-        print("  Migrated 'ollama' section to new 'llm' format")
-        print("    - Converted url -> hosts (port auto-expansion tries :8000 then :11434)")
-        print("    - Converted model -> models (array with priority fallback)")
-        print("    - Added nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16 as preferred model")
-    
+        print("  Migrated request parameters (timeout/max_tokens/temperature) into 'tokenhub' section")
+        print("  Removed deprecated 'llm' (and/or 'ollama') section")
+
     added, updated = merge_dicts(defaults, config)
-    
+
     if added or updated or migrated:
         with open(config_path, 'w') as f:
             yaml.dump(config, f, default_flow_style=False, sort_keys=False)
-        
+
         msg_parts = []
         if migrated:
-            msg_parts.append("ollama->llm migration")
+            msg_parts.append("llm->tokenhub migration")
         if added:
             msg_parts.append(f"{len(added)} new key(s)")
         if updated:

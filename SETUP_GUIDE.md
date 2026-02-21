@@ -29,13 +29,10 @@ vim config.yaml
 ### 3. Edit config.yaml
 
 ```yaml
-# 1. LLM server (REQUIRED)
-llm:
-  hosts:
-    - "http://your-llm-server"  # vLLM (:8000) or Ollama (:11434)
-  models:
-    - "nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16"
-    - "qwen2.5-coder:32b"
+# 1. TokenHub connection (REQUIRED)
+tokenhub:
+  url: "http://localhost:8090"   # URL of your TokenHub instance
+  api_key: "tokenhub_..."        # Bearer token (create via make config-init)
 
 # 2. Source tree (REQUIRED)
 source:

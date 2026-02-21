@@ -16,7 +16,7 @@
 - ✅ **Scalable**: Function-by-function chunking handles files of any size
 - ✅ **Safe**: Tests every change with your build system
 - ✅ **Autonomous**: Runs for hours reviewing entire directories
-- ✅ **Smart**: Uses LLM via OpenAI-compatible vLLM and/or Ollama
+- ✅ **Smart**: Uses LLM via [TokenHub](https://github.com/jordanhubbard/tokenhub) — handles all provider routing, model selection, and cost management
 - ✅ **Parallel**: Optional concurrent file processing for faster reviews
 - ✅ **Self-Healing**: Auto-detects loops, learns from build failures
 - ✅ **Configurable**: Multiple agent personalities via Oracle Agent Spec
@@ -43,26 +43,21 @@
 make check-deps
 ```
 
-### 2. Set Up an LLM Server (vLLM or Ollama)
+### 2. Start TokenHub
 
-#### Option A: vLLM (OpenAI-compatible, high performance)
-
-```bash
-docker run -it --gpus all -p 8000:8000 \
-  --ipc=host --ulimit memlock=-1 --ulimit stack=67108864 \
-  -v ~/.cache/huggingface:/root/.cache/huggingface \
-  nvcr.io/nvidia/vllm:25.12.post1-py3 \
-  vllm serve "nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16" \
-    --trust-remote-code
-```
-
-#### Option B: Ollama
+All LLM provider selection, model routing, and cost management is delegated to
+[TokenHub](https://github.com/jordanhubbard/tokenhub) (`~/Src/tokenhub`).  The smart launcher
+picks the best available option automatically:
 
 ```bash
-curl -fsSL https://ollama.com/install.sh | sh
-ollama pull qwen2.5-coder:32b
-OLLAMA_HOST=0.0.0.0:11434 ollama serve
+make tokenhub-start
 ```
+
+The launcher tries, in order:
+1. **Remote instance** already reachable at the configured URL
+2. **Existing Docker container** — restarts it if stopped
+3. **New Docker container** — Linux/macOS with Docker available
+4. **Native binary** — built from `~/Src/tokenhub` (works on FreeBSD and any platform without Docker)
 
 ### 3. Configure
 
@@ -76,14 +71,11 @@ cp config.yaml.defaults config.yaml
 vim config.yaml
 ```
 
-**Edit config.yaml:**
+**Minimal config.yaml:**
 ```yaml
-llm:
-  hosts:
-    - "http://your-llm-server"
-  models:
-    - "nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16"
-    - "qwen2.5-coder:32b"
+tokenhub:
+  url: "http://localhost:8090"   # URL of your TokenHub instance
+  api_key: "tokenhub_..."        # Bearer token (create via make config-init)
 
 source:
   root: ".."
@@ -195,6 +187,7 @@ Files over 400 lines are automatically chunked by function:
 ┌─────────────────────────────────────────────────────┐
 │ ai-code-reviewer/                                   │
 │ ├─ reviewer.py        (main loop)                  │
+│ ├─ tokenhub_client.py (TokenHub HTTP client)       │
 │ ├─ persona_validator.py (Agent Spec validation)    │
 │ ├─ personas/          (agent configurations)       │
 │ │   ├─ freebsd-angry-ai/agent.yaml                │
@@ -202,8 +195,11 @@ Files over 400 lines are automatically chunked by function:
 │ │   └─ ...                                        │
 │ └─ config.yaml        (your configuration)        │
 └─────────────────────────────────────────────────────┘
-          ↓ HTTP                    ↓ subprocess
-    (to LLM server)           (your build command)
+          ↓ HTTP /v1/chat/completions        ↓ subprocess
+         TokenHub (provider routing)    (your build command)
+         ├─ Docker container
+         ├─ Native binary (FreeBSD, etc.)
+         └─ Remote instance
 ```
 
 ## Project Structure
@@ -220,7 +216,7 @@ ai-code-reviewer/
 │   └── example/
 ├── reviewer.py              # Main review loop
 ├── persona_validator.py     # Agent Spec validator
-├── llm_client.py           # LLM communication
+├── tokenhub_client.py      # TokenHub HTTP client
 ├── build_executor.py       # Build system integration
 ├── chunker.py              # Large file handling
 ├── config.yaml.defaults    # Configuration template
@@ -269,7 +265,7 @@ source:
 ## Requirements
 
 - **Python 3.8+** with PyYAML
-- **LLM server** (vLLM or Ollama) with a code model
+- **TokenHub** (`~/Src/tokenhub`) — Docker container, native binary, or remote instance
 - **Your project's build system** (make, cmake, cargo, etc.)
 - **Git repository** (for tracking changes)
 

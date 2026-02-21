@@ -88,7 +88,7 @@ Before submitting a PR:
 
 Key files:
 - **reviewer.py**: Main review loop
-- **ollama_client.py**: LLM communication
+- **tokenhub_client.py**: LLM communication via TokenHub
 - **build_executor.py**: Build/test execution
 - **chunker.py**: Large file handling
 - **index_generator.py**: Directory scanning

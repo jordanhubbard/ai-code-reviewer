@@ -501,15 +501,12 @@ display_config() {
     print_section "Configuration Summary"
 
     echo -e "${CYAN}TokenHub:${NC}"
-    echo "  URL:     ${TOKENHUB_URL:-<not set>}"
+    echo "  URL:         ${TOKENHUB_URL:-<not set>}"
     if [[ -n "$TOKENHUB_API_KEY" ]]; then
-        echo "  API Key: ${TOKENHUB_API_KEY:0:12}... (truncated)"
+        echo "  API Key:     ${TOKENHUB_API_KEY:0:12}... (truncated)"
     else
-        echo "  API Key: <not set — configure before running>"
+        echo "  API Key:     <not set — configure before running>"
     fi
-    echo ""
-
-    echo -e "${CYAN}LLM Request Settings:${NC}"
     echo "  Timeout:     ${TIMEOUT}s"
     echo "  Max Tokens:  $MAX_TOKENS"
     echo "  Temperature: $TEMPERATURE"
@@ -560,8 +557,6 @@ tokenhub:
   url: "${esc_url}"
   api_key: "${esc_key}"
   # model_hint: ""  # Optional: leave blank to let tokenhub choose
-
-llm:
   timeout: ${TIMEOUT}
   max_tokens: ${MAX_TOKENS}
   temperature: ${TEMPERATURE}
@@ -639,8 +634,8 @@ main() {
         # Step 2: TokenHub connection
         configure_tokenhub
 
-        # Step 3: LLM request settings
-        print_section "LLM Request Settings"
+        # Step 3: TokenHub request settings
+        print_section "TokenHub Request Settings"
         echo "These control how requests are formed, not which provider handles them."
         echo ""
         read_value "Request timeout (seconds)" "$DEFAULT_TIMEOUT" TIMEOUT

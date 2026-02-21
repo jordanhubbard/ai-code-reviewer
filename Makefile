@@ -175,7 +175,7 @@ check-tokenhub:
 	@curl -sf --max-time 5 $(TOKENHUB_URL)/healthz >/dev/null 2>&1 || ( \
 	    echo "ERROR: TokenHub not reachable at $(TOKENHUB_URL)" ; \
 	    echo "  Run 'make tokenhub-start' to start a local instance" ; \
-	    echo "  or set TOKENHUB_URL=<url> to point at a remote instance" ; \
+	    echo "  or update tokenhub.url in config.yaml to point at a remote instance" ; \
 	    exit 1 )
 
 #
@@ -359,10 +359,10 @@ clean:
 	rm -rf __pycache__
 	rm -rf *.pyc
 
-# Deep clean - also remove any leftover model weights (they belong on Ollama server)
+# Deep clean - also remove any leftover model weights (they belong on the backend LLM server)
 clean-all: clean
 	@if [ -d "Qwen2.5-Coder-32B-Instruct" ]; then \
-		echo "Removing local model weights (these should be on Ollama server)..."; \
+		echo "Removing local model weights (these should be on the LLM backend)..."; \
 		rm -rf Qwen2.5-Coder-32B-Instruct; \
 		echo "Done."; \
 	fi

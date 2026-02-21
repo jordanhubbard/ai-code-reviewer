@@ -42,13 +42,12 @@ tokenhub:
   #
   # model_hint: ""
 
-# =============================================================================
-# LLM Request Parameters
-# =============================================================================
-# These control how requests are formed — not which provider handles them.
-# Provider selection is entirely managed by TokenHub.
-#
-llm:
+  # -------------------------------------------------------------------------
+  # Request parameters
+  # -------------------------------------------------------------------------
+  # These control how requests are formed — not which provider handles them.
+  # Provider selection is entirely managed by TokenHub.
+
   # Request timeout in seconds
   # Increase if you get timeouts with large files or slow models
   timeout: 600

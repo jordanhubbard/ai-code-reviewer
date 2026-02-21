@@ -22,8 +22,8 @@ review:
 ## Timeout Settings
 
 ```yaml
-ollama:
-  timeout: 600            # 10 minutes (increased from 5 minutes)
+tokenhub:
+  timeout: 600            # 10 minutes
 ```
 
 ## Customization
@@ -36,7 +36,7 @@ review:
   chunk_threshold: 600    # Larger threshold
   chunk_size: 400         # Larger chunks
 
-ollama:
+tokenhub:
   timeout: 900            # 15 minutes for larger chunks
 ```
 
@@ -48,8 +48,8 @@ review:
   chunk_threshold: 200    # Chunk sooner
   chunk_size: 150         # Smaller chunks
 
-ollama:
-  timeout: 300            # Keep at 5 minutes (faster to detect issues)
+tokenhub:
+  timeout: 300            # 5 minutes (faster to detect issues)
 ```
 
 ### For Very Large Files
@@ -83,16 +83,13 @@ review:
 
 3. **Increase timeout** (current: 600s)
    ```yaml
-   ollama:
+   tokenhub:
      timeout: 900
    ```
 
-4. **Check GPU memory** (ensure model fits)
+4. **Check TokenHub / backend model health**
    ```bash
-   # On Ollama server
-   nvidia-smi
-   # or
-   watch -n 1 nvidia-smi
+   make tokenhub-status
    ```
 
 5. **Reduce context window**
@@ -115,7 +112,7 @@ review:
 
 **Cause**: Chunk tracking might be confused.
 
-**Solution**: 
+**Solution**:
 1. Use `ACTION: SKIP_FILE` to move on
 2. Try different directory with `ACTION: SET_SCOPE`
 
@@ -183,7 +180,7 @@ Run `make config-update` or `python scripts/config_update.py` to apply.
 review:
   chunk_threshold: 300
   chunk_size: 200
-ollama:
+tokenhub:
   timeout: 600
 ```
 
@@ -192,7 +189,7 @@ ollama:
 review:
   chunk_threshold: 500
   chunk_size: 300
-ollama:
+tokenhub:
   timeout: 600
 ```
 
@@ -201,6 +198,6 @@ ollama:
 review:
   chunk_threshold: 400
   chunk_size: 250
-ollama:
+tokenhub:
   timeout: 600
 ```

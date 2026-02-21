@@ -84,7 +84,7 @@ Directory Review Workflow:
 
 ### Speed Improvements
 - **2x-4x faster** for directories with many files
-- Better GPU utilization on Ollama server
+- Better GPU utilization on backend LLM servers
 - Reduces wall-clock time per directory
 - More efficient use of LLM capacity
 
@@ -126,7 +126,7 @@ Directory Review Workflow:
 - Exception propagation to main thread
 
 ### LLM Request Concurrency
-- Ollama server's `max_parallel_requests` still applies
+- TokenHub's concurrency limits and backend capacity still apply
 - Threads may block waiting for LLM capacity
 - Adaptive batching helps optimize per-request throughput
 
@@ -161,7 +161,7 @@ review:
 ```
 - **Use for**: Large codebases, many small independent files
 - **Risk**: Moderate, more threads = more complexity
-- **Requires**: Ollama server with sufficient GPU/RAM
+- **Requires**: TokenHub backend with sufficient GPU/RAM
 
 ### Extreme (Not Recommended)
 ```yaml
@@ -169,8 +169,8 @@ review:
   max_parallel_files: 8+
 ```
 - **Risk**: High
-- **Issues**: Diminishing returns, Ollama server overload, debugging difficulty
-- **Only if**: You have a very powerful Ollama server and simple files
+- **Issues**: Diminishing returns, backend overload, debugging difficulty
+- **Only if**: You have a very powerful backend and simple files
 
 ## Monitoring
 
@@ -214,7 +214,7 @@ The ops_logger.py tracks parallel execution:
 - [ ] Adaptive parallelism (auto-adjust workers based on file size)
 - [ ] Per-file-type parallelism (different strategies for .c vs .h vs .1)
 - [ ] Parallel chunking (review large file's functions concurrently)
-- [ ] Distributed reviewing (multiple Ollama servers)
+- [ ] Distributed reviewing (multiple TokenHub instances)
 
 ### Under Consideration
 - [ ] Speculative editing (predict likely edits, apply optimistically)
@@ -228,8 +228,8 @@ The ops_logger.py tracks parallel execution:
 - **Action**: Check logs for specific error, may need sequential mode
 
 ### "LLM timeout in thread N"
-- **Cause**: Ollama server overloaded or file too large
-- **Action**: Reduce `max_parallel_files` or increase `ollama.timeout`
+- **Cause**: TokenHub backend overloaded or file too large
+- **Action**: Reduce `max_parallel_files` or increase `tokenhub.timeout`
 
 ### "Build failed after parallel review"
 - **Cause**: Edits from different threads incompatible

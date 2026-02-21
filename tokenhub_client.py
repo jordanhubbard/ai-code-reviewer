@@ -18,8 +18,11 @@ Configuration (config.yaml):
       url: "http://localhost:8090"
       api_key: ""          # Bearer token; or set TOKENHUB_API_KEY env var
       # model_hint: ""     # Optional routing hint; blank = let tokenhub decide
+      timeout: 600         # Request timeout in seconds
+      max_tokens: 4096     # Maximum tokens per response
+      temperature: 0.1     # Generation temperature
 
-Environment variable overrides:
+Environment variable overrides (take priority over config file):
     TOKENHUB_URL      – override tokenhub.url
     TOKENHUB_API_KEY  – override tokenhub.api_key
 """
@@ -379,10 +382,9 @@ def create_client_from_config(config_dict: Dict[str, Any]) -> TokenHubClient:
         LLMConnectionError: If TokenHub is not reachable at startup.
     """
     th_cfg = config_dict.get("tokenhub") or {}
-    llm_cfg = config_dict.get("llm") or {}
     perf_cfg = (config_dict.get("review") or {}).get("performance") or {}
 
-    # URL and API key (env vars take priority)
+    # URL and API key (env vars take priority over config file)
     url = (
         os.environ.get("TOKENHUB_URL")
         or str(th_cfg.get("url") or "http://localhost:8090")
@@ -395,12 +397,11 @@ def create_client_from_config(config_dict: Dict[str, Any]) -> TokenHubClient:
 
     model_hint = str(th_cfg.get("model_hint") or "")
 
-    # Request parameters (fall back to llm section for compatibility)
-    timeout = int(th_cfg.get("timeout") or llm_cfg.get("timeout") or 600)
-    max_tokens = int(th_cfg.get("max_tokens") or llm_cfg.get("max_tokens") or 4096)
+    # Request parameters — all in tokenhub: section
+    timeout = int(th_cfg.get("timeout") or 600)
+    max_tokens = int(th_cfg.get("max_tokens") or 4096)
     temperature = float(
         th_cfg.get("temperature") if th_cfg.get("temperature") is not None
-        else llm_cfg.get("temperature") if llm_cfg.get("temperature") is not None
         else 0.1
     )
 
@@ -421,7 +422,7 @@ def create_client_from_config(config_dict: Dict[str, Any]) -> TokenHubClient:
         raise LLMConnectionError(
             f"Cannot reach TokenHub at {url}/healthz\n"
             f"  • Is TokenHub running?  Try: make tokenhub-start\n"
-            f"  • Wrong URL?  Set TOKENHUB_URL=<url> or update config.yaml\n"
+            f"  • Wrong URL?  Update tokenhub.url in config.yaml\n"
             f"  • Run 'make config-init' to reconfigure"
         )
 
