@@ -3,7 +3,7 @@
 # config-init.sh - Interactive configuration setup for AI Code Reviewer
 #
 # Creates or updates config.yaml with user-specified values.
-# Uses readline for editing, validates hosts with curl, and allows
+# Uses readline for editing, validates the TokenHub connection, and allows
 # review before saving.
 #
 # Usage:
@@ -16,7 +16,7 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 CONFIG_FILE="$PROJECT_DIR/config.yaml"
-DEFAULTS_FILE="$PROJECT_DIR/config.yaml.defaults"
+TOKENHUB_DIR="${HOME}/Src/tokenhub"
 
 # Colors for output
 RED='\033[0;31m'
@@ -26,9 +26,9 @@ BLUE='\033[0;34m'
 CYAN='\033[0;36m'
 NC='\033[0m' # No Color
 
-# Default values (from config.yaml.defaults)
-DEFAULT_HOSTS=("http://localhost")
-DEFAULT_MODELS=("nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16" "qwen2.5-coder:32b")
+# Default values
+DEFAULT_TOKENHUB_URL="http://localhost:8080"
+DEFAULT_TOKENHUB_API_KEY=""
 DEFAULT_TIMEOUT=600
 DEFAULT_MAX_TOKENS=4096
 DEFAULT_TEMPERATURE="0.1"
@@ -38,6 +38,13 @@ DEFAULT_BUILD_TIMEOUT=7200
 DEFAULT_PERSONA="personas/freebsd-angry-ai"
 DEFAULT_TARGET_DIRS=10
 
+# Wizard output variables
+TOKENHUB_URL=""
+TOKENHUB_API_KEY=""
+
+# ------------------------------------------------------------------------------
+# Utility helpers
+# ------------------------------------------------------------------------------
 
 expand_path() {
     local raw="$1"
@@ -47,7 +54,6 @@ p=sys.argv[1]
 print(os.path.expanduser(os.path.expandvars(p)))' "$raw"
         return 0
     fi
-    # Best-effort fallback: expand ~ only when it is the first character
     case "$raw" in
         ~/*)
             echo "${HOME}${raw#\~}"
@@ -58,7 +64,6 @@ print(os.path.expanduser(os.path.expandvars(p)))' "$raw"
     esac
 }
 
-
 validate_source_root_dir() {
     local raw="$1"
     local expanded
@@ -68,14 +73,6 @@ validate_source_root_dir() {
     fi
     return 1
 }
-
-# Arrays to hold user input
-declare -a HOSTS
-declare -a MODELS
-
-# ------------------------------------------------------------------------------
-# Helper functions
-# ------------------------------------------------------------------------------
 
 print_header() {
     echo ""
@@ -110,491 +107,361 @@ read_value() {
     local default="$2"
     local __resultvar="$3"
     local input
-    
-    # Use read with -e for readline and -i for default value
+
     read -e -p "$prompt [${default}]: " -i "$default" input
-    
-    # If empty, use default
+
     if [[ -z "$input" ]]; then
         input="$default"
     fi
-    
+
     eval "$__resultvar='$input'"
 }
 
-# Read multiple values until user types 'done'
-# Usage: read_array "prompt" default_array result_array
-read_array() {
-    local prompt="$1"
-    local -n defaults=$2
-    local -n result=$3
-    local input
-    local count=0
-    
-    result=()
-    
-    echo -e "${CYAN}$prompt${NC}"
-    echo -e "  Enter values one at a time. Type ${YELLOW}done${NC} when finished."
-    echo -e "  Press Enter with empty input to use the default value shown."
-    echo ""
-    
-    while true; do
-        count=$((count + 1))
-        local default=""
-        if [[ $count -le ${#defaults[@]} ]]; then
-            default="${defaults[$((count-1))]}"
-        fi
-        
-        if [[ -n "$default" ]]; then
-            read -e -p "  [$count] " -i "$default" input
-        else
-            read -e -p "  [$count] (or 'done'): " input
-        fi
-        
-        # Check for done
-        if [[ "${input,,}" == "done" ]] || [[ -z "$input" && $count -gt ${#defaults[@]} ]]; then
-            break
-        fi
-        
-        # Use default if empty
-        if [[ -z "$input" && -n "$default" ]]; then
-            input="$default"
-        fi
-        
-        if [[ -n "$input" ]]; then
-            result+=("$input")
-        fi
-    done
-    
-    if [[ ${#result[@]} -eq 0 ]]; then
-        # Use all defaults if nothing entered
-        result=("${defaults[@]}")
-    fi
-}
+# ------------------------------------------------------------------------------
+# TokenHub configuration wizard
+# ------------------------------------------------------------------------------
 
-# Validate a host URL by probing it
-# Returns 0 if valid, 1 if invalid
-validate_host() {
+# Probe a URL's /healthz endpoint.  Returns 0 if healthy.
+_probe_healthz() {
     local url="$1"
-    local base_url="${url%/}"
-    
-    echo -n "  Checking $url... "
-    
-    # Try vLLM endpoint first
-    if curl -s --connect-timeout 5 "$base_url:8000/v1/models" >/dev/null 2>&1; then
-        echo -e "${GREEN}vLLM detected on :8000${NC}"
-        return 0
-    fi
-    
-    # Try Ollama endpoint
-    if curl -s --connect-timeout 5 "$base_url:11434/api/tags" >/dev/null 2>&1; then
-        echo -e "${GREEN}Ollama detected on :11434${NC}"
-        return 0
-    fi
-    
-    # Try with explicit port if specified
-    if [[ "$url" =~ :[0-9]+$ ]]; then
-        if curl -s --connect-timeout 5 "$base_url/v1/models" >/dev/null 2>&1; then
-            echo -e "${GREEN}vLLM detected${NC}"
-            return 0
-        fi
-        if curl -s --connect-timeout 5 "$base_url/api/tags" >/dev/null 2>&1; then
-            echo -e "${GREEN}Ollama detected${NC}"
-            return 0
-        fi
-    fi
-    
-    echo -e "${RED}not responding${NC}"
-    return 1
+    curl -sf --max-time 5 "${url%/}/healthz" >/dev/null 2>&1
 }
 
-# Query available models from a host
-# Stores results in AVAILABLE_MODELS array
-query_host_models() {
+# Wait for /healthz to respond (used after starting a local instance)
+_wait_for_healthz() {
     local url="$1"
-    local base_url="${url%/}"
-    AVAILABLE_MODELS=()
-    
-    # Try vLLM first (port 8000)
-    local vllm_response
-    vllm_response=$(curl -s --connect-timeout 5 "$base_url:8000/v1/models" 2>/dev/null)
-    if [[ -n "$vllm_response" && "$vllm_response" == *'"data"'* ]]; then
-        # Parse JSON to extract model IDs. Prefer python to avoid pulling in permission IDs
-        # like "modelperm-..." and to handle any JSON escaping reliably.
-        local models
-        if command -v python3 >/dev/null 2>&1; then
-            models=$(printf '%s' "$vllm_response" | python3 -c 'import json,sys
-try:
-    payload=json.load(sys.stdin)
-    for item in payload.get("data", []) or []:
-        mid=item.get("id") if isinstance(item, dict) else None
-        if isinstance(mid, str) and mid:
-            print(mid)
-except Exception:
-    pass')
-        else
-            models=$(printf '%s' "$vllm_response" \
-                | grep -o '"id"[[:space:]]*:[[:space:]]*"[^"]*"' \
-                | sed 's/"id"[[:space:]]*:[[:space:]]*"//;s/"$//' \
-                | grep -v '^modelperm-')
-        fi
-        models=$(printf '%s' "$models" | tr -d '\r')
-        while IFS= read -r model; do
-            [[ -n "$model" ]] && AVAILABLE_MODELS+=("$model")
-        done <<< "$models"
-        return 0
-    fi
-    
-    # Try Ollama (port 11434)
-    local ollama_response
-    ollama_response=$(curl -s --connect-timeout 5 "$base_url:11434/api/tags" 2>/dev/null)
-    if [[ -n "$ollama_response" && "$ollama_response" == *'"models"'* ]]; then
-        # Parse JSON to extract model names
-        local models
-        models=$(echo "$ollama_response" | grep -o '"name"[[:space:]]*:[[:space:]]*"[^"]*"' | sed 's/"name"[[:space:]]*:[[:space:]]*"//;s/"$//')
-        while IFS= read -r model; do
-            [[ -n "$model" ]] && AVAILABLE_MODELS+=("$model")
-        done <<< "$models"
-        return 0
-    fi
-    
-    # Try with explicit port if specified
-    if [[ "$url" =~ :[0-9]+$ ]]; then
-        vllm_response=$(curl -s --connect-timeout 5 "$base_url/v1/models" 2>/dev/null)
-        if [[ -n "$vllm_response" && "$vllm_response" == *'"data"'* ]]; then
-            local models
-            if command -v python3 >/dev/null 2>&1; then
-                models=$(printf '%s' "$vllm_response" | python3 -c 'import json,sys
-try:
-    payload=json.load(sys.stdin)
-    for item in payload.get("data", []) or []:
-        mid=item.get("id") if isinstance(item, dict) else None
-        if isinstance(mid, str) and mid:
-            print(mid)
-except Exception:
-    pass')
-            else
-                models=$(printf '%s' "$vllm_response" \
-                    | grep -o '"id"[[:space:]]*:[[:space:]]*"[^"]*"' \
-                    | sed 's/"id"[[:space:]]*:[[:space:]]*"//;s/"$//' \
-                    | grep -v '^modelperm-')
-            fi
-            models=$(printf '%s' "$models" | tr -d '\r')
-            while IFS= read -r model; do
-                [[ -n "$model" ]] && AVAILABLE_MODELS+=("$model")
-            done <<< "$models"
+    local timeout="${2:-30}"
+    local i=0
+    echo -n "  Waiting for TokenHub to start"
+    while [[ $i -lt $timeout ]]; do
+        if _probe_healthz "$url"; then
+            echo -e " ${GREEN}ready${NC}"
             return 0
         fi
-        
-        ollama_response=$(curl -s --connect-timeout 5 "$base_url/api/tags" 2>/dev/null)
-        if [[ -n "$ollama_response" && "$ollama_response" == *'"models"'* ]]; then
-            local models
-            models=$(echo "$ollama_response" | grep -o '"name"[[:space:]]*:[[:space:]]*"[^"]*"' | sed 's/"name"[[:space:]]*:[[:space:]]*"//;s/"$//')
-            while IFS= read -r model; do
-                [[ -n "$model" ]] && AVAILABLE_MODELS+=("$model")
-            done <<< "$models"
-            return 0
-        fi
-    fi
-    
+        echo -n "."
+        sleep 1
+        (( i++ )) || true
+    done
+    echo ""
     return 1
 }
 
-# Check if a model exists on any of the configured hosts
-# Returns 0 if found, 1 if not found
-check_model_exists() {
-    local model="$1"
-    shift
-    local hosts=("$@")
+# Attempt to auto-create an API key via the admin endpoint.
+# Sets TOKENHUB_API_KEY on success; leaves it empty on failure.
+_create_api_key() {
+    local url="$1"
+    local admin_token="$2"
 
-    # Normalize user input (trim whitespace and strip CR)
-    model=$(printf '%s' "$model" | tr -d '\r' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
-    
-    for host in "${hosts[@]}"; do
-        query_host_models "$host"
-        for available in "${AVAILABLE_MODELS[@]}"; do
-            available=$(printf '%s' "$available" | tr -d '\r' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
-            # Exact match
-            if [[ "$available" == "$model" ]]; then
-                return 0
-            fi
-            # Case-insensitive match
-            if [[ "${available,,}" == "${model,,}" ]]; then
-                return 0
-            fi
-            # Partial match (model name without tag matches)
-            local model_base="${model%%:*}"
-            local avail_base="${available%%:*}"
-            if [[ "${avail_base,,}" == "${model_base,,}" ]]; then
-                return 0
-            fi
-        done
-    done
-    return 1
-}
+    echo -n "  Creating API key... "
+    local response
+    response=$(curl -sf --max-time 10 \
+        -X POST "${url%/}/admin/v1/apikeys" \
+        -H "Authorization: Bearer ${admin_token}" \
+        -H "Content-Type: application/json" \
+        -d '{"name":"ai-code-reviewer","scopes":"[\"chat\",\"plan\"]"}' \
+        2>/dev/null) || true
 
-# Show available models on all hosts
-show_available_models() {
-    local hosts=("$@")
-    local all_models=()
-    
-    echo ""
-    echo -e "${CYAN}Available models on your servers:${NC}"
-    
-    for host in "${hosts[@]}"; do
-        query_host_models "$host"
-        if [[ ${#AVAILABLE_MODELS[@]} -gt 0 ]]; then
-            echo -e "  ${BLUE}$host:${NC}"
-            for model in "${AVAILABLE_MODELS[@]}"; do
-                echo "    - $model"
-                # Add to all_models if not already there
-                local found=0
-                for m in "${all_models[@]}"; do
-                    [[ "$m" == "$model" ]] && found=1 && break
-                done
-                [[ $found -eq 0 ]] && all_models+=("$model")
-            done
-        else
-            echo -e "  ${BLUE}$host:${NC} ${YELLOW}(could not query models)${NC}"
-        fi
-    done
-    echo ""
-}
+    if [[ -z "$response" ]]; then
+        echo -e "${RED}failed (no response)${NC}"
+        return 1
+    fi
 
-# Read and validate models with interactive selection
-read_models() {
-    local -n result=$1
-    local -n defaults=$2
-    local -n hosts_ref=$3
-    local temp_models=()
-    local input
-    local count=0
-    
-    print_section "LLM Models"
-    echo "Select models to use (in priority order)."
-    echo "The first available model on each host will be used."
-    echo ""
-    
-    # Show what's available on the servers
-    show_available_models "${hosts_ref[@]}"
-    
-    echo -e "Enter models one at a time. Type ${YELLOW}done${NC} when finished."
-    echo -e "You can:"
-    echo -e "  - Press Enter to accept the suggested default"
-    echo -e "  - Type a model name (tab completion not available)"
-    echo -e "  - Type ${YELLOW}list${NC} to see available models again"
-    echo ""
-    
-    while true; do
-        count=$((count + 1))
-        local default=""
-        if [[ $count -le ${#defaults[@]} ]]; then
-            default="${defaults[$((count-1))]}"
-        fi
-        
-        local prompt_suffix=""
-        if [[ $count -gt ${#defaults[@]} ]]; then
-            prompt_suffix=" (or 'done')"
-        fi
-        
-        if [[ -n "$default" ]]; then
-            read -e -p "  Model [$count]$prompt_suffix: " -i "$default" input
-        else
-            read -e -p "  Model [$count]$prompt_suffix: " input
-        fi
-        
-        # Check for special commands
-        if [[ "${input,,}" == "done" ]] || [[ -z "$input" && $count -gt ${#defaults[@]} ]]; then
-            break
-        fi
-        
-        if [[ "${input,,}" == "list" ]]; then
-            show_available_models "${hosts_ref[@]}"
-            count=$((count - 1))  # Don't increment counter
-            continue
-        fi
-        
-        # Use default if empty
-        if [[ -z "$input" && -n "$default" ]]; then
-            input="$default"
-        fi
-        
-        if [[ -n "$input" ]]; then
-            # Validate model exists on at least one host
-            echo -n "    Checking if '$input' exists... "
-            if check_model_exists "$input" "${hosts_ref[@]}"; then
-                echo -e "${GREEN}found${NC}"
-                temp_models+=("$input")
-            else
-                echo -e "${YELLOW}not found${NC}"
-                echo ""
-                print_warning "Model '$input' was not found on any configured host."
-                echo ""
-                echo "This could mean:"
-                echo "  - The model name is misspelled"
-                echo "  - The model hasn't been loaded on the server yet"
-                echo "  - You're planning to load it later"
-                echo ""
-                show_available_models "${hosts_ref[@]}"
-                echo -e "Add '$input' anyway? (y/N/r to re-enter): "
-                read -r add_anyway
-                case "${add_anyway,,}" in
-                    y)
-                        temp_models+=("$input")
-                        print_warning "Added '$input' (not validated)"
-                        ;;
-                    r)
-                        count=$((count - 1))  # Re-prompt for this slot
-                        echo "Re-enter model name:"
-                        ;;
-                    *)
-                        count=$((count - 1))  # Re-prompt for this slot
-                        echo "Skipped. Enter a different model:"
-                        ;;
-                esac
-            fi
-        fi
-    done
-    
-    if [[ ${#temp_models[@]} -eq 0 ]]; then
-        # Use all defaults if nothing entered
-        echo ""
-        print_warning "No models entered. Using defaults."
-        result=("${defaults[@]}")
+    # Parse .key from JSON response using python3 or grep
+    local key=""
+    if command -v python3 >/dev/null 2>&1; then
+        key=$(printf '%s' "$response" | python3 -c \
+            'import json,sys; d=json.load(sys.stdin); print(d.get("key",""))' 2>/dev/null || true)
     else
-        result=("${temp_models[@]}")
+        key=$(printf '%s' "$response" | grep -o '"key"[[:space:]]*:[[:space:]]*"[^"]*"' \
+            | sed 's/"key"[[:space:]]*:[[:space:]]*"//;s/"$//' || true)
+    fi
+
+    if [[ -z "$key" ]]; then
+        echo -e "${YELLOW}could not parse key from response${NC}"
+        echo "  Response: $response"
+        return 1
+    fi
+
+    TOKENHUB_API_KEY="$key"
+    echo -e "${GREEN}created${NC}"
+    return 0
+}
+
+# Prompt for an admin token and attempt to create an API key.
+# On failure, leaves TOKENHUB_API_KEY empty with a helpful message.
+_prompt_for_api_key() {
+    local url="$1"
+    echo ""
+    echo -e "${CYAN}API Key Setup${NC}"
+    echo "An API key scoped to 'chat' is required for the reviewer."
+    echo ""
+    echo "If you know your TokenHub admin token, enter it now and the wizard"
+    echo "will create a key automatically.  Press Enter to skip and set the"
+    echo "api_key manually in config.yaml later."
+    echo ""
+    read -e -p "  Admin token (or Enter to skip): " admin_token
+
+    if [[ -z "$admin_token" ]]; then
+        print_warning "Skipped. Set 'api_key' in config.yaml before running 'make run'."
+        TOKENHUB_API_KEY=""
+        return 0
+    fi
+
+    if _create_api_key "$url" "$admin_token"; then
+        print_success "API key stored in config.yaml (store it securely — shown only once)"
+    else
+        print_warning "Key creation failed. Set 'api_key' in config.yaml manually."
+        echo "  You can create a key at ${url}/admin or via:"
+        echo "    curl -X POST ${url}/admin/v1/apikeys \\"
+        echo "         -H 'Authorization: Bearer <admin_token>' \\"
+        echo "         -d '{\"name\":\"ai-code-reviewer\",\"scopes\":\"[\\\"chat\\\",\\\"plan\\\"]\"}'"
+        TOKENHUB_API_KEY=""
     fi
 }
 
-# Read and validate hosts
-read_hosts() {
-    local -n result=$1
-    local -n defaults=$2
-    local temp_hosts=()
-    local valid_hosts=()
-    local input
-    local count=0
-    
-    while true; do
-        temp_hosts=()
-        valid_hosts=()
-        
-        print_section "LLM Server Hosts"
-        echo "Enter the URLs of your LLM servers (vLLM or Ollama)."
-        echo "Just the hostname is fine - ports are auto-detected."
-        echo -e "Example: ${CYAN}http://gpu-server${NC} or ${CYAN}http://192.168.1.100${NC}"
-        echo ""
-        echo -e "Enter hosts one at a time. Type ${YELLOW}done${NC} when finished."
-        echo ""
-        
-        count=0
-        while true; do
-            count=$((count + 1))
-            local default=""
-            if [[ $count -le ${#defaults[@]} ]]; then
-                default="${defaults[$((count-1))]}"
-            fi
-            
-            if [[ -n "$default" ]]; then
-                read -e -p "  Host [$count]: " -i "$default" input
-            else
-                read -e -p "  Host [$count] (or 'done'): " input
-            fi
-            
-            if [[ "${input,,}" == "done" ]] || [[ -z "$input" && $count -gt ${#defaults[@]} ]]; then
-                break
-            fi
-            
-            if [[ -z "$input" && -n "$default" ]]; then
-                input="$default"
-            fi
-            
-            if [[ -n "$input" ]]; then
-                temp_hosts+=("$input")
-            fi
-        done
-        
-        if [[ ${#temp_hosts[@]} -eq 0 ]]; then
-            temp_hosts=("${defaults[@]}")
-        fi
-        
-        # Validate each host
-        echo ""
-        echo "Validating hosts..."
-        for host in "${temp_hosts[@]}"; do
-            if validate_host "$host"; then
-                valid_hosts+=("$host")
-            else
-                print_warning "Host $host is not responding. Include anyway? (y/N)"
-                read -r include
-                if [[ "${include,,}" == "y" ]]; then
-                    valid_hosts+=("$host")
-                    print_warning "Added $host (not validated)"
-                fi
-            fi
-        done
-        
-        if [[ ${#valid_hosts[@]} -eq 0 ]]; then
-            print_error "No valid hosts! At least one host is required."
-            echo "Would you like to try again? (Y/n)"
-            read -r retry
-            if [[ "${retry,,}" == "n" ]]; then
-                echo "Aborting configuration."
-                exit 1
-            fi
-            continue
-        fi
-        
-        break
-    done
-    
-    result=("${valid_hosts[@]}")
+# Start a new tokenhub container from docker-compose.
+# Returns 0 on success (healthz responds within 30s).
+_start_container() {
+    local port="$1"
+    local compose_file="${TOKENHUB_DIR}/docker-compose.yaml"
+    [[ ! -f "$compose_file" ]] && compose_file="${TOKENHUB_DIR}/docker-compose.yml"
+
+    echo "  Building image and starting container (port ${port}:8080)..."
+    echo "  This may take a few minutes on the first run."
+    if ! docker compose -f "$compose_file" up -d --build tokenhub 2>&1 \
+            | grep -v "^#"; then
+        return 1
+    fi
+    _wait_for_healthz "http://localhost:${port}" 60
 }
 
-# Load existing config values if config.yaml exists
+# Build and run the tokenhub binary directly.
+# Returns 0 on success.
+_start_binary() {
+    local port="$1"
+    local bin="${TOKENHUB_DIR}/bin/tokenhub"
+
+    echo "  Building tokenhub binary (this may take a minute)..."
+    if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
+        make -C "${TOKENHUB_DIR}" build >/dev/null 2>&1 || {
+            print_error "make build failed"; return 1
+        }
+    else
+        local GO="${GO:-go}"
+        if ! command -v "$GO" >/dev/null 2>&1; then
+            print_error "Neither Docker nor Go is available. Cannot build binary."
+            return 1
+        fi
+        ( cd "${TOKENHUB_DIR}" && CGO_ENABLED=0 "$GO" build -trimpath \
+            -o bin/tokenhub ./cmd/tokenhub ) || {
+            print_error "go build failed"; return 1
+        }
+    fi
+
+    [[ -x "$bin" ]] || { print_error "Binary not found at $bin"; return 1; }
+
+    # Ensure the data directory exists
+    mkdir -p "${HOME}/.local/share/tokenhub"
+
+    echo "  Starting tokenhub binary on port ${port}..."
+    TOKENHUB_LISTEN_ADDR=":${port}" \
+    TOKENHUB_DB_DSN="file:${HOME}/.local/share/tokenhub/tokenhub.sqlite?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)" \
+        "$bin" >/tmp/tokenhub.log 2>&1 &
+    local pid=$!
+    echo "$pid" > /tmp/tokenhub.pid
+    echo "  TokenHub binary started (PID ${pid}, log: /tmp/tokenhub.log)"
+
+    _wait_for_healthz "http://localhost:${port}" 30
+}
+
+configure_tokenhub() {
+    print_section "TokenHub Connection"
+    echo "All LLM provider selection and model routing is handled by TokenHub."
+    echo "Choose how to connect to a TokenHub instance:"
+    echo ""
+
+    # ── Detect what options are available ─────────────────────────────────────
+    local platform
+    platform=$(uname -s)
+
+    local docker_ok=false
+    local existing_container_id=""
+    if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
+        docker_ok=true
+        existing_container_id=$(docker ps -a \
+            --filter "name=^tokenhub$" -q 2>/dev/null | head -1 || true)
+    fi
+
+    local binary_ok=false
+    if [[ ( "$platform" == "Linux" || "$platform" == "Darwin" ) && \
+          -f "${TOKENHUB_DIR}/Makefile" ]]; then
+        binary_ok=true
+    fi
+
+    local container_can_start=false
+    if [[ "$docker_ok" == true && \
+          ( "$platform" == "Linux" || "$platform" == "Darwin" ) && \
+          -z "$existing_container_id" ]]; then
+        container_can_start=true
+    fi
+
+    # ── Build menu ─────────────────────────────────────────────────────────────
+    local opts=()
+    opts+=("1" "Connect to an existing TokenHub server on the network (enter URL)")
+    if [[ -n "$existing_container_id" ]]; then
+        local cstatus
+        cstatus=$(docker inspect --format '{{.State.Status}}' \
+            "$existing_container_id" 2>/dev/null || echo "unknown")
+        opts+=("2" "Reuse already-existing tokenhub container (${cstatus})")
+    fi
+    if [[ "$container_can_start" == true ]]; then
+        opts+=("3" "Start a new tokenhub container (shareable with other apps on this machine)")
+    fi
+    if [[ "$binary_ok" == true ]]; then
+        opts+=("4" "Build and run tokenhub binary from ~/Src/tokenhub (this machine only)")
+    fi
+    opts+=("5" "Skip — I will configure TokenHub manually (config.yaml) before running")
+
+    if [[ "$platform" != "Linux" && "$platform" != "Darwin" ]]; then
+        echo -e "${YELLOW}Note:${NC} Container and binary options require Linux or macOS."
+        echo "  On ${platform}, only the remote server or skip options are available."
+        echo ""
+    fi
+
+    # ── Present menu ───────────────────────────────────────────────────────────
+    local i=0
+    while [[ $i -lt ${#opts[@]} ]]; do
+        echo -e "  ${CYAN}${opts[$i]}${NC}) ${opts[$((i+1))]}"
+        (( i+=2 ))
+    done
+    echo ""
+
+    local choice
+    while true; do
+        read -e -p "Choose an option [1]: " choice
+        [[ -z "$choice" ]] && choice="1"
+
+        # Validate that choice is in the menu
+        local valid=false
+        local j=0
+        while [[ $j -lt ${#opts[@]} ]]; do
+            [[ "${opts[$j]}" == "$choice" ]] && valid=true && break
+            (( j+=2 ))
+        done
+        [[ "$valid" == true ]] && break
+        echo "  Invalid choice. Options: $(echo "${opts[@]}" | tr ' ' '\n' | awk 'NR%2==1' | tr '\n' ' ')"
+    done
+
+    # ── Handle choice ──────────────────────────────────────────────────────────
+    case "$choice" in
+
+        1)  # Remote server
+            echo ""
+            while true; do
+                read -e -p "  TokenHub URL: " -i "$DEFAULT_TOKENHUB_URL" url
+                url="${url%/}"
+                [[ -z "$url" ]] && { print_error "URL cannot be empty."; continue; }
+                echo -n "  Verifying ${url}/healthz... "
+                if _probe_healthz "$url"; then
+                    echo -e "${GREEN}reachable${NC}"
+                    TOKENHUB_URL="$url"
+                    break
+                else
+                    echo -e "${RED}not reachable${NC}"
+                    echo ""
+                    echo -e "  Cannot connect to ${url}/healthz."
+                    read -e -p "  Try a different URL? (Y/n): " retry
+                    [[ "${retry,,}" == "n" ]] && break
+                fi
+            done
+            ;;
+
+        2)  # Existing container
+            echo ""
+            local cport
+            cport=$(docker port "$existing_container_id" 8080/tcp 2>/dev/null \
+                | grep -o ':[0-9]*' | head -1 | tr -d ':' || true)
+            [[ -z "$cport" ]] && cport="8080"
+            local cstatus2
+            cstatus2=$(docker inspect --format '{{.State.Status}}' \
+                "$existing_container_id" 2>/dev/null || echo "unknown")
+
+            if [[ "$cstatus2" != "running" ]]; then
+                echo "  Container is ${cstatus2}. Starting it..."
+                docker start "$existing_container_id" >/dev/null
+            fi
+
+            if _wait_for_healthz "http://localhost:${cport}" 30; then
+                TOKENHUB_URL="http://localhost:${cport}"
+                print_success "Using existing container on port ${cport}"
+            else
+                print_error "Container did not become healthy. Try option 1 (remote) or option 3/4."
+                TOKENHUB_URL=""
+            fi
+            ;;
+
+        3)  # New container
+            echo ""
+            read -e -p "  Host port to expose (default: 8080): " -i "8080" cport
+            [[ -z "$cport" ]] && cport="8080"
+
+            if _start_container "$cport"; then
+                TOKENHUB_URL="http://localhost:${cport}"
+                print_success "TokenHub container running on port ${cport}"
+                echo "  Other apps on this machine can use the same instance."
+            else
+                print_error "Failed to start container. Check Docker logs or try option 4."
+                TOKENHUB_URL=""
+            fi
+            ;;
+
+        4)  # Binary
+            echo ""
+            read -e -p "  Port to listen on (default: 8080): " -i "8080" bport
+            [[ -z "$bport" ]] && bport="8080"
+
+            if _start_binary "$bport"; then
+                TOKENHUB_URL="http://localhost:${bport}"
+                print_success "TokenHub binary running on port ${bport}"
+            else
+                print_error "Failed to start binary. Check ~/Src/tokenhub or try option 1."
+                TOKENHUB_URL=""
+            fi
+            ;;
+
+        5)  # Skip
+            echo ""
+            print_warning "TokenHub not configured. Set 'tokenhub.url' and 'tokenhub.api_key'"
+            echo "  in config.yaml before running 'make run'."
+            TOKENHUB_URL="$DEFAULT_TOKENHUB_URL"
+            TOKENHUB_API_KEY=""
+            return 0
+            ;;
+    esac
+
+    # ── API key creation (if we have a reachable URL) ──────────────────────────
+    if [[ -n "$TOKENHUB_URL" ]]; then
+        _prompt_for_api_key "$TOKENHUB_URL"
+    fi
+}
+
+# ------------------------------------------------------------------------------
+# Load existing config
+# ------------------------------------------------------------------------------
+
 load_existing_config() {
     if [[ -f "$CONFIG_FILE" ]]; then
         echo "Loading existing configuration from config.yaml..."
-        
-        # Extract hosts (YAML array parsing with grep/sed)
-        local in_hosts=0
-        local in_models=0
-        DEFAULT_HOSTS=()
-        DEFAULT_MODELS=()
-        
+
         while IFS= read -r line; do
-            # Detect section starts
-            if [[ "$line" =~ ^[[:space:]]*hosts: ]]; then
-                in_hosts=1
-                in_models=0
-                continue
-            elif [[ "$line" =~ ^[[:space:]]*models: ]]; then
-                in_hosts=0
-                in_models=1
-                continue
-            elif [[ "$line" =~ ^[[:space:]]*[a-z_]+: && ! "$line" =~ ^[[:space:]]*- ]]; then
-                in_hosts=0
-                in_models=0
+            if [[ "$line" =~ ^[[:space:]]*url:[[:space:]]*[\"\']?([^\"\'#]+)[\"\']? ]]; then
+                val="${BASH_REMATCH[1]}"; val="${val%[[:space:]]}";
+                [[ "$val" =~ ^http ]] && DEFAULT_TOKENHUB_URL="$val"
             fi
-            
-            # Extract array items
-            if [[ $in_hosts -eq 1 && "$line" =~ ^[[:space:]]*-[[:space:]]*[\"\']?([^\"\']+)[\"\']?$ ]]; then
-                local value="${BASH_REMATCH[1]}"
-                value="${value%\"}"
-                value="${value#\"}"
-                DEFAULT_HOSTS+=("$value")
+            if [[ "$line" =~ ^[[:space:]]*api_key:[[:space:]]*[\"\']?([^\"\'#]+)[\"\']? ]]; then
+                val="${BASH_REMATCH[1]}"; val="${val%[[:space:]]}";
+                [[ -n "$val" ]] && DEFAULT_TOKENHUB_API_KEY="$val"
             fi
-            
-            if [[ $in_models -eq 1 && "$line" =~ ^[[:space:]]*-[[:space:]]*[\"\']?([^\"\'#]+) ]]; then
-                local value="${BASH_REMATCH[1]}"
-                value="${value%\"}"
-                value="${value#\"}"
-                value="${value%%[[:space:]]*#*}"  # Remove trailing comments
-                value="${value%[[:space:]]}"      # Trim trailing space
-                [[ -n "$value" ]] && DEFAULT_MODELS+=("$value")
-            fi
-            
-            # Extract scalar values
             if [[ "$line" =~ ^[[:space:]]*timeout:[[:space:]]*([0-9]+) ]]; then
                 DEFAULT_TIMEOUT="${BASH_REMATCH[1]}"
             fi
@@ -608,9 +475,8 @@ load_existing_config() {
                 DEFAULT_SOURCE_ROOT="${BASH_REMATCH[1]}"
             fi
             if [[ "$line" =~ ^[[:space:]]*build_command:[[:space:]]*[\"\']?(.+)[\"\']?$ ]]; then
-                DEFAULT_BUILD_COMMAND="${BASH_REMATCH[1]}"
-                DEFAULT_BUILD_COMMAND="${DEFAULT_BUILD_COMMAND%\"}"
-                DEFAULT_BUILD_COMMAND="${DEFAULT_BUILD_COMMAND#\"}"
+                val="${BASH_REMATCH[1]}"; val="${val%\"}"; val="${val#\"}";
+                DEFAULT_BUILD_COMMAND="$val"
             fi
             if [[ "$line" =~ ^[[:space:]]*build_timeout:[[:space:]]*([0-9]+) ]]; then
                 DEFAULT_BUILD_TIMEOUT="${BASH_REMATCH[1]}"
@@ -622,106 +488,95 @@ load_existing_config() {
                 DEFAULT_TARGET_DIRS="${BASH_REMATCH[1]}"
             fi
         done < "$CONFIG_FILE"
-        
+
         print_success "Loaded existing configuration"
     fi
 }
 
-# Display final configuration for review
+# ------------------------------------------------------------------------------
+# Display and generate config
+# ------------------------------------------------------------------------------
+
 display_config() {
     print_section "Configuration Summary"
-    
-    echo -e "${CYAN}LLM Servers:${NC}"
-    for host in "${HOSTS[@]}"; do
-        echo "  - $host"
-    done
+
+    echo -e "${CYAN}TokenHub:${NC}"
+    echo "  URL:     ${TOKENHUB_URL:-<not set>}"
+    if [[ -n "$TOKENHUB_API_KEY" ]]; then
+        echo "  API Key: ${TOKENHUB_API_KEY:0:12}... (truncated)"
+    else
+        echo "  API Key: <not set — configure before running>"
+    fi
     echo ""
-    
-    echo -e "${CYAN}Models (in priority order):${NC}"
-    for model in "${MODELS[@]}"; do
-        echo "  - $model"
-    done
-    echo ""
-    
-    echo -e "${CYAN}LLM Settings:${NC}"
-    echo "  Timeout: ${TIMEOUT}s"
-    echo "  Max Tokens: $MAX_TOKENS"
+
+    echo -e "${CYAN}LLM Request Settings:${NC}"
+    echo "  Timeout:     ${TIMEOUT}s"
+    echo "  Max Tokens:  $MAX_TOKENS"
     echo "  Temperature: $TEMPERATURE"
     echo ""
-    
+
     echo -e "${CYAN}Source Configuration:${NC}"
-    echo "  Root: $SOURCE_ROOT"
+    echo "  Root:          $SOURCE_ROOT"
     echo "  Build Command: $BUILD_COMMAND"
     echo "  Build Timeout: ${BUILD_TIMEOUT}s"
     echo ""
-    
+
     echo -e "${CYAN}Review Settings:${NC}"
-    echo "  Persona: $PERSONA"
+    echo "  Persona:           $PERSONA"
     echo "  Target Directories: $TARGET_DIRS"
     echo ""
 }
 
-# Validate YAML syntax using Python
 validate_yaml() {
     local file="$1"
     if command -v python3 >/dev/null 2>&1; then
-        if python3 -c "import yaml; yaml.safe_load(open('$file'))" 2>/dev/null; then
-            return 0
-        else
-            return 1
-        fi
+        python3 -c "import yaml; yaml.safe_load(open('$file'))" 2>/dev/null
+        return $?
     fi
-    # If no python3, skip validation
     return 0
 }
 
-# Generate the config.yaml file
 generate_config() {
-    local hosts_yaml=""
-    for host in "${HOSTS[@]}"; do
-        hosts_yaml+="    - \"$host\"\n"
-    done
-    
-    local models_yaml=""
-    for model in "${MODELS[@]}"; do
-        models_yaml+="    - \"$model\"\n"
-    done
-    
-    # Backup existing config.yaml if it exists
+    # Backup existing config
     if [[ -f "$CONFIG_FILE" ]]; then
         cp "$CONFIG_FILE" "${CONFIG_FILE}.bak"
         print_success "Backed up existing config to ${CONFIG_FILE}.bak"
     fi
-    
+
+    # Escape single quotes in values that go into YAML strings
+    local esc_url="${TOKENHUB_URL//\'/\'\'}"
+    local esc_key="${TOKENHUB_API_KEY//\'/\'\'}"
+    local esc_src="${SOURCE_ROOT//\'/\'\'}"
+    local esc_build="${BUILD_COMMAND//\'/\'\'}"
+    local esc_persona="${PERSONA//\'/\'\'}"
+
     cat > "$CONFIG_FILE" << EOF
 # AI Code Reviewer Configuration
 # Generated by config-init.sh on $(date)
 #
 # For full documentation, see config.yaml.defaults
 
+tokenhub:
+  url: "${esc_url}"
+  api_key: "${esc_key}"
+  # model_hint: ""  # Optional: leave blank to let tokenhub choose
+
 llm:
-  hosts:
-$(echo -e "$hosts_yaml" | sed 's/^/  /')
-  models:
-$(echo -e "$models_yaml" | sed 's/^/  /')
-  timeout: $TIMEOUT
-  max_tokens: $MAX_TOKENS
-  temperature: $TEMPERATURE
-  
-  batching:
-    max_parallel_requests: 0  # Dynamic (auto-detect from server)
+  timeout: ${TIMEOUT}
+  max_tokens: ${MAX_TOKENS}
+  temperature: ${TEMPERATURE}
 
 source:
-  root: "$SOURCE_ROOT"
-  build_command: "$BUILD_COMMAND"
-  build_timeout: $BUILD_TIMEOUT
+  root: "${esc_src}"
+  build_command: "${esc_build}"
+  build_timeout: ${BUILD_TIMEOUT}
   pre_build_command: "sudo -v"
 
 review:
-  persona: "$PERSONA"
-  target_directories: $TARGET_DIRS
+  persona: "${esc_persona}"
+  target_directories: ${TARGET_DIRS}
   max_iterations_per_directory: 200
-  max_parallel_files: 0  # Dynamic (auto-detect from server)
+  max_parallel_files: 0
   chunk_threshold: 400
   chunk_size: 250
   skip_patterns:
@@ -746,17 +601,16 @@ EOF
 
 main() {
     print_header
-    
-    # Check if we should load existing config
+
     if [[ -f "$CONFIG_FILE" ]]; then
         echo "Found existing config.yaml"
         load_existing_config
     else
         echo "No config.yaml found. Creating new configuration."
     fi
-    
+
     while true; do
-        # Step 1: Source Configuration (validate directory early to fail fast)
+        # Step 1: Source Configuration
         print_section "Source Configuration"
         read_value "Source root directory" "$DEFAULT_SOURCE_ROOT" SOURCE_ROOT
         while true; do
@@ -764,12 +618,7 @@ main() {
                 break
             fi
             echo ""
-            print_warning "Source root is not a directory (after ~/$VARS expansion): $SOURCE_ROOT"
-            echo ""
-            echo "This could mean:"
-            echo "  - The path is wrong"
-            echo "  - The directory doesn't exist on this machine"
-            echo "  - You need to mount/clone the repo first"
+            print_warning "Not a directory (after path expansion): $SOURCE_ROOT"
             echo ""
             echo -n "Use this value anyway? (y/N/r to re-enter): "
             read -r add_anyway
@@ -777,9 +626,6 @@ main() {
                 y)
                     print_warning "Keeping source root (not validated): $SOURCE_ROOT"
                     break
-                    ;;
-                r)
-                    read_value "Source root directory" "$DEFAULT_SOURCE_ROOT" SOURCE_ROOT
                     ;;
                 *)
                     read_value "Source root directory" "$DEFAULT_SOURCE_ROOT" SOURCE_ROOT
@@ -790,39 +636,37 @@ main() {
         read_value "Build command" "$DEFAULT_BUILD_COMMAND" BUILD_COMMAND
         read_value "Build timeout (seconds)" "$DEFAULT_BUILD_TIMEOUT" BUILD_TIMEOUT
 
-        # Step 2: Hosts
-        read_hosts HOSTS DEFAULT_HOSTS
+        # Step 2: TokenHub connection
+        configure_tokenhub
 
-        # Step 3: Models (with validation against hosts)
-        read_models MODELS DEFAULT_MODELS HOSTS
-
-        # Step 4: LLM Settings
-        print_section "LLM Settings"
+        # Step 3: LLM request settings
+        print_section "LLM Request Settings"
+        echo "These control how requests are formed, not which provider handles them."
+        echo ""
         read_value "Request timeout (seconds)" "$DEFAULT_TIMEOUT" TIMEOUT
         read_value "Max tokens per response" "$DEFAULT_MAX_TOKENS" MAX_TOKENS
         read_value "Temperature (0.0-1.0)" "$DEFAULT_TEMPERATURE" TEMPERATURE
-        
-        # Step 5: Review Settings
+
+        # Step 4: Review Settings
         print_section "Review Settings"
         read_value "Persona directory" "$DEFAULT_PERSONA" PERSONA
         read_value "Target directories per session" "$DEFAULT_TARGET_DIRS" TARGET_DIRS
-        
-        # Step 6: Review and confirm
+
+        # Step 5: Review and confirm
         display_config
-        
+
         echo -e "${CYAN}What would you like to do?${NC}"
         echo "  [S]ave configuration"
         echo "  [E]dit again"
         echo "  [A]bort"
         echo ""
         read -p "Choice [S/e/a]: " choice
-        
+
         case "${choice,,}" in
             s|"")
                 generate_config
                 echo ""
-                
-                # Validate the generated YAML
+
                 echo -n "Validating YAML syntax... "
                 if validate_yaml "$CONFIG_FILE"; then
                     echo -e "${GREEN}OK${NC}"
@@ -834,20 +678,23 @@ main() {
                     echo -e "${RED}FAILED${NC}"
                     print_error "Generated config.yaml has invalid YAML syntax!"
                     if [[ -f "${CONFIG_FILE}.bak" ]]; then
-                        echo ""
                         echo "Restoring from backup..."
                         mv "${CONFIG_FILE}.bak" "$CONFIG_FILE"
                         print_warning "Restored previous config.yaml from backup"
-                        echo ""
-                        echo "This is likely a bug in config-init.sh. Please report it."
                     fi
                     exit 1
                 fi
-                
+
                 echo ""
                 echo "Next steps:"
-                echo "  1. Run 'make validate' to test the LLM connection"
-                echo "  2. Run 'make run' to start reviewing"
+                if [[ -z "$TOKENHUB_API_KEY" ]]; then
+                    echo "  1. Set 'api_key' in config.yaml (run 'make config-init' again with admin token)"
+                else
+                    echo "  1. API key is configured"
+                fi
+                echo "  2. Run 'make tokenhub-status' to confirm TokenHub is reachable"
+                echo "  3. Run 'make validate' to test the full connection"
+                echo "  4. Run 'make run' to start reviewing"
                 echo ""
                 exit 0
                 ;;
@@ -866,5 +713,4 @@ main() {
     done
 }
 
-# Run main
 main "$@"

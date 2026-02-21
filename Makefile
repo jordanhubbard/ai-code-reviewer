@@ -2,12 +2,13 @@
 #
 # AI-powered code reviewer for ANY codebase (C, C++, Rust, Go, Python, etc.)
 # Validates changes with YOUR build command (configurable in config.yaml).
+# Routes all LLM requests through a TokenHub instance.
 #
 # Quick start:
-#   make deps        # Install Python dependencies (PyYAML)
-#   vim config.yaml  # Set your Ollama server URL
-#   make validate    # Test connection to Ollama
-#   make run         # Start the review loop
+#   make config-init      # Interactive setup (configures TokenHub + source)
+#   make tokenhub-start   # Start TokenHub locally if needed
+#   make validate         # Test connection to TokenHub
+#   make run              # Start the review loop
 
 # Python interpreter (FreeBSD typically has python3)
 PYTHON?=	python3
@@ -17,11 +18,20 @@ VENV_PIP=	$(VENV_PY) -m pip
 PIP_FLAGS?=
 FREEBSD_PYYAML_PKG?=py311-pyyaml
 
+# TokenHub settings (override with env vars or on the make command line)
+TOKENHUB_DIR    ?= $(HOME)/Src/tokenhub
+TOKENHUB_BIN    ?= $(TOKENHUB_DIR)/bin/tokenhub
+TOKENHUB_URL    ?= http://localhost:8080
+TOKENHUB_PORT   ?= 8080
+
 # No directory variables needed - make runs from Makefile location
 # All paths are relative to the Makefile
 
 # Phony targets
-.PHONY: all venv deps check-deps config-init config-update validate run run-verbose run-forever test test-all validate-persona validate-build show-metrics release clean clean-all help
+.PHONY: all venv deps check-deps config-init config-update \
+        tokenhub-build tokenhub-start tokenhub-stop tokenhub-status check-tokenhub \
+        validate run run-verbose run-forever test test-all \
+        validate-persona validate-build show-metrics release clean clean-all help
 
 # Default target
 all: help
@@ -105,12 +115,13 @@ check-deps:
 	@# Check for config.yaml
 	@if [ ! -f config.yaml ]; then \
 		echo ""; \
-		echo "⚠  config.yaml not found - will be created on first run"; \
-		echo "   You'll need to edit it to set:"; \
-		echo "   - Ollama server URL"; \
-		echo "   - Source tree path"; \
-		echo "   - Build command"; \
+		echo "⚠  config.yaml not found - run 'make config-init' to create it"; \
 	fi
+	@echo ""
+	@echo "  [INFO] TokenHub URL: $(TOKENHUB_URL)  (override with TOKENHUB_URL=<url>)"
+	@echo "  [INFO] Run 'make tokenhub-status' to verify connectivity"
+	@echo "  [INFO] Run 'make tokenhub-start'  to start a local TokenHub instance"
+	@echo ""
 	@echo "All required dependencies satisfied!"
 
 # Install Python dependencies (just PyYAML - no torch/GPU stuff)
@@ -135,24 +146,57 @@ config-update: check-deps
 	fi
 
 #
+# TokenHub targets
+#
+
+# Build the TokenHub binary from source (no-op if already built)
+tokenhub-build:
+	@echo "Building TokenHub binary..."
+	$(MAKE) -C $(TOKENHUB_DIR) build
+
+# Smart start: reuse existing container > start new container > run binary
+tokenhub-start:
+	@bash scripts/tokenhub-start.sh $(TOKENHUB_PORT) $(TOKENHUB_URL)
+
+# Stop any locally started TokenHub (container or binary)
+tokenhub-stop:
+	@docker stop tokenhub 2>/dev/null && docker rm tokenhub 2>/dev/null || true
+	@pkill -f "$(TOKENHUB_BIN)" 2>/dev/null || true
+	@echo "TokenHub stopped"
+
+# Report whether TokenHub is reachable
+tokenhub-status:
+	@curl -sf --max-time 5 $(TOKENHUB_URL)/healthz \
+	    && echo "TokenHub OK at $(TOKENHUB_URL)" \
+	    || echo "TokenHub not reachable at $(TOKENHUB_URL)"
+
+# Internal prerequisite: fail fast if TokenHub is not reachable
+check-tokenhub:
+	@curl -sf --max-time 5 $(TOKENHUB_URL)/healthz >/dev/null 2>&1 || ( \
+	    echo "ERROR: TokenHub not reachable at $(TOKENHUB_URL)" ; \
+	    echo "  Run 'make tokenhub-start' to start a local instance" ; \
+	    echo "  or set TOKENHUB_URL=<url> to point at a remote instance" ; \
+	    exit 1 )
+
+#
 # Validation targets
 #
 
-# Validate Ollama connection and model availability
-validate: check-deps
-	@echo "Validating Ollama connection..."
+# Validate TokenHub connection
+validate: check-deps check-tokenhub
+	@echo "Validating TokenHub connection..."
 	$(VENV_PY) reviewer.py --config config.yaml --validate-only
 
 # Run component self-tests (syntax check only, no server connection)
 test: check-deps
 	@echo "=== Syntax Check: All Python Modules ==="
-	@$(VENV_PY) -m py_compile ollama_client.py vllm_client.py llm_client.py \
+	@$(VENV_PY) -m py_compile tokenhub_client.py \
 		async_http_client.py build_executor.py reviewer.py chunker.py index_generator.py \
 		ops_logger.py scripts/config_update.py
 	@echo "✓ All modules pass syntax check"
 	@echo ""
-	@echo "=== Import Check: LLM Client ==="
-	@$(VENV_PY) -c "from llm_client import create_client_from_config, MultiHostClient, LLMError; print('✓ llm_client imports OK')"
+	@echo "=== Import Check: TokenHub Client ==="
+	@$(VENV_PY) -c "from tokenhub_client import create_client_from_config, TokenHubClient, LLMError; print('✓ tokenhub_client imports OK')"
 	@echo ""
 	@echo "=== Import Check: Build Executor ==="
 	@$(VENV_PY) -c "from build_executor import create_executor_from_config; print('✓ build_executor imports OK')"
@@ -160,16 +204,13 @@ test: check-deps
 	@echo "=== Unit Tests ==="
 	@$(VENV_PY) -m unittest discover -s tests -p "test_*.py"
 	@echo ""
-	@echo "=== Config Migration Test ==="
-	@$(VENV_PY) -c "import yaml; from scripts.config_update import migrate_ollama_to_llm; cfg = {'ollama': {'url': 'http://test:11434', 'model': 'test-model'}}; migrate_ollama_to_llm(cfg); assert 'llm' in cfg and 'ollama' not in cfg, 'Migration failed'; assert 'nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16' in cfg['llm']['models'], 'Missing preferred model'; print('✓ Config migration OK')"
-	@echo ""
 	@echo "All tests passed!"
 
-# Run full tests including server connectivity (requires running Ollama/vLLM)
-test-all: test
+# Run full tests including TokenHub connectivity (requires running instance)
+test-all: test check-tokenhub
 	@echo ""
-	@echo "=== Testing Ollama Client (requires server) ==="
-	$(VENV_PY) ollama_client.py
+	@echo "=== Testing TokenHub Client (requires running instance) ==="
+	$(VENV_PY) -c "from tokenhub_client import create_client_from_config; import yaml; cfg = yaml.safe_load(open('config.yaml')); c = create_client_from_config(cfg); print('✓ TokenHub connected; models: ' + str(c.list_models()))"
 	@echo ""
 	@echo "=== Testing Build Executor ==="
 	$(VENV_PY) build_executor.py
@@ -180,16 +221,16 @@ test-all: test
 # Run targets
 #
 
-# Run the review loop (checks dependencies first, auto-creates config if missing)
-run:
+# Run the review loop (checks dependencies and TokenHub first)
+run: check-tokenhub
 	@$(PYTHON) scripts/make_run.py
 
 # Run with verbose logging
-run-verbose: check-deps
+run-verbose: check-deps check-tokenhub
 	$(VENV_PY) reviewer.py --config config.yaml -v
 
 # Run in forever mode (review all directories until complete)
-run-forever: check-deps
+run-forever: check-tokenhub
 	@$(PYTHON) scripts/make_run_forever.py
 
 #
@@ -335,23 +376,32 @@ help:
 	@echo "==================================="
 	@echo ""
 	@echo "AI-powered code reviewer with build validation for ANY codebase."
-	@echo "Uses remote Ollama server for AI, validates with YOUR build command."
+	@echo "Routes all LLM requests through TokenHub (provider-agnostic routing)."
 	@echo ""
 	@echo "Setup:"
-	@echo "  make check-deps     Check/install Python3, pip, and PyYAML (auto-runs on 'make run')"
-	@echo "  make config-init    Interactive setup wizard (creates/updates config.yaml)"
-	@echo "  make config-update  Merge new defaults into existing config.yaml"
-	@echo "  make validate       Test connection to LLM server"
+	@echo "  make check-deps       Check/install Python3, pip, and PyYAML"
+	@echo "  make config-init      Interactive setup wizard (TokenHub + source config)"
+	@echo "  make config-update    Merge new defaults into existing config.yaml"
+	@echo ""
+	@echo "TokenHub:"
+	@echo "  make tokenhub-start   Start TokenHub locally (container > binary)"
+	@echo "  make tokenhub-stop    Stop the local TokenHub instance"
+	@echo "  make tokenhub-status  Check if TokenHub is reachable"
+	@echo "  make tokenhub-build   Build the TokenHub binary from ~/Src/tokenhub"
+	@echo ""
+	@echo "  Override URL:  make run TOKENHUB_URL=http://my-server:8080"
+	@echo "  Override port: make tokenhub-start TOKENHUB_PORT=9090"
 	@echo ""
 	@echo "Usage:"
-	@echo "  make run            Start the review loop (auto-checks dependencies)"
-	@echo "  make run-verbose    Run with verbose logging"
-	@echo "  make run-forever    Run until all directories are reviewed"
-	@echo "  make test           Run syntax and import tests (no server required)"
-	@echo "  make test-all       Run all tests including server connectivity"
+	@echo "  make validate      Test connection to TokenHub"
+	@echo "  make run           Start the review loop"
+	@echo "  make run-verbose   Run with verbose logging"
+	@echo "  make run-forever   Run until all directories are reviewed"
+	@echo "  make test          Run syntax and import tests (no server required)"
+	@echo "  make test-all      Run all tests including TokenHub connectivity"
 	@echo ""
 	@echo "Validation:"
-	@echo "  make validate-persona  Validate persona files (AI_START_HERE.md, etc.)"
+	@echo "  make validate-persona  Validate persona files"
 	@echo "  make validate-build    Validate build command matches project type"
 	@echo "  make show-metrics      Show persona effectiveness metrics"
 	@echo ""
@@ -360,19 +410,20 @@ help:
 	@echo ""
 	@echo "Cleanup:"
 	@echo "  make clean        Remove logs and Python cache"
-	@echo "  make clean-all    Also remove any leftover model weights"
+	@echo "  make clean-all    Also remove any leftover files"
 	@echo ""
 	@echo "Options:"
 	@echo "  CONFIG=path       Use alternate config file (default: config.yaml)"
 	@echo "  PYTHON=path       Use alternate Python interpreter (default: python3)"
+	@echo "  TOKENHUB_URL=url  TokenHub base URL (default: http://localhost:8080)"
+	@echo "  TOKENHUB_PORT=n   Local port for tokenhub-start (default: 8080)"
 	@echo ""
 	@echo "Requirements:"
 	@echo "  - Python 3.8+ with PyYAML (auto-installed by check-deps)"
-	@echo "  - Network access to vLLM or Ollama server"
+	@echo "  - A running TokenHub instance (make tokenhub-start)"
 	@echo "  - Source code at source.root (default: ../)"
 	@echo "  - Working build command (configured in config.yaml)"
 	@echo ""
-	@echo "First time? Just run 'make run' - it will guide you through setup!"
+	@echo "First time? Run 'make config-init' to set everything up!"
 	@echo ""
 	@echo "Works with: C/C++ (make/cmake), Rust, Go, Python, Node.js, etc."
-	@echo "Just configure your build command in config.yaml!"

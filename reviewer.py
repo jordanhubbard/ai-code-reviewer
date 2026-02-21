@@ -5711,7 +5711,7 @@ Examples:
         print("=" * 70 + "\n")
         logger.warning("Beads CLI not found - continuing without beads integration")
     
-    from llm_client import create_client_from_config, LLMError, LLMConnectionError
+    from tokenhub_client import create_client_from_config, LLMError, LLMConnectionError
     from build_executor import create_executor_from_config
 
     # Validate source.root early (directory existence) to fail fast before LLM probing.

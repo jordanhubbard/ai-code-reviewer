@@ -5,135 +5,59 @@
 # Works with ANY codebase - just configure your build command
 
 # =============================================================================
-# LLM Server Configuration
+# TokenHub Configuration
 # =============================================================================
-# Supports both vLLM and Ollama backends with automatic detection.
-# Multiple hosts enable round-robin load balancing for higher throughput.
-# Multiple models provide fallback if preferred model isn't available.
+# All LLM provider selection, model routing, cost budgeting, and latency
+# management is delegated to a TokenHub instance.  This application no longer
+# needs to know which providers or models are available — TokenHub handles it.
 #
-# KEY FEATURES:
-#   - vLLM preferred over Ollama (faster inference)
-#   - Automatic port expansion (just specify hostname)
-#   - Model fallback chain (tries models in order until one works)
-#   - Round-robin across multiple GPU servers
+# Quick start:
+#   make config-init          # interactive wizard (sets url + api_key)
+#   make tokenhub-start       # start TokenHub locally if needed
+#   make validate             # verify the connection before reviewing
+#
+tokenhub:
+  # -------------------------------------------------------------------------
+  # URL of your TokenHub instance
+  # -------------------------------------------------------------------------
+  # Override with env var: TOKENHUB_URL=http://my-server:8080
+  #
+  url: "http://localhost:8080"
+
+  # -------------------------------------------------------------------------
+  # API key (Bearer token)
+  # -------------------------------------------------------------------------
+  # Created automatically by 'make config-init' via the admin API.
+  # Override with env var: TOKENHUB_API_KEY=tokenhub_<hex>
+  #
+  api_key: ""
+
+  # -------------------------------------------------------------------------
+  # Optional model routing hint
+  # -------------------------------------------------------------------------
+  # When set, this value is forwarded as the "model" field in the
+  # /v1/chat/completions request.  TokenHub uses it as a preference hint
+  # but may route to a different model based on availability and policy.
+  # Leave blank to let TokenHub choose freely (recommended).
+  #
+  # model_hint: ""
+
+# =============================================================================
+# LLM Request Parameters
+# =============================================================================
+# These control how requests are formed — not which provider handles them.
+# Provider selection is entirely managed by TokenHub.
 #
 llm:
-  # -------------------------------------------------------------------------
-  # HOSTS: LLM server URLs
-  # -------------------------------------------------------------------------
-  # Just list your server hostnames - ports are handled automatically!
-  #
-  # AUTOMATIC PORT EXPANSION:
-  #   "http://gpu-server" expands to try:
-  #     1. http://gpu-server:8000  (vLLM default)
-  #     2. http://gpu-server:11434 (Ollama default)
-  #
-  # The system probes each expanded URL and uses the first working backend.
-  # vLLM is preferred over Ollama when both are available.
-  #
-  # EXAMPLES:
-  #   Single server (most common):
-  #     hosts:
-  #       - "http://gpu-server"
-  #
-  #   Multiple servers for load balancing:
-  #     hosts:
-  #       - "http://gpu-server-1"
-  #       - "http://gpu-server-2"
-  #       - "http://gpu-server-3"
-  #
-  #   Explicit ports (if using non-standard ports):
-  #     hosts:
-  #       - "http://gpu-server:9000"  # Custom vLLM port
-  #       - "http://gpu-server:12345" # Custom Ollama port
-  #
-  hosts:
-    - "http://localhost"
-  
-  # -------------------------------------------------------------------------
-  # MODELS: Ordered list of models to try (first available wins)
-  # -------------------------------------------------------------------------
-  # Each host will use the first model from this list that it has loaded.
-  # This allows graceful fallback when preferred models aren't available.
-  #
-  # Model names depend on your backend:
-  #   - vLLM: Usually the HuggingFace model path or custom name
-  #   - Ollama: Use "ollama list" to see available models (name:tag format)
-  #
-  # TIP: Run the tool with --validate-only to see which models are available
-  #      on each host before configuring this list.
-  #
-  models:
-    - "nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-FP8"   # Preferred for vLLM (HuggingFace name)
-    - "qwen2.5-coder:32b"                           # Good Ollama fallback
-    # - "qwen2.5-coder:14b"                         # Smaller fallback
-    # - "codellama:34b"                             # Alternative
-  
   # Request timeout in seconds
   # Increase if you get timeouts with large files or slow models
   timeout: 600
-  
+
   # Maximum tokens to generate per response
   max_tokens: 4096
-  
+
   # Temperature for generation (0.0 = deterministic, 1.0 = creative)
   temperature: 0.1
-
-  # Interval in seconds to print /api/ps stats while a model request is running.
-  # Set to 0 to disable live GPU utilization updates (recommended - too verbose).
-  # Note: Only works with Ollama backend
-  ps_monitor_interval: 0
-
-  # Batching configuration (primarily for Ollama backend)
-  # Set num_batch to a fixed value to force a specific micro-batch size.
-  # Leave num_batch null and enable adaptive to let Angry AI scale batch size
-  # based on prompt length.
-  batching:
-    num_batch: null          # e.g., 8 to force a fixed size
-    adaptive: true           # auto-scale num_batch when fixed value not set
-    min_chars: 8000          # prompt length where batching starts ramping up
-    max_chars: 60000         # prompt length that maps to max_num_batch
-    min_num_batch: 2         # minimum batch size when adaptive is enabled
-    max_num_batch: 12        # maximum batch size Angry AI will request
-    # Maximum parallel LLM requests across all hosts
-    # Set to 0 for DYNAMIC mode: automatically determined from server metrics
-    #   (queries vLLM /metrics or Ollama /api/ps for KV cache usage)
-    # Set to 1+ for STATIC mode: fixed cap on concurrent requests
-    #   (will warn if this differs significantly from server-recommended value)
-    max_parallel_requests: 0
-
-  # Additional per-request options forwarded directly to the LLM API.
-  # For Ollama: num_ctx, num_gpu, repeat penalties, etc.
-  # For vLLM: top_p, presence_penalty, frequency_penalty, etc.
-  # Example:
-  # options:
-  #   num_ctx: 8192
-  #   top_p: 0.95
-  options: {}
-
-  # Health check configuration for automatic host recovery
-  # When a host fails, it's moved to an unhealthy pool and the system
-  # continues with remaining hosts. Background health checks attempt
-  # to reconnect using exponential backoff (30s, 60s, 120s, 240s, 300s max).
-  # Once recovered, the host is automatically restored to the active pool.
-  health_check:
-    enabled: true        # Enable automatic recovery (set false for legacy behavior)
-    interval: 30         # Base retry interval in seconds
-    max_interval: 300    # Maximum retry interval (5 minutes)
-    timeout: 10          # Timeout for health check probes
-
-# =============================================================================
-# Legacy Ollama Configuration (DEPRECATED - use 'llm' section above)
-# =============================================================================
-# This section is kept for backward compatibility. If both 'llm' and 'ollama'
-# sections exist, 'llm' takes precedence. New configurations should use 'llm'.
-#
-# ollama:
-#   url: "http://localhost:11434"
-#   model: "qwen2.5-coder:32b"
-#   timeout: 600
-#   max_tokens: 4096
-#   temperature: 0.1
 
 # Source tree configuration
 source:
