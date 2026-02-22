@@ -33,12 +33,14 @@ tokenhub:
   api_key: ""
 
   # -------------------------------------------------------------------------
-  # Optional model routing hint
+  # Model routing hint
   # -------------------------------------------------------------------------
-  # When set, this value is forwarded as the "model" field in the
-  # /v1/chat/completions request.  TokenHub uses it as a preference hint
-  # but may route to a different model based on availability and policy.
-  # Leave blank to let TokenHub choose freely (recommended).
+  # Sent as the "model" field in /v1/chat/completions requests (required by
+  # TokenHub).  TokenHub uses it as a preference hint but may fall back to a
+  # different model based on availability and routing policy.
+  #
+  # When blank, the client auto-discovers available models at startup and
+  # selects the first one.  Set this explicitly to prefer a specific model.
   #
   # model_hint: ""
 

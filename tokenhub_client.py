@@ -17,10 +17,14 @@ Configuration (config.yaml):
     tokenhub:
       url: "http://localhost:8090"
       api_key: ""          # Bearer token; or set TOKENHUB_API_KEY env var
-      # model_hint: ""     # Optional routing hint; blank = let tokenhub decide
+      # model_hint: ""     # Optional routing hint; auto-discovered if blank
       timeout: 600         # Request timeout in seconds
       max_tokens: 4096     # Maximum tokens per response
       temperature: 0.1     # Generation temperature
+
+Note: TokenHub's /v1/chat/completions endpoint requires the "model" field.
+When model_hint is blank, the client auto-discovers available models at
+startup and selects the first one.
 
 Environment variable overrides (take priority over config file):
     TOKENHUB_URL      – override tokenhub.url
@@ -260,11 +264,10 @@ class TokenHubClient:
         """
         payload: Dict[str, Any] = {
             "messages": messages,
+            "model": self._model_hint,
             "max_tokens": max_tokens if max_tokens is not None else self._max_tokens,
             "temperature": temperature if temperature is not None else self._temperature,
         }
-        if self._model_hint:
-            payload["model"] = self._model_hint
 
         logger.debug(
             f"TokenHub chat: {len(messages)} messages, "
@@ -426,5 +429,20 @@ def create_client_from_config(config_dict: Dict[str, Any]) -> TokenHubClient:
             f"  • Run 'make config-init' to reconfigure"
         )
 
-    logger.info(f"TokenHub connection verified: {url}")
+    # TokenHub's /v1/chat/completions requires a model field.
+    # If no model_hint is configured, auto-discover available models.
+    if not client._model_hint:
+        models = client.list_models()
+        real_models = [m for m in models if m != "(tokenhub-routed)"]
+        if real_models:
+            client._model_hint = real_models[0]
+            logger.info(f"Auto-selected model: {client._model_hint}")
+        else:
+            raise LLMConnectionError(
+                f"TokenHub at {url} has no models available.\n"
+                f"  • Add providers and models via the admin UI: {url}/admin\n"
+                f"  • Or set tokenhub.model_hint in config.yaml"
+            )
+
+    logger.info(f"TokenHub connection verified: {url} (model={client._model_hint})")
     return client
