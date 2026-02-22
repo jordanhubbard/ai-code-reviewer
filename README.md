@@ -59,6 +59,37 @@ The launcher tries, in order:
 3. **New Docker container** — Linux/macOS with Docker available
 4. **Native binary** — built from `~/Src/tokenhub` (works on FreeBSD and any platform without Docker)
 
+#### Getting a TokenHub API key
+
+This project authenticates to TokenHub with a scoped API key (`tokenhub_...`).
+You need one before running `make config-init` or `make run`.
+
+**Option A — Admin UI (easiest):**
+1. Open `http://<tokenhub-url>/admin` in your browser
+2. Log in with the `TOKENHUB_ADMIN_TOKEN` that was set when TokenHub was deployed
+3. Navigate to **API Keys** → **Create**
+4. Name it `ai-code-reviewer`, set scope to `chat`, click **Create**
+5. Copy the displayed key — it is shown only once
+
+**Option B — Interactive wizard:**
+```bash
+make config-init   # prompts for the admin token, creates the key automatically
+```
+
+**Option C — Command line:**
+```bash
+tokenhubctl apikey create '{"name":"ai-code-reviewer","scopes":"[\"chat\"]"}'
+# or via curl:
+curl -sX POST http://<url>/admin/v1/apikeys \
+     -H "Authorization: Bearer <TOKENHUB_ADMIN_TOKEN>" \
+     -H "Content-Type: application/json" \
+     -d '{"name":"ai-code-reviewer","scopes":"[\"chat\",\"plan\"]"}'
+```
+
+The `TOKENHUB_ADMIN_TOKEN` is the bootstrap credential set in TokenHub's own
+deployment environment (its `.env` or docker-compose env). Ask your TokenHub
+administrator if you do not have it.
+
 ### 3. Configure
 
 ```bash
@@ -75,7 +106,7 @@ vim config.yaml
 ```yaml
 tokenhub:
   url: "http://localhost:8090"   # URL of your TokenHub instance
-  api_key: "tokenhub_..."        # Bearer token (create via make config-init)
+  api_key: "tokenhub_..."        # Bearer token — see "Getting a TokenHub API key" above
 
 source:
   root: ".."

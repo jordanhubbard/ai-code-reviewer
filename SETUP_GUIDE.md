@@ -13,9 +13,35 @@ This will check for:
 - pip ✓
 - PyYAML ✓
 
-### 2. Create config.yaml
+### 2. Get a TokenHub API key
 
-**Recommended (interactive):**
+This project authenticates to TokenHub with a scoped API key (`tokenhub_...`).
+Obtain one before configuring:
+
+**Via the Admin UI (easiest):**
+1. Open `http://<tokenhub-url>/admin` in your browser
+2. Log in with the `TOKENHUB_ADMIN_TOKEN` set when TokenHub was deployed
+3. Go to **API Keys** → **Create**
+4. Name: `ai-code-reviewer`, Scope: `chat` → **Create**
+5. Copy the key — it is shown only once
+
+**Via the interactive wizard** (handles key creation automatically):
+```bash
+make config-init   # prompts for the admin token, creates the key, writes config.yaml
+```
+
+**Via CLI:**
+```bash
+tokenhubctl apikey create '{"name":"ai-code-reviewer","scopes":"[\"chat\"]"}'
+```
+
+The `TOKENHUB_ADMIN_TOKEN` is the bootstrap credential configured in TokenHub's
+own deployment (its `.env` or docker-compose environment). Ask your TokenHub
+administrator if you don't have it.
+
+### 3. Create config.yaml
+
+**Recommended (interactive — also handles API key creation):**
 ```bash
 make config-init
 ```
@@ -26,13 +52,13 @@ cp config.yaml.defaults config.yaml
 vim config.yaml
 ```
 
-### 3. Edit config.yaml
+### 4. Edit config.yaml
 
 ```yaml
 # 1. TokenHub connection (REQUIRED)
 tokenhub:
   url: "http://localhost:8090"   # URL of your TokenHub instance
-  api_key: "tokenhub_..."        # Bearer token (create via make config-init)
+  api_key: "tokenhub_..."        # Bearer token — obtained in step 2 above
 
 # 2. Source tree (REQUIRED)
 source:
@@ -45,13 +71,13 @@ review:
   persona: "personas/freebsd-angry-ai"  # See available agents below
 ```
 
-### 4. Validate Connection
+### 5. Validate Connection
 
 ```bash
-python3 reviewer.py --validate-only
+make validate
 ```
 
-### 5. Run
+### 6. Run
 
 ```bash
 make run
