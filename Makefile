@@ -22,6 +22,8 @@ FREEBSD_PYYAML_PKG?=py311-pyyaml
 TOKENHUB_DIR    ?= $(HOME)/Src/tokenhub
 TOKENHUB_BIN    ?= $(TOKENHUB_DIR)/bin/tokenhub
 TOKENHUB_PORT   ?= 8090
+TOKENHUB_API_KEY?=
+.export TOKENHUB_API_KEY
 
 # TOKENHUB_URL priority: env var / make command-line > config.yaml > localhost:8090
 # Reading config.yaml here prevents the hardcoded default from masking a
@@ -439,8 +441,9 @@ help:
 	@echo "Options:"
 	@echo "  CONFIG=path       Use alternate config file (default: config.yaml)"
 	@echo "  PYTHON=path       Use alternate Python interpreter (default: python3)"
-	@echo "  TOKENHUB_URL=url  TokenHub base URL (default: http://localhost:8090)"
-	@echo "  TOKENHUB_PORT=n   Local port for tokenhub-start (default: 8090)"
+	@echo "  TOKENHUB_URL=url      TokenHub base URL (default: http://localhost:8090)"
+	@echo "  TOKENHUB_PORT=n       Local port for tokenhub-start (default: 8090)"
+	@echo "  TOKENHUB_API_KEY=key  Bearer token for TokenHub auth (or set tokenhub.api_key in config.yaml)"
 	@echo ""
 	@echo "Requirements:"
 	@echo "  - Python 3.8+ with PyYAML (auto-installed by check-deps)"
