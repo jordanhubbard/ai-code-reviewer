@@ -187,20 +187,50 @@ _create_api_key() {
     return 0
 }
 
-# Prompt for an admin token and attempt to create an API key.
-# On failure, leaves TOKENHUB_API_KEY empty with a helpful message.
+# Prompt for an API key — three paths:
+#   A) paste a key already created in the admin UI
+#   B) supply admin token so the wizard creates one automatically
+#   C) skip
+# Sets TOKENHUB_API_KEY on success; leaves it empty otherwise.
 _prompt_for_api_key() {
     local url="$1"
     echo ""
     echo -e "${CYAN}API Key Setup${NC}"
-    echo "An API key scoped to 'chat' is required for the reviewer."
+    echo "An API key (tokenhub_...) is required to authenticate requests to TokenHub."
     echo ""
-    echo "If you know your TokenHub admin token, enter it now and the wizard"
-    echo "will create a key automatically.  Press Enter to skip and set the"
-    echo "api_key manually in config.yaml later."
+    echo -e "${CYAN}How to get a key — choose whichever is easiest:${NC}"
     echo ""
-    read -e -p "  Admin token (or Enter to skip): " admin_token
+    echo "  A) Admin UI (browser):"
+    echo "       1. Open ${url%/}/admin in your browser"
+    echo "       2. Enter your TOKENHUB_ADMIN_TOKEN in the 'Admin Token' field at the top"
+    echo "       3. Click API Keys → + Create Key"
+    echo "          Name: ai-code-reviewer   Scope: chat   → Create"
+    echo "       4. Copy the key (shown only once) and paste it at the prompt below"
+    echo ""
+    echo "  B) Auto-create via admin token:"
+    echo "       Press Enter at the first prompt, then enter your admin token"
+    echo "       and the wizard will call the API to create the key for you."
+    echo ""
+    echo "  C) Skip for now:"
+    echo "       Press Enter at both prompts.  Set 'api_key' in config.yaml later."
+    echo ""
 
+    # ── Path A: paste an existing key ─────────────────────────────────────────
+    read -e -p "  Paste API key from admin UI (or Enter to use admin token / skip): " existing_key
+    existing_key="${existing_key// /}"   # strip accidental spaces
+    if [[ -n "$existing_key" ]]; then
+        if [[ "$existing_key" =~ ^tokenhub_ ]]; then
+            TOKENHUB_API_KEY="$existing_key"
+            print_success "API key accepted"
+        else
+            print_warning "Key doesn't start with 'tokenhub_' — using anyway."
+            TOKENHUB_API_KEY="$existing_key"
+        fi
+        return 0
+    fi
+
+    # ── Path B: auto-create via admin token ───────────────────────────────────
+    read -e -p "  Admin token to auto-create key (or Enter to skip): " admin_token
     if [[ -z "$admin_token" ]]; then
         print_warning "Skipped. Set 'api_key' in config.yaml before running 'make run'."
         TOKENHUB_API_KEY=""
@@ -208,13 +238,11 @@ _prompt_for_api_key() {
     fi
 
     if _create_api_key "$url" "$admin_token"; then
-        print_success "API key stored in config.yaml (store it securely — shown only once)"
+        print_success "API key created and stored in config.yaml (shown only once — save it securely)"
     else
-        print_warning "Key creation failed. Set 'api_key' in config.yaml manually."
-        echo "  You can create a key at ${url}/admin or via:"
-        echo "    curl -X POST ${url}/admin/v1/apikeys \\"
-        echo "         -H 'Authorization: Bearer <admin_token>' \\"
-        echo "         -d '{\"name\":\"ai-code-reviewer\",\"scopes\":\"[\\\"chat\\\",\\\"plan\\\"]\"}'"
+        print_warning "Auto-create failed. Use the admin UI to create a key manually:"
+        echo "  ${url%/}/admin  →  API Keys  →  + Create Key"
+        echo "  Then set 'api_key' in config.yaml or re-run 'make config-init'."
         TOKENHUB_API_KEY=""
     fi
 }

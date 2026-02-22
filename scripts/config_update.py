@@ -117,5 +117,42 @@ def main():
     else:
         print("config.yaml is up to date (no changes)")
 
+    # ── Check for missing API key ──────────────────────────────────────────────
+    th_cfg = config.get('tokenhub') or {}
+    api_key = str(th_cfg.get('api_key') or '').strip()
+    if not api_key:
+        th_url = str(th_cfg.get('url') or 'http://localhost:8090').rstrip('/')
+        print()
+        print("=" * 60)
+        print("WARNING: tokenhub.api_key is not set in config.yaml")
+        print("=" * 60)
+        print("An API key is required to authenticate requests to TokenHub.")
+        print()
+        print("How to get a key:")
+        print(f"  1. Open {th_url}/admin in your browser")
+        print(f"     Enter your TOKENHUB_ADMIN_TOKEN in the 'Admin Token' field at the top")
+        print(f"  2. Go to API Keys → + Create Key")
+        print(f"     Name: ai-code-reviewer   Scope: chat  → Create")
+        print(f"  3. Copy the displayed key (shown only once) and paste it below")
+        print()
+        print("  Or run:  make config-init   (interactive wizard handles key creation)")
+        print()
+
+        import sys
+        if sys.stdin.isatty():
+            try:
+                new_key = input("Paste API key here (or Enter to skip): ").strip()
+            except (EOFError, KeyboardInterrupt):
+                new_key = ""
+            if new_key:
+                config.setdefault('tokenhub', {})['api_key'] = new_key
+                with open(config_path, 'w') as f:
+                    yaml.dump(config, f, default_flow_style=False, sort_keys=False)
+                print("  API key saved to config.yaml")
+            else:
+                print("  Skipped. Set 'api_key' in config.yaml before running 'make run'.")
+        else:
+            print("  (Non-interactive mode — set 'api_key' in config.yaml manually)")
+
 if __name__ == "__main__":
     main()
