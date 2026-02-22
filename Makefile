@@ -23,7 +23,6 @@ TOKENHUB_DIR    ?= $(HOME)/Src/tokenhub
 TOKENHUB_BIN    ?= $(TOKENHUB_DIR)/bin/tokenhub
 TOKENHUB_PORT   ?= 8090
 TOKENHUB_API_KEY?=
-.export TOKENHUB_API_KEY
 
 # TOKENHUB_URL priority: env var / make command-line > config.yaml > localhost:8090
 # Reading config.yaml here prevents the hardcoded default from masking a
@@ -199,7 +198,7 @@ check-tokenhub:
 # Validate TokenHub connection
 validate: check-deps check-tokenhub
 	@echo "Validating TokenHub connection..."
-	$(VENV_PY) reviewer.py --config config.yaml --validate-only
+	TOKENHUB_API_KEY="$(TOKENHUB_API_KEY)" $(VENV_PY) reviewer.py --config config.yaml --validate-only
 
 # Run component self-tests (syntax check only, no server connection)
 test: check-deps
@@ -224,7 +223,7 @@ test: check-deps
 test-all: test check-tokenhub
 	@echo ""
 	@echo "=== Testing TokenHub Client (requires running instance) ==="
-	$(VENV_PY) -c "from tokenhub_client import create_client_from_config; import yaml; cfg = yaml.safe_load(open('config.yaml')); c = create_client_from_config(cfg); print('✓ TokenHub connected; models: ' + str(c.list_models()))"
+	TOKENHUB_API_KEY="$(TOKENHUB_API_KEY)" $(VENV_PY) -c "from tokenhub_client import create_client_from_config; import yaml; cfg = yaml.safe_load(open('config.yaml')); c = create_client_from_config(cfg); print('✓ TokenHub connected; models: ' + str(c.list_models()))"
 	@echo ""
 	@echo "=== Testing Build Executor ==="
 	$(VENV_PY) build_executor.py
@@ -237,15 +236,15 @@ test-all: test check-tokenhub
 
 # Run the review loop (checks dependencies and TokenHub first)
 run: check-tokenhub
-	@$(PYTHON) scripts/make_run.py
+	@TOKENHUB_API_KEY="$(TOKENHUB_API_KEY)" $(PYTHON) scripts/make_run.py
 
 # Run with verbose logging
 run-verbose: check-deps check-tokenhub
-	$(VENV_PY) reviewer.py --config config.yaml -v
+	TOKENHUB_API_KEY="$(TOKENHUB_API_KEY)" $(VENV_PY) reviewer.py --config config.yaml -v
 
 # Run in forever mode (review all directories until complete)
 run-forever: check-tokenhub
-	@$(PYTHON) scripts/make_run_forever.py
+	@TOKENHUB_API_KEY="$(TOKENHUB_API_KEY)" $(PYTHON) scripts/make_run_forever.py
 
 #
 # Validation targets
