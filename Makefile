@@ -285,7 +285,7 @@ show-metrics:
 # Release target
 #
 
-# Create a new release: runs tests, tags, and pushes release via gh CLI
+# Create a new release: runs tests, updates CHANGELOG, tags, and pushes release via gh CLI
 # Bumps minor version (0.1 -> 0.2 -> 0.3, etc.) or starts at 0.1 if no previous release
 release: test
 	@echo ""
@@ -349,6 +349,18 @@ release: test
 		echo "ERROR: GitHub release v$$NEW_VERSION already exists."; \
 		echo "  To fix: gh release delete v$$NEW_VERSION --yes"; \
 		exit 1; \
+	fi; \
+	TODAY=$$(date +%Y-%m-%d); \
+	if grep -q '## \[Unreleased\]' CHANGELOG.md; then \
+		echo "Updating CHANGELOG.md: [Unreleased] -> [$$NEW_VERSION] - $$TODAY"; \
+		awk -v ver="$$NEW_VERSION" -v date="$$TODAY" \
+			'/^## \[Unreleased\]/{print; print ""; print "## [" ver "] - " date; next} {print}' \
+			CHANGELOG.md > CHANGELOG.md.tmp && mv CHANGELOG.md.tmp CHANGELOG.md; \
+		git add CHANGELOG.md; \
+		git commit -m "Update CHANGELOG for v$$NEW_VERSION"; \
+		git push; \
+	else \
+		echo "WARNING: No [Unreleased] section found in CHANGELOG.md, skipping update"; \
 	fi; \
 	echo "Creating tag v$$NEW_VERSION..."; \
 	if ! git tag -a "v$$NEW_VERSION" -m "Release v$$NEW_VERSION"; then \
@@ -430,7 +442,7 @@ help:
 	@echo "  make show-metrics      Show persona effectiveness metrics"
 	@echo ""
 	@echo "Release:"
-	@echo "  make release      Run tests, tag, and create GitHub release (bumps version)"
+	@echo "  make release      Run tests, update CHANGELOG, tag, and create GitHub release"
 	@echo ""
 	@echo "Cleanup:"
 	@echo "  make clean        Remove logs and Python cache"
