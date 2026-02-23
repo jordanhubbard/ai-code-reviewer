@@ -1,8 +1,7 @@
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from unittest.mock import patch
-import subprocess
+from unittest.mock import patch, MagicMock
 
 
 import reviewer
@@ -49,17 +48,18 @@ class ForeverModeHaltTests(unittest.TestCase):
             (root / "bin" / "foo").mkdir(parents=True)
             (root / "bin" / "foo" / "main.c").write_text("int main(void){return 0;}\n")
 
-            # Ensure source_root is a git repo so GitHelper calls in run() don't fail.
-            subprocess.run(["git", "init"], cwd=str(root), check=True, capture_output=True, text=True)
-            subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=str(root), check=True, capture_output=True, text=True)
-            subprocess.run(["git", "config", "user.name", "Test"], cwd=str(root), check=True, capture_output=True, text=True)
-            subprocess.run(["git", "add", "."], cwd=str(root), check=True, capture_output=True, text=True)
-            subprocess.run(["git", "commit", "-m", "init"], cwd=str(root), check=True, capture_output=True, text=True)
-
             llm = _FakeLLM()
             ops = OpsLogger(log_dir=root / ".ops-log", session_id="test-session")
 
-            with patch.object(reviewer.ReviewLoop, "_init_beads_manager", return_value=None):
+            # Mock GitHelper so the test doesn't need a real git repo
+            # (subprocess git calls are blocked in sandboxed environments).
+            mock_git = MagicMock(spec=reviewer.GitHelper)
+            mock_git.repo_root = root
+            mock_git._run.return_value = (0, "")
+            mock_git.show_status.return_value = ""
+
+            with patch.object(reviewer.ReviewLoop, "_init_beads_manager", return_value=None), \
+                 patch("reviewer.GitHelper", return_value=mock_git):
                 loop = reviewer.ReviewLoop(
                     ollama_client=llm,
                     build_executor=_FakeBuildExecutor(),
