@@ -6,10 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
-## [0.30] - 2026-02-22
+## [0.31] - 2026-02-22
 
 ### Added
 - **Build environment variables** - New `build_environment` config section under `source:` allows declarative environment variable configuration for build commands (e.g., `CC`, `CFLAGS`, `MAKEFLAGS`, `DESTDIR`). Variables are merged with the current environment and applied to both `build_command` and `pre_build_command` subprocesses. When empty (default), inherits the parent environment unmodified.
+
+### Fixed
+- Fix `test_forever_mode_halt` to work in sandboxed environments by mocking GitHelper instead of running subprocess git commands in temp directories
 
 ## [0.22] - 2026-02-10
 
