@@ -231,6 +231,7 @@ class BuildConfig:
     build_command: str
     build_timeout: int = 7200  # 2 hours default
     pre_build_command: str = "sudo -v"  # Run once at startup to cache sudo creds
+    build_environment: Dict[str, str] = field(default_factory=dict)
 
 
 class BuildExecutor:
@@ -258,7 +259,15 @@ class BuildExecutor:
         # Run pre-build command (typically sudo -v to cache credentials)
         if run_pre_build and config.pre_build_command:
             self._run_pre_build()
-    
+
+    def _build_env(self) -> Optional[Dict[str, str]]:
+        """Return environment for build subprocess, or None to inherit."""
+        if not self.config.build_environment:
+            return None  # Inherit parent environment (current behavior)
+        env = os.environ.copy()
+        env.update(self.config.build_environment)
+        return env
+
     def _run_pre_build(self) -> None:
         """
         Run the pre-build command to set up the environment.
@@ -277,6 +286,7 @@ class BuildExecutor:
                 cmd,
                 shell=True,
                 cwd=str(self.config.source_root),
+                env=self._build_env(),
                 timeout=60,
             )
             if result.returncode != 0:
@@ -315,6 +325,7 @@ class BuildExecutor:
                 command,
                 shell=True,
                 cwd=str(self.config.source_root),
+                env=self._build_env(),
                 capture_output=capture_output,
                 text=True,
                 timeout=self.config.build_timeout,
@@ -488,12 +499,17 @@ def create_executor_from_config(config_dict: Dict[str, Any], run_pre_build: bool
         source_root = Path(__file__).parent / source_root
     source_root = source_root.resolve()
     
+    # Ensure build_environment values are all strings
+    raw_env = build_config.get('build_environment', {})
+    build_environment = {str(k): str(v) for k, v in raw_env.items()} if raw_env else {}
+
     config = BuildConfig(
         source_root=source_root,
-        build_command=build_config.get('build_command', 
+        build_command=build_config.get('build_command',
             "sudo make -j$(sysctl -n hw.ncpu) buildworld"),
         build_timeout=build_config.get('build_timeout', 7200),
         pre_build_command=build_config.get('pre_build_command', 'sudo -v'),
+        build_environment=build_environment,
     )
     
     return BuildExecutor(config, run_pre_build=run_pre_build)

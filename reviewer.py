@@ -3391,6 +3391,7 @@ Output ONLY the lesson entry, nothing else."""
                 command,
                 shell=True,
                 cwd=str(source_root),
+                env=self.builder._build_env(),
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,

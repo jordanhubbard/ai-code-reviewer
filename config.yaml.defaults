@@ -97,6 +97,24 @@ source:
   # Set to empty string to disable
   pre_build_command: "sudo -v"
 
+  # Optional: environment variables for build commands
+  # These are merged with the current environment (overriding existing values).
+  # Applied to both build_command and pre_build_command subprocesses.
+  # Useful for setting compiler flags, cross-compilation targets, etc.
+  #
+  # Examples:
+  #   build_environment:
+  #     CC: "clang"
+  #     CXX: "clang++"
+  #     CFLAGS: "-O2 -pipe -Wall"
+  #     MAKEFLAGS: "-j4"
+  #     DESTDIR: "/tmp/buildroot"
+  #     WITHOUT_CLEAN: "yes"
+  #     CROSS_TOOLCHAIN: "aarch64-gcc12"
+  #
+  # Default: empty (inherit current environment unmodified)
+  build_environment: {}
+
 # Review configuration
 review:
   # File chunking settings (prevents timeouts on large files)
