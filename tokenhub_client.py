@@ -363,6 +363,36 @@ class TokenHubClient:
         except Exception:
             return False
 
+    def _probe_auth(self, timeout: float = 10.0) -> None:
+        """
+        Verify the api_key is accepted by TokenHub.
+
+        Calls GET /v1/models (requires auth) and raises LLMConnectionError
+        immediately on 401 so misconfigured keys fail at startup rather than
+        on the first real request.  Skipped when no api_key is configured.
+        """
+        if not self._api_key:
+            return
+        url = f"{self._url}/v1/models"
+        try:
+            if _HTTP_CLIENT_AVAILABLE:
+                self._http.request(
+                    url=url, method="GET", headers=self._auth_headers(), timeout=timeout
+                )
+            else:
+                self._http.json_request(
+                    url=url, method="GET", headers=self._auth_headers(), timeout=timeout
+                )
+        except HTTPError as e:
+            if e.code == 401:
+                raise LLMConnectionError(
+                    f"TokenHub rejected the api_key (401 Unauthorized).\n"
+                    f"  • Key must be in tokenhub_<hex> format\n"
+                    f"  • Create or rotate a key via the admin UI: {self._url}/admin\n"
+                    f"  • Update tokenhub.api_key in config.yaml or TOKENHUB_API_KEY env var"
+                ) from e
+            # Non-auth errors (404, 5xx) are tolerated; the service is reachable
+
 
 # ---------------------------------------------------------------------------
 # Factory function (same name and signature as old llm_client.create_client_from_config)
@@ -428,6 +458,9 @@ def create_client_from_config(config_dict: Dict[str, Any]) -> TokenHubClient:
             f"  • Wrong URL?  Update tokenhub.url in config.yaml\n"
             f"  • Run 'make config-init' to reconfigure"
         )
+
+    # Verify the API key is accepted before going any further.
+    client._probe_auth()
 
     # TokenHub's /v1/chat/completions requires a model field.
     # If no model_hint is configured, auto-discover available models.
