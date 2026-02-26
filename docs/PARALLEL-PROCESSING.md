@@ -126,7 +126,7 @@ Directory Review Workflow:
 - Exception propagation to main thread
 
 ### LLM Request Concurrency
-- TokenHub's concurrency limits and backend capacity still apply
+- The LLM provider's concurrency limits and backend capacity still apply
 - Threads may block waiting for LLM capacity
 - Adaptive batching helps optimize per-request throughput
 
@@ -161,7 +161,7 @@ review:
 ```
 - **Use for**: Large codebases, many small independent files
 - **Risk**: Moderate, more threads = more complexity
-- **Requires**: TokenHub backend with sufficient GPU/RAM
+- **Requires**: LLM backend with sufficient GPU/RAM
 
 ### Extreme (Not Recommended)
 ```yaml
@@ -214,7 +214,7 @@ The ops_logger.py tracks parallel execution:
 - [ ] Adaptive parallelism (auto-adjust workers based on file size)
 - [ ] Per-file-type parallelism (different strategies for .c vs .h vs .1)
 - [ ] Parallel chunking (review large file's functions concurrently)
-- [ ] Distributed reviewing (multiple TokenHub instances)
+- [ ] Distributed reviewing (multiple LLM provider instances)
 
 ### Under Consideration
 - [ ] Speculative editing (predict likely edits, apply optimistically)
@@ -228,8 +228,8 @@ The ops_logger.py tracks parallel execution:
 - **Action**: Check logs for specific error, may need sequential mode
 
 ### "LLM timeout in thread N"
-- **Cause**: TokenHub backend overloaded or file too large
-- **Action**: Reduce `max_parallel_files` or increase `tokenhub.timeout`
+- **Cause**: LLM backend overloaded or file too large
+- **Action**: Reduce `max_parallel_files` or increase `llm.timeout`
 
 ### "Build failed after parallel review"
 - **Cause**: Edits from different threads incompatible

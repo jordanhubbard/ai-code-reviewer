@@ -22,7 +22,7 @@ review:
 ## Timeout Settings
 
 ```yaml
-tokenhub:
+llm:
   timeout: 600            # 10 minutes
 ```
 
@@ -36,7 +36,7 @@ review:
   chunk_threshold: 600    # Larger threshold
   chunk_size: 400         # Larger chunks
 
-tokenhub:
+llm:
   timeout: 900            # 15 minutes for larger chunks
 ```
 
@@ -48,7 +48,7 @@ review:
   chunk_threshold: 200    # Chunk sooner
   chunk_size: 150         # Smaller chunks
 
-tokenhub:
+llm:
   timeout: 300            # 5 minutes (faster to detect issues)
 ```
 
@@ -83,13 +83,13 @@ review:
 
 3. **Increase timeout** (current: 600s)
    ```yaml
-   tokenhub:
+   llm:
      timeout: 900
    ```
 
-4. **Check TokenHub / backend model health**
+4. **Check LLM provider health**
    ```bash
-   make tokenhub-status
+   make validate
    ```
 
 5. **Reduce context window**
@@ -180,7 +180,7 @@ Run `make config-update` or `python scripts/config_update.py` to apply.
 review:
   chunk_threshold: 300
   chunk_size: 200
-tokenhub:
+llm:
   timeout: 600
 ```
 
@@ -189,7 +189,7 @@ tokenhub:
 review:
   chunk_threshold: 500
   chunk_size: 300
-tokenhub:
+llm:
   timeout: 600
 ```
 
@@ -198,6 +198,6 @@ tokenhub:
 review:
   chunk_threshold: 400
   chunk_size: 250
-tokenhub:
+llm:
   timeout: 600
 ```

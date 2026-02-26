@@ -16,7 +16,6 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 CONFIG_FILE="$PROJECT_DIR/config.yaml"
-TOKENHUB_DIR="${HOME}/Src/tokenhub"
 
 # Colors for output
 RED='\033[0;31m'
