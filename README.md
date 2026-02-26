@@ -73,8 +73,11 @@ vim config.yaml
 ```yaml
 llm:
   providers:
-    - url: "http://localhost:8090"   # your LLM server
-      api_key: ""                    # optional, if server requires auth
+    - url: "http://localhost:8000"          # local vLLM — tried first
+    - url: "http://my-server:8090"
+      api_key: "my-api-key"                # failover with auth
+    - url: "https://api.openai.com"
+      api_key: "sk-..."                    # cloud fallback
 
 source:
   root: ".."
