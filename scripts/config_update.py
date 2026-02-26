@@ -7,42 +7,56 @@ from pathlib import Path
 # Map of (path, old_value) -> new_value for defaults that have changed
 # Format: ("section.subsection.key", old_default) -> new_default
 CHANGED_DEFAULTS = {
-    ("tokenhub.timeout", 300): 600,  # Changed: prevent timeouts on large files
+    ("llm.timeout", 300): 600,  # Changed: prevent timeouts on large files
 }
 
 
-def migrate_llm_to_tokenhub(config):
+def migrate_to_llm_providers(config):
     """
-    Migrate request parameters from the deprecated 'llm' section into 'tokenhub'.
+    Migrate legacy config formats into the new llm.providers list.
 
-    Handles both:
-      - Legacy 'ollama' section (pre-TokenHub era)
-      - 'llm' section with timeout/max_tokens/temperature (now lives in tokenhub:)
+    Handles:
+      - 'tokenhub' section  (url + api_key -> single provider)
+      - 'ollama' section    (legacy pre-TokenHub era)
+      - 'llm' section without 'providers' key (flat url/api_key)
 
     Returns True if any migration was performed.
     """
     migrated = False
-    th = config.setdefault('tokenhub', {})
+    llm = config.setdefault('llm', {})
 
-    # ── ollama → tokenhub ────────────────────────────────────────────────────
+    # ── tokenhub → llm.providers ─────────────────────────────────────────
+    if 'tokenhub' in config:
+        th = config['tokenhub']
+        if 'providers' not in llm:
+            url = str(th.get('url') or 'http://localhost:8090').rstrip('/')
+            api_key = str(th.get('api_key') or '')
+            llm['providers'] = [{'url': url, 'api_key': api_key}]
+
+        if th.get('model_hint') and 'model' not in llm:
+            llm['model'] = th['model_hint']
+
+        for key in ('timeout', 'max_tokens', 'temperature'):
+            if key in th and key not in llm:
+                llm[key] = th[key]
+
+        del config['tokenhub']
+        migrated = True
+
+    # ── ollama → llm.providers ───────────────────────────────────────────
     if 'ollama' in config:
         ollama = config['ollama']
+        if 'providers' not in llm:
+            url = str(ollama.get('url') or 'http://localhost:11434').rstrip('/')
+            llm['providers'] = [{'url': url, 'api_key': ''}]
         for key in ('timeout', 'max_tokens', 'temperature'):
-            if key in ollama and key not in th:
-                th[key] = ollama[key]
+            if key in ollama and key not in llm:
+                llm[key] = ollama[key]
         del config['ollama']
         migrated = True
 
-    # ── llm → tokenhub ───────────────────────────────────────────────────────
-    if 'llm' in config:
-        llm = config['llm']
-        for key in ('timeout', 'max_tokens', 'temperature'):
-            if key in llm and key not in th:
-                th[key] = llm[key]
-        del config['llm']
-        migrated = True
-
     return migrated
+
 
 def merge_dicts(defaults, config, path="", added=None, updated=None):
     """Recursively merge defaults into config, adding new keys and updating changed defaults."""
@@ -61,7 +75,6 @@ def merge_dicts(defaults, config, path="", added=None, updated=None):
         elif isinstance(value, dict) and isinstance(config.get(key), dict):
             merge_dicts(value, config[key], current_path, added, updated)
         else:
-            # Check if this is a changed default that should be updated
             for (check_path, old_val), new_val in CHANGED_DEFAULTS.items():
                 if current_path == check_path and config[key] == old_val and value == new_val:
                     print(f"  Updating changed default: {current_path} ({old_val} -> {new_val})")
@@ -94,11 +107,9 @@ def main():
     with open(config_path) as f:
         config = yaml.safe_load(f)
     
-    # First, migrate legacy sections into tokenhub: if needed
-    migrated = migrate_llm_to_tokenhub(config)
+    migrated = migrate_to_llm_providers(config)
     if migrated:
-        print("  Migrated request parameters (timeout/max_tokens/temperature) into 'tokenhub' section")
-        print("  Removed deprecated 'llm' (and/or 'ollama') section")
+        print("  Migrated legacy config (tokenhub/ollama) into 'llm.providers' format")
 
     added, updated = merge_dicts(defaults, config)
 
@@ -108,7 +119,7 @@ def main():
 
         msg_parts = []
         if migrated:
-            msg_parts.append("llm->tokenhub migration")
+            msg_parts.append("provider migration")
         if added:
             msg_parts.append(f"{len(added)} new key(s)")
         if updated:
@@ -116,43 +127,6 @@ def main():
         print(f"Updated config.yaml with {', '.join(msg_parts)}")
     else:
         print("config.yaml is up to date (no changes)")
-
-    # ── Check for missing API key ──────────────────────────────────────────────
-    th_cfg = config.get('tokenhub') or {}
-    api_key = str(th_cfg.get('api_key') or '').strip()
-    if not api_key:
-        th_url = str(th_cfg.get('url') or 'http://localhost:8090').rstrip('/')
-        print()
-        print("=" * 60)
-        print("WARNING: tokenhub.api_key is not set in config.yaml")
-        print("=" * 60)
-        print("An API key is required to authenticate requests to TokenHub.")
-        print()
-        print("How to get a key:")
-        print(f"  1. Open {th_url}/admin in your browser")
-        print(f"     Enter your TOKENHUB_ADMIN_TOKEN in the 'Admin Token' field at the top")
-        print(f"  2. Go to API Keys → + Create Key")
-        print(f"     Name: ai-code-reviewer   Scope: chat  → Create")
-        print(f"  3. Copy the displayed key (shown only once) and paste it below")
-        print()
-        print("  Or run:  make config-init   (interactive wizard handles key creation)")
-        print()
-
-        import sys
-        if sys.stdin.isatty():
-            try:
-                new_key = input("Paste API key here (or Enter to skip): ").strip()
-            except (EOFError, KeyboardInterrupt):
-                new_key = ""
-            if new_key:
-                config.setdefault('tokenhub', {})['api_key'] = new_key
-                with open(config_path, 'w') as f:
-                    yaml.dump(config, f, default_flow_style=False, sort_keys=False)
-                print("  API key saved to config.yaml")
-            else:
-                print("  Skipped. Set 'api_key' in config.yaml before running 'make run'.")
-        else:
-            print("  (Non-interactive mode — set 'api_key' in config.yaml manually)")
 
 if __name__ == "__main__":
     main()

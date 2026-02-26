@@ -5,50 +5,54 @@
 # Works with ANY codebase - just configure your build command
 
 # =============================================================================
-# TokenHub Configuration
+# LLM Configuration
 # =============================================================================
-# All LLM provider selection, model routing, cost budgeting, and latency
-# management is delegated to a TokenHub instance.  This application no longer
-# needs to know which providers or models are available — TokenHub handles it.
+# One or more OpenAI-compatible LLM providers.  Any server that exposes
+# /v1/chat/completions works: vLLM, TokenHub, OpenAI, Ollama (with
+# OpenAI-compat mode), llama.cpp server, etc.
+#
+# Providers are tried in order; the first reachable one is used.
+# Each provider needs a URL and optionally an API key.
 #
 # Quick start:
-#   make config-init          # interactive wizard (sets url + api_key)
-#   make tokenhub-start       # start TokenHub locally if needed
-#   make validate             # verify the connection before reviewing
+#   make config-init      # Interactive setup
+#   make validate         # Verify the connection before reviewing
 #
-tokenhub:
+llm:
   # -------------------------------------------------------------------------
-  # URL of your TokenHub instance
+  # Providers (at least one required)
   # -------------------------------------------------------------------------
-  # Override with env var: TOKENHUB_URL=http://my-server:8090
+  # Each entry is a URL + optional API key.  Add as many as you like;
+  # they act as failover — the first healthy provider handles requests.
   #
-  url: "http://localhost:8090"
+  # Environment variable overrides (applied to *first* provider):
+  #   LLM_URL=http://my-server:8000        (or legacy TOKENHUB_URL)
+  #   LLM_API_KEY=sk-...                   (or legacy TOKENHUB_API_KEY)
+  #
+  # Examples:
+  #   providers:
+  #     - url: "http://localhost:8000"             # local vLLM, no key
+  #     - url: "http://tokenhub:8090"
+  #       api_key: "tokenhub_abc123"               # TokenHub with key
+  #     - url: "https://api.openai.com"
+  #       api_key: "sk-..."                        # OpenAI fallback
+  #
+  providers:
+    - url: "http://localhost:8090"
+      api_key: ""
 
   # -------------------------------------------------------------------------
-  # API key (Bearer token)
+  # Model name
   # -------------------------------------------------------------------------
-  # Created automatically by 'make config-init' via the admin API.
-  # Override with env var: TOKENHUB_API_KEY=tokenhub_<hex>
-  #
-  api_key: ""
-
-  # -------------------------------------------------------------------------
-  # Model routing hint
-  # -------------------------------------------------------------------------
-  # Sent as the "model" field in /v1/chat/completions requests (required by
-  # TokenHub).  TokenHub uses it as a preference hint but may fall back to a
-  # different model based on availability and routing policy.
-  #
+  # Sent as the "model" field in /v1/chat/completions requests.
   # When blank, the client auto-discovers available models at startup and
   # selects the first one.  Set this explicitly to prefer a specific model.
   #
-  # model_hint: ""
+  # model: ""
 
   # -------------------------------------------------------------------------
   # Request parameters
   # -------------------------------------------------------------------------
-  # These control how requests are formed — not which provider handles them.
-  # Provider selection is entirely managed by TokenHub.
 
   # Request timeout in seconds
   # Increase if you get timeouts with large files or slow models
@@ -162,7 +166,6 @@ review:
   # Parallel file processing
   # Controls how many files are reviewed concurrently within a directory.
   # Set to 0 for DYNAMIC mode: automatically determined from server metrics
-  #   (queries vLLM /metrics or Ollama /api/ps for GPU/KV cache capacity)
   # Set to 1 for SEQUENTIAL mode: review files one at a time (safest)
   # Set to 2+ for STATIC parallel mode: fixed number of concurrent reviews
   #   (will warn at startup if this differs from server-recommended value)
@@ -233,6 +236,5 @@ ops_logging:
   
   # Optional: sync logs to a dedicated branch in the audited project
   # This makes logs available for analysis without polluting main branch
-  # Set to null/empty to disable branch sync
+  # Set to null/empty to disable
   # sync_to_branch: "reviewer-logs"
-

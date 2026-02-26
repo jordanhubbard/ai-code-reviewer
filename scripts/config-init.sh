@@ -3,7 +3,7 @@
 # config-init.sh - Interactive configuration setup for AI Code Reviewer
 #
 # Creates or updates config.yaml with user-specified values.
-# Uses readline for editing, validates the TokenHub connection, and allows
+# Uses readline for editing, validates LLM provider connections, and allows
 # review before saving.
 #
 # Usage:
@@ -27,8 +27,6 @@ CYAN='\033[0;36m'
 NC='\033[0m' # No Color
 
 # Default values
-DEFAULT_TOKENHUB_URL="http://localhost:8090"
-DEFAULT_TOKENHUB_API_KEY=""
 DEFAULT_TIMEOUT=600
 DEFAULT_MAX_TOKENS=4096
 DEFAULT_TEMPERATURE="0.1"
@@ -38,9 +36,9 @@ DEFAULT_BUILD_TIMEOUT=7200
 DEFAULT_PERSONA="personas/freebsd-angry-ai"
 DEFAULT_TARGET_DIRS=10
 
-# Wizard output variables
-TOKENHUB_URL=""
-TOKENHUB_API_KEY=""
+# Provider list: arrays of url and api_key
+declare -a PROVIDER_URLS
+declare -a PROVIDER_KEYS
 
 # ------------------------------------------------------------------------------
 # Utility helpers
@@ -118,358 +116,107 @@ read_value() {
 }
 
 # ------------------------------------------------------------------------------
-# TokenHub configuration wizard
+# Provider probing
 # ------------------------------------------------------------------------------
 
-# Probe a URL's /healthz endpoint.  Returns 0 if healthy.
+# Probe a URL's /v1/models endpoint (works for any OpenAI-compatible server)
+_probe_provider() {
+    local url="$1"
+    local key="$2"
+    local auth_header=""
+    if [[ -n "$key" ]]; then
+        auth_header="-H \"Authorization: Bearer ${key}\""
+    fi
+    eval curl -sf --max-time 5 $auth_header "${url%/}/v1/models" >/dev/null 2>&1
+}
+
+# Also try /healthz as a fallback (TokenHub, some custom servers)
 _probe_healthz() {
     local url="$1"
     curl -sf --max-time 5 "${url%/}/healthz" >/dev/null 2>&1
 }
 
-# Wait for /healthz to respond (used after starting a local instance)
-_wait_for_healthz() {
+# Probe either endpoint
+_probe_any() {
     local url="$1"
-    local timeout="${2:-30}"
-    local i=0
-    echo -n "  Waiting for TokenHub to start"
-    while [[ $i -lt $timeout ]]; do
-        if _probe_healthz "$url"; then
-            echo -e " ${GREEN}ready${NC}"
-            return 0
-        fi
-        echo -n "."
-        sleep 1
-        (( i++ )) || true
-    done
-    echo ""
-    return 1
+    local key="$2"
+    _probe_provider "$url" "$key" || _probe_healthz "$url"
 }
 
-# Attempt to auto-create an API key via the admin endpoint.
-# Sets TOKENHUB_API_KEY on success; leaves it empty on failure.
-_create_api_key() {
-    local url="$1"
-    local admin_token="$2"
+# ------------------------------------------------------------------------------
+# LLM provider configuration
+# ------------------------------------------------------------------------------
 
-    echo -n "  Creating API key... "
-    local response
-    response=$(curl -sf --max-time 10 \
-        -X POST "${url%/}/admin/v1/apikeys" \
-        -H "Authorization: Bearer ${admin_token}" \
-        -H "Content-Type: application/json" \
-        -d '{"name":"ai-code-reviewer","scopes":"[\"chat\",\"plan\"]"}' \
-        2>/dev/null) || true
-
-    if [[ -z "$response" ]]; then
-        echo -e "${RED}failed (no response)${NC}"
-        return 1
-    fi
-
-    # Parse .key from JSON response using python3 or grep
-    local key=""
-    if command -v python3 >/dev/null 2>&1; then
-        key=$(printf '%s' "$response" | python3 -c \
-            'import json,sys; d=json.load(sys.stdin); print(d.get("key",""))' 2>/dev/null || true)
-    else
-        key=$(printf '%s' "$response" | grep -o '"key"[[:space:]]*:[[:space:]]*"[^"]*"' \
-            | sed 's/"key"[[:space:]]*:[[:space:]]*"//;s/"$//' || true)
-    fi
-
-    if [[ -z "$key" ]]; then
-        echo -e "${YELLOW}could not parse key from response${NC}"
-        echo "  Response: $response"
-        return 1
-    fi
-
-    TOKENHUB_API_KEY="$key"
-    echo -e "${GREEN}created${NC}"
-    return 0
-}
-
-# Prompt for an API key — three paths:
-#   A) paste a key already created in the admin UI
-#   B) supply admin token so the wizard creates one automatically
-#   C) skip
-# Sets TOKENHUB_API_KEY on success; leaves it empty otherwise.
-_prompt_for_api_key() {
-    local url="$1"
+configure_providers() {
+    print_section "LLM Provider Configuration"
+    echo "Configure one or more OpenAI-compatible LLM providers."
+    echo "Any server with a /v1/chat/completions endpoint works:"
+    echo "  vLLM, TokenHub, OpenAI, Ollama (OpenAI mode), llama.cpp, etc."
     echo ""
-    echo -e "${CYAN}API Key Setup${NC}"
-    echo "An API key (tokenhub_...) is required to authenticate requests to TokenHub."
-    echo ""
-    echo -e "${CYAN}How to get a key — choose whichever is easiest:${NC}"
-    echo ""
-    echo "  A) Admin UI (browser):"
-    echo "       1. Open ${url%/}/admin in your browser"
-    echo "       2. Enter your TOKENHUB_ADMIN_TOKEN in the 'Admin Token' field at the top"
-    echo "       3. Click API Keys → + Create Key"
-    echo "          Name: ai-code-reviewer   Scope: chat   → Create"
-    echo "       4. Copy the key (shown only once) and paste it at the prompt below"
-    echo ""
-    echo "  B) Auto-create via admin token:"
-    echo "       Press Enter at the first prompt, then enter your admin token"
-    echo "       and the wizard will call the API to create the key for you."
-    echo ""
-    echo "  C) Skip for now:"
-    echo "       Press Enter at both prompts.  Set 'api_key' in config.yaml later."
+    echo "Providers are tried in order — the first healthy one is used."
     echo ""
 
-    # ── Path A: paste an existing key ─────────────────────────────────────────
-    read -e -p "  Paste API key from admin UI (or Enter to use admin token / skip): " existing_key
-    existing_key="${existing_key// /}"   # strip accidental spaces
-    if [[ -n "$existing_key" ]]; then
-        if [[ "$existing_key" =~ ^tokenhub_ ]]; then
-            TOKENHUB_API_KEY="$existing_key"
-            print_success "API key accepted"
+    # Reset provider arrays
+    PROVIDER_URLS=()
+    PROVIDER_KEYS=()
+
+    local adding=true
+    local provider_num=1
+
+    while [[ "$adding" == true ]]; do
+        echo -e "${CYAN}Provider #${provider_num}:${NC}"
+
+        local url=""
+        local key=""
+        local default_url="http://localhost:8090"
+        if [[ $provider_num -eq 1 && ${#PROVIDER_URLS[@]} -eq 0 ]]; then
+            default_url="${DEFAULT_PROVIDER_URL:-http://localhost:8090}"
         else
-            print_warning "Key doesn't start with 'tokenhub_' — using anyway."
-            TOKENHUB_API_KEY="$existing_key"
+            default_url=""
         fi
-        return 0
-    fi
 
-    # ── Path B: auto-create via admin token ───────────────────────────────────
-    read -e -p "  Admin token to auto-create key (or Enter to skip): " admin_token
-    if [[ -z "$admin_token" ]]; then
-        print_warning "Skipped. Set 'api_key' in config.yaml before running 'make run'."
-        TOKENHUB_API_KEY=""
-        return 0
-    fi
-
-    if _create_api_key "$url" "$admin_token"; then
-        print_success "API key created and stored in config.yaml (shown only once — save it securely)"
-    else
-        print_warning "Auto-create failed. Use the admin UI to create a key manually:"
-        echo "  ${url%/}/admin  →  API Keys  →  + Create Key"
-        echo "  Then set 'api_key' in config.yaml or re-run 'make config-init'."
-        TOKENHUB_API_KEY=""
-    fi
-}
-
-# Start a new tokenhub container from docker-compose.
-# Returns 0 on success (healthz responds within 30s).
-_start_container() {
-    local port="$1"
-    local compose_file="${TOKENHUB_DIR}/docker-compose.yaml"
-    [[ ! -f "$compose_file" ]] && compose_file="${TOKENHUB_DIR}/docker-compose.yml"
-
-    echo "  Building image and starting container (port ${port}:8080)..."
-    echo "  This may take a few minutes on the first run."
-    if ! docker compose -f "$compose_file" up -d --build tokenhub 2>&1 \
-            | grep -v "^#"; then
-        return 1
-    fi
-    _wait_for_healthz "http://localhost:${port}" 60
-}
-
-# Build and run the tokenhub binary directly.
-# Returns 0 on success.
-_start_binary() {
-    local port="$1"
-    local bin="${TOKENHUB_DIR}/bin/tokenhub"
-
-    echo "  Building tokenhub binary (this may take a minute)..."
-    if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
-        make -C "${TOKENHUB_DIR}" build >/dev/null 2>&1 || {
-            print_error "make build failed"; return 1
-        }
-    else
-        local GO="${GO:-go}"
-        if ! command -v "$GO" >/dev/null 2>&1; then
-            print_error "Neither Docker nor Go is available. Cannot build binary."
-            return 1
-        fi
-        ( cd "${TOKENHUB_DIR}" && CGO_ENABLED=0 "$GO" build -trimpath \
-            -o bin/tokenhub ./cmd/tokenhub ) || {
-            print_error "go build failed"; return 1
-        }
-    fi
-
-    [[ -x "$bin" ]] || { print_error "Binary not found at $bin"; return 1; }
-
-    # Ensure the data directory exists
-    mkdir -p "${HOME}/.local/share/tokenhub"
-
-    echo "  Starting tokenhub binary on port ${port}..."
-    TOKENHUB_LISTEN_ADDR=":${port}" \
-    TOKENHUB_DB_DSN="file:${HOME}/.local/share/tokenhub/tokenhub.sqlite?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)" \
-        "$bin" >/tmp/tokenhub.log 2>&1 &
-    local pid=$!
-    echo "$pid" > /tmp/tokenhub.pid
-    echo "  TokenHub binary started (PID ${pid}, log: /tmp/tokenhub.log)"
-
-    _wait_for_healthz "http://localhost:${port}" 30
-}
-
-configure_tokenhub() {
-    print_section "TokenHub Connection"
-    echo "All LLM provider selection and model routing is handled by TokenHub."
-    echo "Choose how to connect to a TokenHub instance:"
-    echo ""
-
-    # ── Detect what options are available ─────────────────────────────────────
-    local platform
-    platform=$(uname -s)
-
-    local docker_ok=false
-    local existing_container_id=""
-    if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
-        docker_ok=true
-        existing_container_id=$(docker ps -a \
-            --filter "name=^tokenhub$" -q 2>/dev/null | head -1 || true)
-    fi
-
-    local binary_ok=false
-    if [[ ( "$platform" == "Linux" || "$platform" == "Darwin" ) && \
-          -f "${TOKENHUB_DIR}/Makefile" ]]; then
-        binary_ok=true
-    fi
-
-    local container_can_start=false
-    if [[ "$docker_ok" == true && \
-          ( "$platform" == "Linux" || "$platform" == "Darwin" ) && \
-          -z "$existing_container_id" ]]; then
-        container_can_start=true
-    fi
-
-    # ── Build menu ─────────────────────────────────────────────────────────────
-    local opts=()
-    opts+=("1" "Connect to an existing TokenHub server on the network (enter URL)")
-    if [[ -n "$existing_container_id" ]]; then
-        local cstatus
-        cstatus=$(docker inspect --format '{{.State.Status}}' \
-            "$existing_container_id" 2>/dev/null || echo "unknown")
-        opts+=("2" "Reuse already-existing tokenhub container (${cstatus})")
-    fi
-    if [[ "$container_can_start" == true ]]; then
-        opts+=("3" "Start a new tokenhub container (shareable with other apps on this machine)")
-    fi
-    if [[ "$binary_ok" == true ]]; then
-        opts+=("4" "Build and run tokenhub binary from ~/Src/tokenhub (this machine only)")
-    fi
-    opts+=("5" "Skip — I will configure TokenHub manually (config.yaml) before running")
-
-    if [[ "$platform" != "Linux" && "$platform" != "Darwin" ]]; then
-        echo -e "${YELLOW}Note:${NC} Container and binary options require Linux or macOS."
-        echo "  On ${platform}, only the remote server or skip options are available."
-        echo ""
-    fi
-
-    # ── Present menu ───────────────────────────────────────────────────────────
-    local i=0
-    while [[ $i -lt ${#opts[@]} ]]; do
-        echo -e "  ${CYAN}${opts[$i]}${NC}) ${opts[$((i+1))]}"
-        (( i+=2 ))
-    done
-    echo ""
-
-    local choice
-    while true; do
-        read -e -p "Choose an option [1]: " choice
-        [[ -z "$choice" ]] && choice="1"
-
-        # Validate that choice is in the menu
-        local valid=false
-        local j=0
-        while [[ $j -lt ${#opts[@]} ]]; do
-            [[ "${opts[$j]}" == "$choice" ]] && valid=true && break
-            (( j+=2 ))
-        done
-        [[ "$valid" == true ]] && break
-        echo "  Invalid choice. Options: $(echo "${opts[@]}" | tr ' ' '\n' | awk 'NR%2==1' | tr '\n' ' ')"
-    done
-
-    # ── Handle choice ──────────────────────────────────────────────────────────
-    case "$choice" in
-
-        1)  # Remote server
-            echo ""
-            while true; do
-                read -e -p "  TokenHub URL: " -i "$DEFAULT_TOKENHUB_URL" url
-                url="${url%/}"
-                [[ -z "$url" ]] && { print_error "URL cannot be empty."; continue; }
-                echo -n "  Verifying ${url}/healthz... "
-                if _probe_healthz "$url"; then
-                    echo -e "${GREEN}reachable${NC}"
-                    TOKENHUB_URL="$url"
-                    break
+        while true; do
+            read -e -p "  URL: " -i "$default_url" url
+            url="${url%/}"
+            if [[ -z "$url" ]]; then
+                if [[ $provider_num -eq 1 ]]; then
+                    print_error "At least one provider URL is required."
+                    continue
                 else
-                    echo -e "${RED}not reachable${NC}"
-                    echo ""
-                    echo -e "  Cannot connect to ${url}/healthz."
-                    read -e -p "  Try a different URL? (Y/n): " retry
-                    [[ "${retry,,}" == "n" ]] && break
+                    adding=false
+                    break
                 fi
-            done
-            ;;
-
-        2)  # Existing container
-            echo ""
-            local cport
-            cport=$(docker port "$existing_container_id" 8080/tcp 2>/dev/null \
-                | grep -o ':[0-9]*' | head -1 | tr -d ':' || true)
-            [[ -z "$cport" ]] && cport="8090"
-            local cstatus2
-            cstatus2=$(docker inspect --format '{{.State.Status}}' \
-                "$existing_container_id" 2>/dev/null || echo "unknown")
-
-            if [[ "$cstatus2" != "running" ]]; then
-                echo "  Container is ${cstatus2}. Starting it..."
-                docker start "$existing_container_id" >/dev/null
             fi
 
-            if _wait_for_healthz "http://localhost:${cport}" 30; then
-                TOKENHUB_URL="http://localhost:${cport}"
-                print_success "Using existing container on port ${cport}"
+            read -e -p "  API key (Enter for none): " key
+            key="${key// /}"
+
+            echo -n "  Verifying ${url}... "
+            if _probe_any "$url" "$key"; then
+                echo -e "${GREEN}reachable${NC}"
             else
-                print_error "Container did not become healthy. Try option 1 (remote) or option 3/4."
-                TOKENHUB_URL=""
+                echo -e "${YELLOW}not reachable (may start later)${NC}"
             fi
-            ;;
 
-        3)  # New container
+            PROVIDER_URLS+=("$url")
+            PROVIDER_KEYS+=("$key")
+            (( provider_num++ )) || true
+            break
+        done
+
+        if [[ "$adding" == true ]]; then
             echo ""
-            read -e -p "  Host port to expose (default: 8090): " -i "8090" cport
-            [[ -z "$cport" ]] && cport="8090"
-
-            if _start_container "$cport"; then
-                TOKENHUB_URL="http://localhost:${cport}"
-                print_success "TokenHub container running on port ${cport}"
-                echo "  Other apps on this machine can use the same instance."
-            else
-                print_error "Failed to start container. Check Docker logs or try option 4."
-                TOKENHUB_URL=""
+            read -e -p "  Add another provider? (y/N): " more
+            if [[ "${more,,}" != "y" ]]; then
+                adding=false
             fi
-            ;;
+        fi
+    done
 
-        4)  # Binary
-            echo ""
-            read -e -p "  Port to listen on (default: 8090): " -i "8090" bport
-            [[ -z "$bport" ]] && bport="8090"
-
-            if _start_binary "$bport"; then
-                TOKENHUB_URL="http://localhost:${bport}"
-                print_success "TokenHub binary running on port ${bport}"
-            else
-                print_error "Failed to start binary. Check ~/Src/tokenhub or try option 1."
-                TOKENHUB_URL=""
-            fi
-            ;;
-
-        5)  # Skip
-            echo ""
-            print_warning "TokenHub not configured. Set 'tokenhub.url' and 'tokenhub.api_key'"
-            echo "  in config.yaml before running 'make run'."
-            TOKENHUB_URL="$DEFAULT_TOKENHUB_URL"
-            TOKENHUB_API_KEY=""
-            return 0
-            ;;
-    esac
-
-    # ── API key creation (if we have a reachable URL) ──────────────────────────
-    if [[ -n "$TOKENHUB_URL" ]]; then
-        _prompt_for_api_key "$TOKENHUB_URL"
+    if [[ ${#PROVIDER_URLS[@]} -eq 0 ]]; then
+        print_warning "No providers configured. Add at least one in config.yaml before running."
+        PROVIDER_URLS=("http://localhost:8090")
+        PROVIDER_KEYS=("")
     fi
 }
 
@@ -481,15 +228,30 @@ load_existing_config() {
     if [[ -f "$CONFIG_FILE" ]]; then
         echo "Loading existing configuration from config.yaml..."
 
+        # Try to load providers from existing config using Python
+        if command -v python3 >/dev/null 2>&1; then
+            eval "$(python3 -c "
+import yaml, sys
+try:
+    d = yaml.safe_load(open('$CONFIG_FILE'))
+    # New format: llm.providers
+    llm = d.get('llm') or {}
+    provs = llm.get('providers') or []
+    # Legacy format: tokenhub
+    th = d.get('tokenhub') or {}
+    if provs:
+        for i, p in enumerate(provs):
+            print(f'PROVIDER_URLS[{i}]=\"{p.get(\"url\",\"\")}\"')
+            print(f'PROVIDER_KEYS[{i}]=\"{p.get(\"api_key\",\"\")}\"')
+    elif th.get('url'):
+        print(f'DEFAULT_PROVIDER_URL=\"{th[\"url\"]}\"')
+        print(f'DEFAULT_PROVIDER_KEY=\"{th.get(\"api_key\",\"\")}\"')
+except Exception:
+    pass
+" 2>/dev/null || true)"
+        fi
+
         while IFS= read -r line; do
-            if [[ "$line" =~ ^[[:space:]]*url:[[:space:]]*[\"\']?([^\"\'#]+)[\"\']? ]]; then
-                val="${BASH_REMATCH[1]}"; val="${val%[[:space:]]}";
-                [[ "$val" =~ ^http ]] && DEFAULT_TOKENHUB_URL="$val"
-            fi
-            if [[ "$line" =~ ^[[:space:]]*api_key:[[:space:]]*[\"\']?([^\"\'#]+)[\"\']? ]]; then
-                val="${BASH_REMATCH[1]}"; val="${val%[[:space:]]}";
-                [[ -n "$val" ]] && DEFAULT_TOKENHUB_API_KEY="$val"
-            fi
             if [[ "$line" =~ ^[[:space:]]*timeout:[[:space:]]*([0-9]+) ]]; then
                 DEFAULT_TIMEOUT="${BASH_REMATCH[1]}"
             fi
@@ -528,13 +290,16 @@ load_existing_config() {
 display_config() {
     print_section "Configuration Summary"
 
-    echo -e "${CYAN}TokenHub:${NC}"
-    echo "  URL:         ${TOKENHUB_URL:-<not set>}"
-    if [[ -n "$TOKENHUB_API_KEY" ]]; then
-        echo "  API Key:     ${TOKENHUB_API_KEY:0:12}... (truncated)"
-    else
-        echo "  API Key:     <not set — configure before running>"
-    fi
+    echo -e "${CYAN}LLM Providers:${NC}"
+    for i in "${!PROVIDER_URLS[@]}"; do
+        local url="${PROVIDER_URLS[$i]}"
+        local key="${PROVIDER_KEYS[$i]}"
+        if [[ -n "$key" ]]; then
+            echo "  ${i}: ${url}  (key: ${key:0:12}...)"
+        else
+            echo "  ${i}: ${url}  (no key)"
+        fi
+    done
     echo "  Timeout:     ${TIMEOUT}s"
     echo "  Max Tokens:  $MAX_TOKENS"
     echo "  Temperature: $TEMPERATURE"
@@ -568,9 +333,15 @@ generate_config() {
         print_success "Backed up existing config to ${CONFIG_FILE}.bak"
     fi
 
-    # Escape single quotes in values that go into YAML strings
-    local esc_url="${TOKENHUB_URL//\'/\'\'}"
-    local esc_key="${TOKENHUB_API_KEY//\'/\'\'}"
+    # Build providers YAML block
+    local providers_block=""
+    for i in "${!PROVIDER_URLS[@]}"; do
+        local esc_url="${PROVIDER_URLS[$i]//\'/\'\'}"
+        local esc_key="${PROVIDER_KEYS[$i]//\'/\'\'}"
+        providers_block+="    - url: \"${esc_url}\""$'\n'
+        providers_block+="      api_key: \"${esc_key}\""$'\n'
+    done
+
     local esc_src="${SOURCE_ROOT//\'/\'\'}"
     local esc_build="${BUILD_COMMAND//\'/\'\'}"
     local esc_persona="${PERSONA//\'/\'\'}"
@@ -581,10 +352,9 @@ generate_config() {
 #
 # For full documentation, see config.yaml.defaults
 
-tokenhub:
-  url: "${esc_url}"
-  api_key: "${esc_key}"
-  # model_hint: ""  # Optional: leave blank to let tokenhub choose
+llm:
+  providers:
+${providers_block}  # model: ""  # Optional: leave blank to auto-discover
   timeout: ${TIMEOUT}
   max_tokens: ${MAX_TOKENS}
   temperature: ${TEMPERATURE}
@@ -659,11 +429,11 @@ main() {
         read_value "Build command" "$DEFAULT_BUILD_COMMAND" BUILD_COMMAND
         read_value "Build timeout (seconds)" "$DEFAULT_BUILD_TIMEOUT" BUILD_TIMEOUT
 
-        # Step 2: TokenHub connection
-        configure_tokenhub
+        # Step 2: LLM providers
+        configure_providers
 
-        # Step 3: TokenHub request settings
-        print_section "TokenHub Request Settings"
+        # Step 3: Request settings
+        print_section "LLM Request Settings"
         echo "These control how requests are formed, not which provider handles them."
         echo ""
         read_value "Request timeout (seconds)" "$DEFAULT_TIMEOUT" TIMEOUT
@@ -710,14 +480,8 @@ main() {
 
                 echo ""
                 echo "Next steps:"
-                if [[ -z "$TOKENHUB_API_KEY" ]]; then
-                    echo "  1. Set 'api_key' in config.yaml (run 'make config-init' again with admin token)"
-                else
-                    echo "  1. API key is configured"
-                fi
-                echo "  2. Run 'make tokenhub-status' to confirm TokenHub is reachable"
-                echo "  3. Run 'make validate' to test the full connection"
-                echo "  4. Run 'make run' to start reviewing"
+                echo "  1. Run 'make validate' to test the LLM connection"
+                echo "  2. Run 'make run' to start reviewing"
                 echo ""
                 exit 0
                 ;;

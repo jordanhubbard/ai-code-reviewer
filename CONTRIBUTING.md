@@ -88,7 +88,7 @@ Before submitting a PR:
 
 Key files:
 - **reviewer.py**: Main review loop
-- **tokenhub_client.py**: LLM communication via TokenHub
+- **llm_client.py**: LLM communication (any OpenAI-compatible provider)
 - **build_executor.py**: Build/test execution
 - **chunker.py**: Large file handling
 - **index_generator.py**: Directory scanning

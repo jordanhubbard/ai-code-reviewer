@@ -4616,15 +4616,15 @@ Output ONLY the lesson entry, nothing else."""
         
         if error_type == 'model_not_found':
             print("""
-The requested model hint does not match any model available through TokenHub.
+The requested model does not match any model available on the LLM provider.
 This is a configuration issue that requires manual intervention.
 
 TO FIX:
-1. Check available models via TokenHub:
-   make tokenhub-status   # confirm TokenHub is reachable
-2. Update config.yaml with a valid model hint (or clear it to let TokenHub choose):
-   tokenhub:
-     model_hint: ""   # blank = TokenHub picks automatically
+1. Check available models on your LLM provider(s)
+   make validate   # confirm provider is reachable and list models
+2. Update config.yaml with a valid model name (or clear it to auto-discover):
+   llm:
+     model: ""   # blank = auto-discover first available model
 3. Restart the review: make run-forever
 """)
         elif error_type == 'auth_failed':
@@ -5047,12 +5047,12 @@ TO FIX:
                     if error_type == 'timeout':
                         print(f"\nThe model took longer than {self.ollama.config.timeout}s to respond.")
                         print("Solutions:")
-                        print(f"1. Increase timeout in config.yaml: tokenhub.timeout")
+                        print(f"1. Increase timeout in config.yaml: llm.timeout")
                         print("2. Review smaller files first")
                         print("3. Use --forever mode for automatic retry")
                     elif error_type == 'model_not_found':
-                        print("\nTo see available models, check your TokenHub instance.")
-                        print("Update config.yaml tokenhub.model_hint or leave blank to let TokenHub choose.")
+                        print("\nTo see available models, run 'make validate'.")
+                        print("Update config.yaml llm.model or leave blank to auto-discover.")
                     print('='*60)
                     break
             
@@ -5672,7 +5672,7 @@ Examples:
             logger.warning(f"No {config_path} found - copied from {defaults_path}")
             print(f"\n*** Created {config_path} from defaults")
             print("*** IMPORTANT: Edit config.yaml to configure:")
-            print(f"***   1. Ollama server URL (ollama.url)")
+            print(f"***   1. LLM provider URL (llm.providers)")
             print(f"***   2. Source root path (source.root)")
             print(f"***   3. Build command (source.build_command)")
             print(f"***")
@@ -5710,7 +5710,7 @@ Examples:
         print("=" * 70 + "\n")
         logger.warning("Beads CLI not found - continuing without beads integration")
     
-    from tokenhub_client import create_client_from_config, LLMError, LLMConnectionError
+    from llm_client import create_client_from_config, LLMError, LLMConnectionError
     from build_executor import create_executor_from_config
 
     # Validate source.root early (directory existence) to fail fast before LLM probing.

@@ -16,7 +16,7 @@
 - ✅ **Scalable**: Function-by-function chunking handles files of any size
 - ✅ **Safe**: Tests every change with your build system
 - ✅ **Autonomous**: Runs for hours reviewing entire directories
-- ✅ **Smart**: Uses LLM via [TokenHub](https://github.com/jordanhubbard/tokenhub) — handles all provider routing, model selection, and cost management
+- ✅ **Smart**: Works with any OpenAI-compatible LLM provider (vLLM, TokenHub, OpenAI, etc.)
 - ✅ **Parallel**: Optional concurrent file processing for faster reviews
 - ✅ **Self-Healing**: Auto-detects loops, learns from build failures
 - ✅ **Configurable**: Multiple agent personalities via Oracle Agent Spec
@@ -43,52 +43,19 @@
 make check-deps
 ```
 
-### 2. Start TokenHub
+### 2. Start an LLM Provider
 
-All LLM provider selection, model routing, and cost management is delegated to
-[TokenHub](https://github.com/jordanhubbard/tokenhub) (`~/Src/tokenhub`).  The smart launcher
-picks the best available option automatically:
+You need at least one running OpenAI-compatible LLM server.  Any of these work:
 
-```bash
-make tokenhub-start
-```
+| Provider | Example URL | Notes |
+|----------|-------------|-------|
+| **vLLM** | `http://localhost:8000` | GPU inference, no key needed |
+| **TokenHub** | `http://localhost:8090` | Multi-provider router, optional key |
+| **OpenAI** | `https://api.openai.com` | Requires API key |
+| **Ollama** (OpenAI mode) | `http://localhost:11434` | Local models |
+| **llama.cpp server** | `http://localhost:8080` | CPU/GPU inference |
 
-The launcher tries, in order:
-1. **Remote instance** already reachable at the configured URL
-2. **Existing Docker container** — restarts it if stopped
-3. **New Docker container** — Linux/macOS with Docker available
-4. **Native binary** — built from `~/Src/tokenhub` (works on FreeBSD and any platform without Docker)
-
-#### Getting a TokenHub API key
-
-This project authenticates to TokenHub with a scoped API key (`tokenhub_...`).
-You need one before running `make config-init` or `make run`.
-
-**Option A — Admin UI (easiest):**
-1. Open `http://<tokenhub-url>/admin` in your browser
-2. Log in with the `TOKENHUB_ADMIN_TOKEN` that was set when TokenHub was deployed
-3. Navigate to **API Keys** → **Create**
-4. Name it `ai-code-reviewer`, set scope to `chat`, click **Create**
-5. Copy the displayed key — it is shown only once
-
-**Option B — Interactive wizard:**
-```bash
-make config-init   # prompts for the admin token, creates the key automatically
-```
-
-**Option C — Command line:**
-```bash
-tokenhubctl apikey create '{"name":"ai-code-reviewer","scopes":"[\"chat\"]"}'
-# or via curl:
-curl -sX POST http://<url>/admin/v1/apikeys \
-     -H "Authorization: Bearer <TOKENHUB_ADMIN_TOKEN>" \
-     -H "Content-Type: application/json" \
-     -d '{"name":"ai-code-reviewer","scopes":"[\"chat\",\"plan\"]"}'
-```
-
-The `TOKENHUB_ADMIN_TOKEN` is the bootstrap credential set in TokenHub's own
-deployment environment (its `.env` or docker-compose env). Ask your TokenHub
-administrator if you do not have it.
+If you use TokenHub, there's a convenience launcher: `make tokenhub-start`
 
 ### 3. Configure
 
@@ -104,9 +71,10 @@ vim config.yaml
 
 **Minimal config.yaml:**
 ```yaml
-tokenhub:
-  url: "http://localhost:8090"   # URL of your TokenHub instance
-  api_key: "tokenhub_..."        # Bearer token — see "Getting a TokenHub API key" above
+llm:
+  providers:
+    - url: "http://localhost:8090"   # your LLM server
+      api_key: ""                    # optional, if server requires auth
 
 source:
   root: ".."
@@ -218,7 +186,7 @@ Files over 400 lines are automatically chunked by function:
 ┌─────────────────────────────────────────────────────┐
 │ ai-code-reviewer/                                   │
 │ ├─ reviewer.py        (main loop)                  │
-│ ├─ tokenhub_client.py (TokenHub HTTP client)       │
+│ ├─ llm_client.py     (OpenAI-compat LLM client)    │
 │ ├─ persona_validator.py (Agent Spec validation)    │
 │ ├─ personas/          (agent configurations)       │
 │ │   ├─ freebsd-angry-ai/agent.yaml                │
@@ -227,10 +195,10 @@ Files over 400 lines are automatically chunked by function:
 │ └─ config.yaml        (your configuration)        │
 └─────────────────────────────────────────────────────┘
           ↓ HTTP /v1/chat/completions        ↓ subprocess
-         TokenHub (provider routing)    (your build command)
-         ├─ Docker container
-         ├─ Native binary (FreeBSD, etc.)
-         └─ Remote instance
+         LLM Provider(s)               (your build command)
+         ├─ vLLM, TokenHub, OpenAI
+         ├─ Ollama, llama.cpp, etc.
+         └─ Any OpenAI-compatible server
 ```
 
 ## Project Structure
@@ -247,7 +215,7 @@ ai-code-reviewer/
 │   └── example/
 ├── reviewer.py              # Main review loop
 ├── persona_validator.py     # Agent Spec validator
-├── tokenhub_client.py      # TokenHub HTTP client
+├── llm_client.py           # OpenAI-compatible LLM client (multi-provider)
 ├── build_executor.py       # Build system integration
 ├── chunker.py              # Large file handling
 ├── config.yaml.defaults    # Configuration template
@@ -296,7 +264,7 @@ source:
 ## Requirements
 
 - **Python 3.8+** with PyYAML
-- **TokenHub** (`~/Src/tokenhub`) — Docker container, native binary, or remote instance
+- **At least one OpenAI-compatible LLM provider** (vLLM, TokenHub, OpenAI, Ollama, etc.)
 - **Your project's build system** (make, cmake, cargo, etc.)
 - **Git repository** (for tracking changes)
 

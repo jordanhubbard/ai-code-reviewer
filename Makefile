@@ -2,12 +2,11 @@
 #
 # AI-powered code reviewer for ANY codebase (C, C++, Rust, Go, Python, etc.)
 # Validates changes with YOUR build command (configurable in config.yaml).
-# Routes all LLM requests through a TokenHub instance.
+# Talks to any OpenAI-compatible LLM provider (vLLM, TokenHub, OpenAI, etc.)
 #
 # Quick start:
-#   make config-init      # Interactive setup (configures TokenHub + source)
-#   make tokenhub-start   # Start TokenHub locally if needed
-#   make validate         # Test connection to TokenHub
+#   make config-init      # Interactive setup (configures LLM providers + source)
+#   make validate         # Test connection to LLM provider
 #   make run              # Start the review loop
 
 # Python interpreter (FreeBSD typically has python3)
@@ -18,31 +17,44 @@ VENV_PIP=	$(VENV_PY) -m pip
 PIP_FLAGS?=
 FREEBSD_PYYAML_PKG?=py311-pyyaml
 
-# TokenHub settings (override with env vars or on the make command line)
-TOKENHUB_DIR    ?= $(HOME)/Src/tokenhub
-TOKENHUB_BIN    ?= $(TOKENHUB_DIR)/bin/tokenhub
-TOKENHUB_PORT   ?= 8090
-TOKENHUB_API_KEY?=
+# LLM provider settings (override with env vars or on the make command line)
+# These are applied to the first provider in config.yaml
+LLM_API_KEY?=
 
-# TOKENHUB_URL priority: env var / make command-line > config.yaml > localhost:8090
-# != shell assignment is portable across GNU make 4.0+ and BSD make.
-_CFG_TH_URL != if [ -n "$$TOKENHUB_URL" ]; then \
+# Legacy env var aliases (still honoured by llm_client.py)
+TOKENHUB_API_KEY?=$(LLM_API_KEY)
+
+# LLM_URL priority: env var / make command-line > config.yaml > localhost:8090
+_CFG_LLM_URL != if [ -n "$$LLM_URL" ]; then \
+    echo "$$LLM_URL"; \
+elif [ -n "$$TOKENHUB_URL" ]; then \
     echo "$$TOKENHUB_URL"; \
 elif [ -f config.yaml ]; then \
-    $(PYTHON) -c "import yaml;d=yaml.safe_load(open('config.yaml'));print((d.get('tokenhub')or{}).get('url')or'http://localhost:8090')" 2>/dev/null \
+    $(PYTHON) -c "\
+import yaml;d=yaml.safe_load(open('config.yaml'));\
+llm=d.get('llm')or{};\
+provs=llm.get('providers')or[];\
+th=d.get('tokenhub')or{};\
+url=(provs[0]['url'] if provs else th.get('url')or'http://localhost:8090');\
+print(url)" 2>/dev/null \
     || echo http://localhost:8090; \
 else \
     echo http://localhost:8090; \
 fi
-TOKENHUB_URL ?= $(_CFG_TH_URL)
+LLM_URL ?= $(_CFG_LLM_URL)
+
+# TokenHub convenience targets (optional - only if you use TokenHub)
+TOKENHUB_DIR    ?= $(HOME)/Src/tokenhub
+TOKENHUB_BIN    ?= $(TOKENHUB_DIR)/bin/tokenhub
+TOKENHUB_PORT   ?= 8090
 
 # No directory variables needed - make runs from Makefile location
 # All paths are relative to the Makefile
 
 # Phony targets
 .PHONY: all venv deps check-deps config-init config-update \
-        tokenhub-build tokenhub-start tokenhub-stop tokenhub-status check-tokenhub \
-        validate run run-verbose run-forever test test-all \
+        tokenhub-build tokenhub-start tokenhub-stop tokenhub-status \
+        check-llm validate run run-verbose run-forever test test-all \
         validate-persona validate-build show-metrics release clean clean-all help
 
 # Default target
@@ -130,9 +142,8 @@ check-deps:
 		echo "⚠  config.yaml not found - run 'make config-init' to create it"; \
 	fi
 	@echo ""
-	@echo "  [INFO] TokenHub URL: $(TOKENHUB_URL)  (override with TOKENHUB_URL=<url>)"
-	@echo "  [INFO] Run 'make tokenhub-status' to verify connectivity"
-	@echo "  [INFO] Run 'make tokenhub-start'  to start a local TokenHub instance"
+	@echo "  [INFO] LLM provider URL: $(LLM_URL)  (override with LLM_URL=<url>)"
+	@echo "  [INFO] Run 'make validate' to verify LLM connectivity"
 	@echo ""
 	@echo "All required dependencies satisfied!"
 
@@ -158,7 +169,7 @@ config-update: check-deps
 	fi
 
 #
-# TokenHub targets
+# TokenHub convenience targets (optional - for users running TokenHub)
 #
 
 # Build the TokenHub binary from source (no-op if already built)
@@ -168,7 +179,7 @@ tokenhub-build:
 
 # Smart start: reuse existing container > start new container > run binary
 tokenhub-start:
-	@bash scripts/tokenhub-start.sh $(TOKENHUB_PORT) $(TOKENHUB_URL)
+	@bash scripts/tokenhub-start.sh $(TOKENHUB_PORT) $(LLM_URL)
 
 # Stop any locally started TokenHub (container or binary)
 tokenhub-stop:
@@ -178,37 +189,37 @@ tokenhub-stop:
 
 # Report whether TokenHub is reachable
 tokenhub-status:
-	@curl -sf --max-time 5 $(TOKENHUB_URL)/healthz \
-	    && echo "TokenHub OK at $(TOKENHUB_URL)" \
-	    || echo "TokenHub not reachable at $(TOKENHUB_URL)"
-
-# Internal prerequisite: fail fast if TokenHub is not reachable
-check-tokenhub:
-	@curl -sf --max-time 5 $(TOKENHUB_URL)/healthz >/dev/null 2>&1 || ( \
-	    echo "ERROR: TokenHub not reachable at $(TOKENHUB_URL)" ; \
-	    echo "  Run 'make tokenhub-start' to start a local instance" ; \
-	    echo "  or update tokenhub.url in config.yaml to point at a remote instance" ; \
-	    exit 1 )
+	@curl -sf --max-time 5 $(LLM_URL)/healthz \
+	    && echo "TokenHub OK at $(LLM_URL)" \
+	    || echo "TokenHub not reachable at $(LLM_URL)"
 
 #
 # Validation targets
 #
 
-# Validate TokenHub connection
-validate: check-deps check-tokenhub
-	@echo "Validating TokenHub connection..."
-	TOKENHUB_API_KEY="$(TOKENHUB_API_KEY)" $(VENV_PY) reviewer.py --config config.yaml --validate-only
+# Internal: check that at least the first LLM provider is reachable
+check-llm:
+	@curl -sf --max-time 5 $(LLM_URL)/v1/models >/dev/null 2>&1 || ( \
+	    echo "ERROR: LLM provider not reachable at $(LLM_URL)" ; \
+	    echo "  Ensure your LLM server is running, or update llm.providers in config.yaml" ; \
+	    echo "  Override with: LLM_URL=http://your-server:port make validate" ; \
+	    exit 1 )
+
+# Validate LLM connection
+validate: check-deps check-llm
+	@echo "Validating LLM connection..."
+	LLM_API_KEY="$(LLM_API_KEY)" TOKENHUB_API_KEY="$(TOKENHUB_API_KEY)" $(VENV_PY) reviewer.py --config config.yaml --validate-only
 
 # Run component self-tests (syntax check only, no server connection)
 test: check-deps
 	@echo "=== Syntax Check: All Python Modules ==="
-	@$(VENV_PY) -m py_compile tokenhub_client.py \
+	@$(VENV_PY) -m py_compile llm_client.py \
 		async_http_client.py build_executor.py reviewer.py chunker.py index_generator.py \
 		ops_logger.py scripts/config_update.py
 	@echo "✓ All modules pass syntax check"
 	@echo ""
-	@echo "=== Import Check: TokenHub Client ==="
-	@$(VENV_PY) -c "from tokenhub_client import create_client_from_config, TokenHubClient, LLMError; print('✓ tokenhub_client imports OK')"
+	@echo "=== Import Check: LLM Client ==="
+	@$(VENV_PY) -c "from llm_client import create_client_from_config, LLMClient, LLMError; print('✓ llm_client imports OK')"
 	@echo ""
 	@echo "=== Import Check: Build Executor ==="
 	@$(VENV_PY) -c "from build_executor import create_executor_from_config; print('✓ build_executor imports OK')"
@@ -218,11 +229,11 @@ test: check-deps
 	@echo ""
 	@echo "All tests passed!"
 
-# Run full tests including TokenHub connectivity (requires running instance)
-test-all: test check-tokenhub
+# Run full tests including LLM connectivity (requires running provider)
+test-all: test check-llm
 	@echo ""
-	@echo "=== Testing TokenHub Client (requires running instance) ==="
-	TOKENHUB_API_KEY="$(TOKENHUB_API_KEY)" $(VENV_PY) -c "from tokenhub_client import create_client_from_config; import yaml; cfg = yaml.safe_load(open('config.yaml')); c = create_client_from_config(cfg); print('✓ TokenHub connected; models: ' + str(c.list_models()))"
+	@echo "=== Testing LLM Client (requires running provider) ==="
+	LLM_API_KEY="$(LLM_API_KEY)" TOKENHUB_API_KEY="$(TOKENHUB_API_KEY)" $(VENV_PY) -c "from llm_client import create_client_from_config; import yaml; cfg = yaml.safe_load(open('config.yaml')); c = create_client_from_config(cfg); print('✓ LLM connected; models: ' + str(c.list_models()))"
 	@echo ""
 	@echo "=== Testing Build Executor ==="
 	$(VENV_PY) build_executor.py
@@ -233,17 +244,17 @@ test-all: test check-tokenhub
 # Run targets
 #
 
-# Run the review loop (checks dependencies and TokenHub first)
-run: check-tokenhub
-	@TOKENHUB_API_KEY="$(TOKENHUB_API_KEY)" $(PYTHON) scripts/make_run.py
+# Run the review loop (checks dependencies and LLM provider first)
+run: check-llm
+	@LLM_API_KEY="$(LLM_API_KEY)" TOKENHUB_API_KEY="$(TOKENHUB_API_KEY)" $(PYTHON) scripts/make_run.py
 
 # Run with verbose logging
-run-verbose: check-deps check-tokenhub
-	TOKENHUB_API_KEY="$(TOKENHUB_API_KEY)" $(VENV_PY) reviewer.py --config config.yaml -v
+run-verbose: check-deps check-llm
+	LLM_API_KEY="$(LLM_API_KEY)" TOKENHUB_API_KEY="$(TOKENHUB_API_KEY)" $(VENV_PY) reviewer.py --config config.yaml -v
 
 # Run in forever mode (review all directories until complete)
-run-forever: check-tokenhub
-	@TOKENHUB_API_KEY="$(TOKENHUB_API_KEY)" $(PYTHON) scripts/make_run_forever.py
+run-forever: check-llm
+	@LLM_API_KEY="$(LLM_API_KEY)" TOKENHUB_API_KEY="$(TOKENHUB_API_KEY)" $(PYTHON) scripts/make_run_forever.py
 
 #
 # Validation targets
@@ -412,29 +423,26 @@ help:
 	@echo "==================================="
 	@echo ""
 	@echo "AI-powered code reviewer with build validation for ANY codebase."
-	@echo "Routes all LLM requests through TokenHub (provider-agnostic routing)."
+	@echo "Talks to any OpenAI-compatible LLM provider (vLLM, TokenHub, OpenAI, etc.)"
 	@echo ""
 	@echo "Setup:"
 	@echo "  make check-deps       Check/install Python3, pip, and PyYAML"
-	@echo "  make config-init      Interactive setup wizard (TokenHub + API key + source config)"
-	@echo "  make config-update    Merge new defaults into config.yaml; prompts for API key if missing"
-	@echo ""
-	@echo "TokenHub:"
-	@echo "  make tokenhub-start   Start TokenHub locally (container > binary)"
-	@echo "  make tokenhub-stop    Stop the local TokenHub instance"
-	@echo "  make tokenhub-status  Check if TokenHub is reachable"
-	@echo "  make tokenhub-build   Build the TokenHub binary from ~/Src/tokenhub"
-	@echo ""
-	@echo "  Override URL:  make run TOKENHUB_URL=http://my-server:8090"
-	@echo "  Override port: make tokenhub-start TOKENHUB_PORT=9090"
+	@echo "  make config-init      Interactive setup wizard (LLM providers + source config)"
+	@echo "  make config-update    Merge new defaults into config.yaml"
 	@echo ""
 	@echo "Usage:"
-	@echo "  make validate      Test connection to TokenHub"
+	@echo "  make validate      Test connection to LLM provider"
 	@echo "  make run           Start the review loop"
 	@echo "  make run-verbose   Run with verbose logging"
 	@echo "  make run-forever   Run until all directories are reviewed"
 	@echo "  make test          Run syntax and import tests (no server required)"
-	@echo "  make test-all      Run all tests including TokenHub connectivity"
+	@echo "  make test-all      Run all tests including LLM connectivity"
+	@echo ""
+	@echo "TokenHub (optional — only if your LLM provider is TokenHub):"
+	@echo "  make tokenhub-start   Start TokenHub locally (container > binary)"
+	@echo "  make tokenhub-stop    Stop the local TokenHub instance"
+	@echo "  make tokenhub-status  Check if TokenHub is reachable"
+	@echo "  make tokenhub-build   Build the TokenHub binary from ~/Src/tokenhub"
 	@echo ""
 	@echo "Validation:"
 	@echo "  make validate-persona  Validate persona files"
@@ -449,15 +457,15 @@ help:
 	@echo "  make clean-all    Also remove any leftover files"
 	@echo ""
 	@echo "Options:"
-	@echo "  CONFIG=path       Use alternate config file (default: config.yaml)"
-	@echo "  PYTHON=path       Use alternate Python interpreter (default: python3)"
-	@echo "  TOKENHUB_URL=url      TokenHub base URL (default: http://localhost:8090)"
+	@echo "  CONFIG=path           Use alternate config file (default: config.yaml)"
+	@echo "  PYTHON=path           Use alternate Python interpreter (default: python3)"
+	@echo "  LLM_URL=url           First LLM provider URL (default: http://localhost:8090)"
+	@echo "  LLM_API_KEY=key       API key for first provider (or set in config.yaml)"
 	@echo "  TOKENHUB_PORT=n       Local port for tokenhub-start (default: 8090)"
-	@echo "  TOKENHUB_API_KEY=key  Bearer token for TokenHub auth (or set tokenhub.api_key in config.yaml)"
 	@echo ""
 	@echo "Requirements:"
 	@echo "  - Python 3.8+ with PyYAML (auto-installed by check-deps)"
-	@echo "  - A running TokenHub instance (make tokenhub-start)"
+	@echo "  - At least one running OpenAI-compatible LLM provider"
 	@echo "  - Source code at source.root (default: ../)"
 	@echo "  - Working build command (configured in config.yaml)"
 	@echo ""
