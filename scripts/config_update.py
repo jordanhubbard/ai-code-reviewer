@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Merge new defaults from config.yaml.defaults into config.yaml."""
+"""Merge new defaults from config.yaml.sample into config.yaml."""
 
 import sys
 from pathlib import Path
@@ -90,7 +90,7 @@ def main():
         print("ERROR: PyYAML not installed. Run: pip install pyyaml")
         sys.exit(1)
     
-    defaults_path = Path("config.yaml.defaults")
+    defaults_path = Path("config.yaml.sample")
     config_path = Path("config.yaml")
     
     if not defaults_path.exists():

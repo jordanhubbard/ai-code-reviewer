@@ -16,7 +16,7 @@ CURRENT_MARKER = "- [>] `"
 
 def _resolve_source_root(project_root: Path) -> Path | None:
     config_path = project_root / "config.yaml"
-    defaults_path = project_root / "config.yaml.defaults"
+    defaults_path = project_root / "config.yaml.sample"
 
     source_root, _ = read_config_values(config_path)
     if source_root is None and defaults_path.exists():

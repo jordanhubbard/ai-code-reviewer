@@ -67,7 +67,7 @@ cd ai-code-reviewer
 pip install -r requirements.txt
 
 # Test on a small project
-cp config.yaml.defaults config.yaml
+cp config.yaml.sample config.yaml
 vim config.yaml  # Configure for your test project
 python reviewer.py
 ```

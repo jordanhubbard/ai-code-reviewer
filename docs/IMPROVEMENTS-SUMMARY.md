@@ -283,7 +283,7 @@ Sequential file processing wastes GPU capacity and increases wall-clock time for
 Added infrastructure for parallel file reviews with proper threading support and configuration.
 
 ### Changes Made
-- **File**: `reviewer.py` + `config.yaml.defaults`
+- **File**: `reviewer.py` + `config.yaml.sample`
 - **Lines Added**: ~15 (infrastructure) + comprehensive docs
 - **Documentation**: `docs/PARALLEL-PROCESSING.md` (comprehensive guide)
 - **Config Option**: `max_parallel_files`
@@ -381,7 +381,7 @@ Comprehensive 300+ line guide in `docs/PARALLEL-PROCESSING.md` covering:
    - Parallel processing infrastructure
    - 3× loop detection integration points
 
-2. `config.yaml.defaults` - +7 lines
+2. `config.yaml.sample` - +7 lines
    - `max_parallel_files` option
 
 3. `README.md` - +3 lines

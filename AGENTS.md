@@ -60,7 +60,7 @@ ai-code-reviewer/
 │   └── example/
 ├── reviewer.py              # Main review loop
 ├── persona_validator.py     # Validates Agent Spec format
-├── config.yaml.defaults     # Configuration template
+├── config.yaml.sample     # Configuration template
 └── AGENTS.md               # This file
 ```
 
@@ -68,7 +68,7 @@ ai-code-reviewer/
 
 ```bash
 # Copy and configure
-cp config.yaml.defaults config.yaml
+cp config.yaml.sample config.yaml
 # Edit config.yaml: set source.root, source.build_command, review.persona
 
 # Run review

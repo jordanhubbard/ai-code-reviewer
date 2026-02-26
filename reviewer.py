@@ -121,7 +121,7 @@ def load_yaml_config(config_path: Path) -> Dict[str, Any]:
         print("ERROR: Configuration file not found")
         print(f"{'='*60}")
         print(f"File: {config_path}")
-        print(f"\nRun: cp config.yaml.defaults config.yaml")
+        print(f"\nRun: cp config.yaml.sample config.yaml")
         print(f"{'='*60}\n")
         sys.exit(1)
     except Exception as e:
@@ -5661,7 +5661,7 @@ Examples:
     )
     
     config_path = Path(args.config)
-    defaults_path = config_path.parent / "config.yaml.defaults"
+    defaults_path = config_path.parent / "config.yaml.sample"
     
     created_new_config = False
     if not config_path.exists():

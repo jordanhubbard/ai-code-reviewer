@@ -29,7 +29,7 @@ make config-init
 
 **Or manual:**
 ```bash
-cp config.yaml.defaults config.yaml
+cp config.yaml.sample config.yaml
 vim config.yaml
 ```
 

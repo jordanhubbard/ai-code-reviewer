@@ -108,7 +108,7 @@ def main() -> int:
     os.chdir(project_root)
 
     config_path = project_root / "config.yaml"
-    defaults_path = project_root / "config.yaml.defaults"
+    defaults_path = project_root / "config.yaml.sample"
 
     source_root, ops_log_dir = read_config_values(config_path)
     if source_root is None and defaults_path.exists():
@@ -139,7 +139,7 @@ def main() -> int:
             if exit_code != 0:
                 return exit_code
         elif defaults_path.exists() and defaults_path.stat().st_mtime > config_path.stat().st_mtime:
-            echo(log_file, "*** config.yaml.defaults is newer than config.yaml")
+            echo(log_file, "*** config.yaml.sample is newer than config.yaml")
             exit_code = run_command("config-update", ["make", "config-update"], log_file)
             if exit_code != 0:
                 return exit_code

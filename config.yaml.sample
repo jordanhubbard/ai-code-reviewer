@@ -1,4 +1,4 @@
-# Angry AI Configuration - DEFAULT TEMPLATE
+# Angry AI Configuration - SAMPLE
 # Copy this file to config.yaml and edit with your settings
 #
 # Generic AI code reviewer with build validation
@@ -8,8 +8,8 @@
 # LLM Configuration
 # =============================================================================
 # One or more OpenAI-compatible LLM providers.  Any server that exposes
-# /v1/chat/completions works: vLLM, TokenHub, OpenAI, Ollama (with
-# OpenAI-compat mode), llama.cpp server, etc.
+# /v1/chat/completions works: vLLM, OpenAI, Ollama (with OpenAI-compat
+# mode), llama.cpp server, etc.
 #
 # Providers are tried in order; the first reachable one is used.
 # Each provider needs a URL and optionally an API key.
@@ -26,14 +26,12 @@ llm:
   # they act as failover — the first healthy provider handles requests.
   #
   # Environment variable overrides (applied to *first* provider):
-  #   LLM_URL=http://my-server:8000        (or legacy TOKENHUB_URL)
-  #   LLM_API_KEY=sk-...                   (or legacy TOKENHUB_API_KEY)
+  #   LLM_URL=http://my-server:8000
+  #   LLM_API_KEY=sk-...
   #
   # Examples:
   #   providers:
   #     - url: "http://localhost:8000"             # local vLLM, no key
-  #     - url: "http://tokenhub:8090"
-  #       api_key: "tokenhub_abc123"               # TokenHub with key
   #     - url: "https://api.openai.com"
   #       api_key: "sk-..."                        # OpenAI fallback
   #
