@@ -25,10 +25,7 @@ LLM_API_KEY?=
 _CFG_LLM_URL != if [ -n "$$LLM_URL" ]; then \
     echo "$$LLM_URL"; \
 elif [ -f config.yaml ]; then \
-    $(PYTHON) -c "\
-import yaml;d=yaml.safe_load(open('config.yaml'));\
-provs=(d.get('llm')or{}).get('providers')or[];\
-print(provs[0]['url'] if provs else 'http://localhost:8090')" 2>/dev/null \
+    $(PYTHON) -c "import yaml;d=yaml.safe_load(open('config.yaml'));provs=(d.get('llm')or{}).get('providers')or[];print(provs[0]['url'] if provs else 'http://localhost:8090')" 2>/dev/null \
     || echo http://localhost:8090; \
 else \
     echo http://localhost:8090; \
