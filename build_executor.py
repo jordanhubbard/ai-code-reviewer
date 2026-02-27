@@ -47,6 +47,17 @@ class BuildResult:
     raw_output: str = ""
     truncated: bool = False
     
+    def __post_init__(self):
+        """Ensure consistency between return code and success status."""
+        # Handle potential string return codes
+        try:
+            self.return_code = int(self.return_code)
+        except (ValueError, TypeError):
+            pass
+
+        if self.return_code == 0:
+            self.success = True
+
     @property
     def error_count(self) -> int:
         return len(self.errors)
