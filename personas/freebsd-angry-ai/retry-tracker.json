@@ -42,5 +42,433 @@
   "sbin/ipf/ipmon": {
     "attempts": 1,
     "last_attempt": "2026-02-04T00:55:41.424776"
+  },
+  "usr.bin/c99": {
+    "attempts": 1,
+    "last_attempt": "2026-02-26T21:12:32.520242"
+  },
+  "usr.bin/caesar": {
+    "attempts": 1,
+    "last_attempt": "2026-02-26T23:26:03.056902"
+  },
+  "usr.bin/calendar": {
+    "attempts": 3,
+    "last_attempt": "2026-02-27T01:42:58.441242"
+  },
+  "usr.bin/calendar/tests": {
+    "attempts": 2,
+    "last_attempt": "2026-02-27T03:28:45.127374"
+  },
+  "usr.bin/cap_mkdb": {
+    "attempts": 1,
+    "last_attempt": "2026-02-27T04:17:30.024222"
+  },
+  "usr.bin/chat": {
+    "attempts": 3,
+    "last_attempt": "2026-02-27T07:19:36.443541"
+  },
+  "usr.bin/chpass": {
+    "attempts": 1,
+    "last_attempt": "2026-02-27T08:59:35.301851"
+  },
+  "usr.bin/cksum": {
+    "attempts": 1,
+    "last_attempt": "2026-02-27T09:39:51.870743"
+  },
+  "usr.bin/clang": {
+    "attempts": 1,
+    "last_attempt": "2026-02-27T10:15:56.994659"
+  },
+  "usr.bin/clang/bugpoint": {
+    "attempts": 2,
+    "last_attempt": "2026-02-27T10:40:20.764540"
+  },
+  "usr.bin/clang/clang": {
+    "attempts": 1,
+    "last_attempt": "2026-02-27T11:07:56.286442"
+  },
+  "usr.bin/clang/clang-format": {
+    "attempts": 1,
+    "last_attempt": "2026-02-27T11:27:16.307671"
+  },
+  "usr.bin/clang/clang-scan-deps": {
+    "attempts": 1,
+    "last_attempt": "2026-02-27T12:10:28.003066"
+  },
+  "usr.bin/clang/clang-tblgen": {
+    "attempts": 1,
+    "last_attempt": "2026-02-27T12:40:09.498578"
+  },
+  "usr.bin/clang/llc": {
+    "attempts": 1,
+    "last_attempt": "2026-02-27T12:49:35.698131"
+  },
+  "usr.bin/clang/lld": {
+    "attempts": 1,
+    "last_attempt": "2026-02-27T13:08:11.848612"
+  },
+  "usr.bin/clang/lldb": {
+    "attempts": 1,
+    "last_attempt": "2026-02-27T13:33:43.747284"
+  },
+  "usr.bin/clang/lldb-server": {
+    "attempts": 1,
+    "last_attempt": "2026-02-27T13:50:39.576020"
+  },
+  "usr.bin/clang/lldb-tblgen": {
+    "attempts": 1,
+    "last_attempt": "2026-02-27T14:20:26.863853"
+  },
+  "usr.bin/clang/lli": {
+    "attempts": 1,
+    "last_attempt": "2026-02-27T14:34:49.111453"
+  },
+  "usr.bin/clang/llvm-ar": {
+    "attempts": 1,
+    "last_attempt": "2026-02-27T15:03:05.290937"
+  },
+  "usr.bin/clang/llvm-as": {
+    "attempts": 1,
+    "last_attempt": "2026-02-27T16:05:54.025467"
+  },
+  "usr.bin/clang/llvm-bcanalyzer": {
+    "attempts": 1,
+    "last_attempt": "2026-02-27T16:39:31.610382"
+  },
+  "usr.bin/clang/llvm-cov": {
+    "attempts": 1,
+    "last_attempt": "2026-02-27T17:27:58.571022"
+  },
+  "usr.bin/clang/llvm-cxxdump": {
+    "attempts": 1,
+    "last_attempt": "2026-02-27T17:46:22.141408"
+  },
+  "usr.bin/clang/llvm-cxxfilt": {
+    "attempts": 1,
+    "last_attempt": "2026-02-27T18:16:10.614145"
+  },
+  "usr.bin/clang/llvm-diff": {
+    "attempts": 1,
+    "last_attempt": "2026-02-27T18:34:22.395507"
+  },
+  "usr.bin/clang/llvm-dis": {
+    "attempts": 1,
+    "last_attempt": "2026-02-27T19:15:39.913886"
+  },
+  "usr.bin/clang/llvm-dwarfdump": {
+    "attempts": 1,
+    "last_attempt": "2026-02-27T19:23:27.070560"
+  },
+  "usr.bin/clang/llvm-dwarfutil": {
+    "attempts": 1,
+    "last_attempt": "2026-02-27T20:24:41.031768"
+  },
+  "usr.bin/clang/llvm-dwp": {
+    "attempts": 1,
+    "last_attempt": "2026-02-27T20:53:39.861254"
+  },
+  "usr.bin/clang/llvm-extract": {
+    "attempts": 1,
+    "last_attempt": "2026-02-27T21:24:56.063670"
+  },
+  "usr.bin/clang/llvm-link": {
+    "attempts": 1,
+    "last_attempt": "2026-02-27T21:39:36.695462"
+  },
+  "usr.bin/clang/llvm-lto": {
+    "attempts": 1,
+    "last_attempt": "2026-02-27T21:59:20.533372"
+  },
+  "usr.bin/clang/llvm-lto2": {
+    "attempts": 1,
+    "last_attempt": "2026-02-27T22:08:18.957920"
+  },
+  "usr.bin/clang/llvm-mc": {
+    "attempts": 1,
+    "last_attempt": "2026-02-27T22:27:04.535620"
+  },
+  "usr.bin/clang/llvm-mca": {
+    "attempts": 1,
+    "last_attempt": "2026-02-27T22:36:04.503654"
+  },
+  "usr.bin/clang/llvm-min-tblgen": {
+    "attempts": 1,
+    "last_attempt": "2026-02-27T22:40:38.251182"
+  },
+  "usr.bin/clang/llvm-modextract": {
+    "attempts": 1,
+    "last_attempt": "2026-02-27T22:45:35.256006"
+  },
+  "usr.bin/clang/llvm-nm": {
+    "attempts": 1,
+    "last_attempt": "2026-02-27T22:50:26.052803"
+  },
+  "usr.bin/clang/llvm-objcopy": {
+    "attempts": 1,
+    "last_attempt": "2026-02-27T22:55:59.909363"
+  },
+  "usr.bin/clang/llvm-objdump": {
+    "attempts": 1,
+    "last_attempt": "2026-02-27T23:01:37.034492"
+  },
+  "usr.bin/clang/llvm-pdbutil": {
+    "attempts": 1,
+    "last_attempt": "2026-02-27T23:07:14.706176"
+  },
+  "usr.bin/clang/llvm-profdata": {
+    "attempts": 1,
+    "last_attempt": "2026-02-27T23:12:22.820774"
+  },
+  "usr.bin/clang/llvm-readobj": {
+    "attempts": 1,
+    "last_attempt": "2026-02-27T23:18:01.448134"
+  },
+  "usr.bin/clang/llvm-rtdyld": {
+    "attempts": 1,
+    "last_attempt": "2026-02-27T23:24:13.671449"
+  },
+  "usr.bin/clang/llvm-size": {
+    "attempts": 1,
+    "last_attempt": "2026-02-27T23:29:13.118236"
+  },
+  "usr.bin/clang/llvm-strings": {
+    "attempts": 1,
+    "last_attempt": "2026-02-27T23:35:13.450558"
+  },
+  "usr.bin/clang/llvm-symbolizer": {
+    "attempts": 1,
+    "last_attempt": "2026-02-27T23:40:16.773873"
+  },
+  "usr.bin/clang/llvm-tblgen": {
+    "attempts": 1,
+    "last_attempt": "2026-02-27T23:46:30.375211"
+  },
+  "usr.bin/clang/llvm-xray": {
+    "attempts": 1,
+    "last_attempt": "2026-02-27T23:52:49.247737"
+  },
+  "usr.bin/clang/opt": {
+    "attempts": 1,
+    "last_attempt": "2026-02-27T23:59:05.893340"
+  },
+  "usr.bin/cmp": {
+    "attempts": 1,
+    "last_attempt": "2026-02-28T00:05:20.407913"
+  },
+  "usr.bin/cmp/tests": {
+    "attempts": 1,
+    "last_attempt": "2026-02-28T00:12:15.936326"
+  },
+  "usr.bin/col": {
+    "attempts": 1,
+    "last_attempt": "2026-02-28T00:19:02.661183"
+  },
+  "usr.bin/col/tests": {
+    "attempts": 1,
+    "last_attempt": "2026-02-28T00:39:20.612784"
+  },
+  "usr.bin/colrm": {
+    "attempts": 1,
+    "last_attempt": "2026-02-28T00:46:12.677937"
+  },
+  "usr.bin/column": {
+    "attempts": 1,
+    "last_attempt": "2026-02-28T00:54:06.666186"
+  },
+  "usr.bin/column/tests": {
+    "attempts": 1,
+    "last_attempt": "2026-02-28T01:01:58.049256"
+  },
+  "usr.bin/comm": {
+    "attempts": 1,
+    "last_attempt": "2026-02-28T01:08:44.968252"
+  },
+  "usr.bin/comm/tests": {
+    "attempts": 1,
+    "last_attempt": "2026-02-28T01:17:11.422742"
+  },
+  "usr.bin/command": {
+    "attempts": 1,
+    "last_attempt": "2026-02-28T01:24:25.449886"
+  },
+  "usr.bin/compile_et": {
+    "attempts": 1,
+    "last_attempt": "2026-02-28T01:31:08.612745"
+  },
+  "usr.bin/compress": {
+    "attempts": 1,
+    "last_attempt": "2026-02-28T01:36:30.526200"
+  },
+  "usr.bin/compress/doc": {
+    "attempts": 1,
+    "last_attempt": "2026-02-28T01:55:37.156195"
+  },
+  "usr.bin/compress/tests": {
+    "attempts": 1,
+    "last_attempt": "2026-02-28T02:01:30.231349"
+  },
+  "usr.bin/cpio": {
+    "attempts": 1,
+    "last_attempt": "2026-02-28T02:08:15.632605"
+  },
+  "usr.bin/cpio/tests": {
+    "attempts": 1,
+    "last_attempt": "2026-02-28T02:14:03.084414"
+  },
+  "usr.bin/csplit": {
+    "attempts": 1,
+    "last_attempt": "2026-02-28T02:20:50.223589"
+  },
+  "usr.bin/csplit/tests": {
+    "attempts": 1,
+    "last_attempt": "2026-02-28T02:41:32.173163"
+  },
+  "usr.bin/ctags": {
+    "attempts": 2,
+    "last_attempt": "2026-02-28T03:43:56.460606"
+  },
+  "usr.bin/ctlstat": {
+    "attempts": 3,
+    "last_attempt": "2026-02-28T06:15:34.942131"
+  },
+  "usr.bin/cut": {
+    "attempts": 1,
+    "last_attempt": "2026-02-28T07:09:13.174032"
+  },
+  "usr.bin/cut/tests": {
+    "attempts": 2,
+    "last_attempt": "2026-02-28T08:56:00.719269"
+  },
+  "usr.bin/cxxfilt": {
+    "attempts": 2,
+    "last_attempt": "2026-02-28T09:47:55.710731"
+  },
+  "usr.bin/diff": {
+    "attempts": 2,
+    "last_attempt": "2026-02-28T11:01:42.399676"
+  },
+  "usr.bin/diff/tests": {
+    "attempts": 3,
+    "last_attempt": "2026-02-28T14:36:17.873974"
+  },
+  "usr.bin/diff3": {
+    "attempts": 3,
+    "last_attempt": "2026-02-28T17:32:08.540265"
+  },
+  "usr.bin/diff3/tests": {
+    "attempts": 2,
+    "last_attempt": "2026-02-28T19:11:27.283869"
+  },
+  "usr.bin/dirname": {
+    "attempts": 1,
+    "last_attempt": "2026-02-28T19:28:29.407480"
+  },
+  "usr.bin/dirname/tests": {
+    "attempts": 1,
+    "last_attempt": "2026-02-28T20:20:36.466296"
+  },
+  "usr.bin/dpv": {
+    "attempts": 1,
+    "last_attempt": "2026-02-28T20:44:26.170087"
+  },
+  "usr.bin/drill": {
+    "attempts": 1,
+    "last_attempt": "2026-02-28T21:32:08.345946"
+  },
+  "usr.bin/dtc": {
+    "attempts": 3,
+    "last_attempt": "2026-02-28T23:17:21.546673"
+  },
+  "usr.bin/du": {
+    "attempts": 1,
+    "last_attempt": "2026-02-28T23:57:00.684043"
+  },
+  "usr.bin/du/tests": {
+    "attempts": 1,
+    "last_attempt": "2026-03-01T01:09:14.764195"
+  },
+  "usr.bin/ee": {
+    "attempts": 1,
+    "last_attempt": "2026-03-01T01:30:53.333504"
+  },
+  "usr.bin/elfcopy": {
+    "attempts": 1,
+    "last_attempt": "2026-03-01T01:46:07.808218"
+  },
+  "usr.bin/elfctl": {
+    "attempts": 1,
+    "last_attempt": "2026-03-01T03:22:48.904388"
+  },
+  "usr.bin/elfdump": {
+    "attempts": 3,
+    "last_attempt": "2026-03-01T06:00:11.482248"
+  },
+  "usr.bin/enigma": {
+    "attempts": 1,
+    "last_attempt": "2026-03-01T06:31:34.025040"
+  },
+  "usr.bin/env": {
+    "attempts": 3,
+    "last_attempt": "2026-03-01T08:37:29.950988"
+  },
+  "usr.bin/env/tests": {
+    "attempts": 1,
+    "last_attempt": "2026-03-01T09:30:16.328937"
+  },
+  "usr.bin/etdump": {
+    "attempts": 2,
+    "last_attempt": "2026-03-01T10:42:18.892992"
+  },
+  "usr.bin/expand": {
+    "attempts": 1,
+    "last_attempt": "2026-03-01T11:18:10.041895"
+  },
+  "usr.bin/factor": {
+    "attempts": 1,
+    "last_attempt": "2026-03-01T11:51:06.705841"
+  },
+  "usr.bin/factor/tests": {
+    "attempts": 1,
+    "last_attempt": "2026-03-01T12:23:47.180481"
+  },
+  "usr.bin/false": {
+    "attempts": 1,
+    "last_attempt": "2026-03-01T12:40:40.667025"
+  },
+  "usr.bin/fetch": {
+    "attempts": 3,
+    "last_attempt": "2026-03-01T14:18:16.305041"
+  },
+  "usr.bin/file": {
+    "attempts": 1,
+    "last_attempt": "2026-03-01T14:55:31.125718"
+  },
+  "usr.bin/file/tests": {
+    "attempts": 1,
+    "last_attempt": "2026-03-01T15:42:58.840366"
+  },
+  "usr.bin/file2c": {
+    "attempts": 1,
+    "last_attempt": "2026-03-01T16:25:53.549248"
+  },
+  "usr.bin/file2c/tests": {
+    "attempts": 1,
+    "last_attempt": "2026-03-01T19:27:34.836909"
+  },
+  "usr.bin/find": {
+    "attempts": 3,
+    "last_attempt": "2026-03-01T22:05:43.550215"
+  },
+  "usr.bin/find/tests": {
+    "attempts": 1,
+    "last_attempt": "2026-03-01T22:24:25.605189"
+  },
+  "usr.bin/finger": {
+    "attempts": 2,
+    "last_attempt": "2026-03-01T23:57:10.239092"
+  },
+  "usr.bin/fmt": {
+    "attempts": 2,
+    "last_attempt": "2026-03-02T00:50:29.899505"
   }
 }
