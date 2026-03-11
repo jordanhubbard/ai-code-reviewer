@@ -33,3 +33,7 @@ personas/*/logs/
 # Vibe MCP state
 .vibe/
 
+
+# Dolt database files (added by bd init)
+.dolt/
+*.db
