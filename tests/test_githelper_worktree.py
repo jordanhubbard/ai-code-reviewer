@@ -44,7 +44,7 @@ class GitHelperWorktreeTests(unittest.TestCase):
             "R  new-name.c\0"
             "old-name.c\0"
         )
-        with patch.object(git, "_run", return_value=(0, sample)):
+        with patch.object(git, "_run_raw", return_value=(0, sample)):
             result = git.changed_files_list(include_untracked=True)
 
         self.assertEqual(

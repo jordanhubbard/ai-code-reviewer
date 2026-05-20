@@ -604,6 +604,12 @@ class GitHelper:
             result = subprocess.run(cmd)
             return result.returncode, ""
 
+    def _run_raw(self, args: List[str]) -> Tuple[int, str]:
+        """Run a git command and return unstripped output."""
+        cmd = ['git', '-C', str(self.repo_root)] + args
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        return result.returncode, result.stdout + result.stderr
+
     def _path_exists(self, relative: str) -> bool:
         if not self._git_dir.exists():
             return False
@@ -970,7 +976,7 @@ class GitHelper:
     def changed_files_list(self, include_untracked: bool = False) -> List[str]:
         """Get list of changed files."""
         if include_untracked:
-            code, output = self._run(['status', '--porcelain', '-z'])
+            code, output = self._run_raw(['status', '--porcelain', '-z'])
             if code != 0 or not output:
                 return []
             return self._parse_status_porcelain_z(output)
@@ -3940,11 +3946,14 @@ Output ONLY the lesson entry, nothing else."""
         print("*** Pushed successfully!")
         return True, output
 
-    def _commit_tool_metadata_after_success(
-        self,
-        source_commit_hash: str,
-    ) -> Optional[str]:
-        """Commit tool metadata written after the main source commit."""
+    def _dirty_non_metadata_paths(self) -> List[str]:
+        return [
+            path for path in self.git.changed_files_list(include_untracked=True)
+            if not is_tool_metadata_path(path)
+        ]
+
+    def _commit_tool_metadata_changes(self, message: str) -> Optional[str]:
+        """Commit currently dirty reviewer-managed metadata paths."""
         changed_paths = self.git.changed_files_list(include_untracked=True)
         metadata_paths = [
             path for path in changed_paths
@@ -3984,10 +3993,6 @@ Output ONLY the lesson entry, nothing else."""
             )
             return None
 
-        message = (
-            f"metadata: record {self.workflow['noun']} completion\n\n"
-            f"Source commit: {source_commit_hash}"
-        )
         success, output = self.git.commit(message)
         if not success:
             print(f"*** Warning: metadata commit failed: {output}")
@@ -4008,6 +4013,25 @@ Output ONLY the lesson entry, nothing else."""
         metadata_hash = metadata_hash.strip()[:12]
         print(f"*** Metadata committed and pushed: {metadata_hash}")
         return metadata_hash
+
+    def _commit_tool_metadata_after_success(
+        self,
+        source_commit_hash: str,
+    ) -> Optional[str]:
+        """Commit tool metadata written after the main source commit."""
+        message = (
+            f"metadata: record {self.workflow['noun']} completion\n\n"
+            f"Source commit: {source_commit_hash}"
+        )
+        return self._commit_tool_metadata_changes(message)
+
+    def _commit_final_session_metadata(self) -> Optional[str]:
+        """Commit metrics and session-end metadata written at shutdown."""
+        message = (
+            f"metadata: record {self.workflow['noun']} session end\n\n"
+            f"Session: {self.session.session_id}"
+        )
+        return self._commit_tool_metadata_changes(message)
     
     def _get_action_hash(self, action: Dict[str, Any]) -> str:
         """Generate a hash representing the action for loop detection."""
@@ -5795,8 +5819,10 @@ TO FIX:
                 self.history = preserved + recent
                 logger.info(f"Pruned history to {len(self.history)} messages (~{sum(len(m.get('content', '')) for m in self.history) // 4} tokens)")
         
-        # ALWAYS clean up dirty state before ending
-        self._cleanup_dirty_state()
+        # Clean up real source edits before ending, but keep generated metadata
+        # so session metrics and logs can be committed deliberately below.
+        if self.session.pending_changes or self._dirty_non_metadata_paths():
+            self._cleanup_dirty_state()
         
         # Update and save persona metrics
         elapsed_seconds = (datetime.datetime.now() - self.session.start_time).total_seconds()
@@ -5810,6 +5836,10 @@ TO FIX:
             files_fixed=self.session.files_fixed,
             build_failures=self.session.build_failures,
         )
+
+        final_metadata_commit = self._commit_final_session_metadata()
+        if final_metadata_commit:
+            print(f"*** Final session metadata committed: {final_metadata_commit}")
 
         # Final status
         print("\n" + "=" * 60)
