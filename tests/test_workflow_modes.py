@@ -33,6 +33,7 @@ def _make_source_tree(root: Path) -> None:
 
 def _make_rust_source_tree(root: Path) -> None:
     (root / "src").mkdir(parents=True)
+    (root / "tests").mkdir(parents=True)
     (root / "Cargo.toml").write_text(
         "[package]\n"
         "name = \"rewrite-smoke\"\n"
@@ -40,6 +41,7 @@ def _make_rust_source_tree(root: Path) -> None:
         "edition = \"2021\"\n"
     )
     (root / "src" / "main.rs").write_text("fn main() { println!(\"hello\"); }\n")
+    (root / "tests" / "cli.rs").write_text("#[test]\nfn smoke() {}\n")
 
 
 class WorkflowModeTests(unittest.TestCase):
@@ -67,6 +69,23 @@ class WorkflowModeTests(unittest.TestCase):
             self.assertTrue(valid, error)
             self.assertIn("src", index.entries)
             self.assertEqual(index.entries["src"].total_lines, 1)
+            self.assertEqual(index.entries["src"].unit_kind, "rust-binary")
+            self.assertEqual(index.entries["src"].stage, "application")
+            self.assertEqual(index.entries["src"].build_command, "cargo test")
+            self.assertIn("Cargo.toml", index.entries["src"].files)
+            self.assertIn("tests/cli.rs", index.entries["src"].files)
+            self.assertEqual(index.entries["tests"].unit_kind, "rust-tests")
+            self.assertEqual(index.entries["tests"].stage, "validation")
+            self.assertEqual(index.entries["tests"].depends_on, ["src"])
+            self.assertEqual(index.get_next_pending(), "src")
+
+            content = index.index_path.read_text()
+            self.assertIn("## Stage: application", content)
+            self.assertIn("<!-- unit:", content)
+
+            loaded = generate_index(root, force_rebuild=False, workflow_mode="rewrite")
+            self.assertEqual(loaded.entries["src"].unit_kind, "rust-binary")
+            self.assertEqual(loaded.entries["tests"].depends_on, ["src"])
 
     def test_rewrite_loop_uses_rewrite_prompt_and_summary(self) -> None:
         persona_dir = Path(__file__).resolve().parents[1] / "personas" / "friendly-mentor"
@@ -119,7 +138,12 @@ class WorkflowModeTests(unittest.TestCase):
                 result = loop._execute_action({"action": "SET_SCOPE", "directory": "bin/foo"})
 
             self.assertIn("Now rewriting bin/foo", result)
+            self.assertIn("WORK UNIT:", result)
+            self.assertIn("Kind: freebsd-command", result)
+            self.assertIn("Stage: application", result)
+            self.assertIn("Build command: make -C bin/foo", result)
             self.assertIn("FILES TO REWRITE", result)
+            self.assertEqual(loop._current_build_command(), "make -C bin/foo")
 
 
 if __name__ == "__main__":

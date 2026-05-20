@@ -2044,7 +2044,8 @@ class ReviewLoop:
             force_rebuild=force_rebuild,
             workflow_mode=self.workflow_mode,
         )
-        print(f"    Found {len(self.index.entries)} directories for {self.workflow['noun']}")
+        unit_label = "work units" if self.workflow_mode == "rewrite" else "directories"
+        print(f"    Found {len(self.index.entries)} {unit_label} for {self.workflow['noun']}")
         self.beads = self._init_beads_manager()
         
         # Conversation history
@@ -2384,6 +2385,35 @@ Success criteria:
             "Strategy: Make small, buildable fixes within one directory at a time.\n"
         )
 
+    def _format_rewrite_work_unit_context(self, entry) -> str:
+        """Return concise work-unit metadata for the active rewrite scope."""
+        if self.workflow_mode != "rewrite" or entry is None:
+            return ""
+
+        lines = [
+            "WORK UNIT:",
+            f"  Kind: {entry.unit_kind}",
+            f"  Stage: {entry.stage}",
+        ]
+        if entry.depends_on:
+            lines.append(f"  Depends on: {', '.join(entry.depends_on)}")
+        else:
+            lines.append("  Depends on: (none)")
+        if entry.build_command:
+            lines.append(f"  Build command: {entry.build_command}")
+        if entry.test_command and entry.test_command != entry.build_command:
+            lines.append(f"  Test command: {entry.test_command}")
+        if entry.install_command:
+            lines.append(f"  Install command: {entry.install_command}")
+        if entry.files:
+            lines.append("  Related files:")
+            for file_path in entry.files[:20]:
+                lines.append(f"    - {file_path}")
+            if len(entry.files) > 20:
+                lines.append(f"    ... and {len(entry.files) - 20} more")
+
+        return "\n".join(lines) + "\n\n"
+
     def _init_conversation(self) -> None:
         """Initialize the conversation with system prompt, bootstrap, lessons, and index."""
         system_prompt = self._build_system_prompt()
@@ -2610,9 +2640,14 @@ Respond with analysis followed by a single ACTION line.
         rewrite_context = self._rewrite_prompt_context()
         return f"""You are an autonomous code rewriting AI for source code.
 
-IMPORTANT: Work ONE DIRECTORY AT A TIME. Each directory (bin/cpuset/, sbin/mount/, etc.)
-is a coherent rewrite unit with its own build context. Rewrite ALL relevant files in a
-directory before moving on.
+IMPORTANT: Work ONE REWRITE UNIT AT A TIME. Each scope may be a directory,
+library, command, test unit, package, or bootstrap component inferred from the
+source tree. Rewrite ALL relevant files for that unit before moving on.
+
+The rewrite index is a bottom-up work-unit graph. Prefer foundation units first,
+then bootstrap components, then applications, then validation/integration units.
+Each unit may include related files outside its directory, dependencies, and a
+unit-specific build/test command.
 
 A rewrite is broader than translation. Translation to another language is one possible
 rewrite, but the workflow also covers behavior-preserving refactors, API migrations,
@@ -2698,18 +2733,18 @@ SOURCE TREE STRUCTURE:
 - Other projects should be followed according to their local build and module layout
 
 REWRITE WORKFLOW:
-1. Pick a directory that is not already marked complete in the rewrite index
-2. SET_SCOPE to that directory
+1. Pick a work unit that is not already marked complete in the rewrite index
+2. SET_SCOPE to that unit's directory key
 3. LIST_DIR to understand module shape
-4. READ the files needed to understand current behavior and interfaces
+4. READ the files needed to understand current behavior and interfaces, including related files listed in the unit metadata
 5. Decide the smallest coherent rewrite increment for the configured objective
 6. Use EDIT_FILE for existing files and WRITE_FILE for new replacement files
 7. Preserve behavior unless the rewrite objective explicitly requires a change
 8. Update necessary build glue, tests, and documentation within scope
-9. BUILD after the directory rewrite is complete
+9. BUILD after the unit rewrite is complete
 10. If build fails: fix errors, rebuild
-11. If build succeeds: directory is done, pick next directory
-12. HALT only when all target directories are complete or no safe progress remains
+11. If build succeeds: unit is done, pick next unit
+12. HALT only when all target units are complete or no safe progress remains
 
 RULES:
 1. SET_SCOPE before editing any files
@@ -3626,6 +3661,14 @@ Output ONLY the lesson entry, nothing else."""
         except Exception as e:
             logger.warning(f"Failed to update review summary: {e}")
     
+    def _current_build_command(self) -> str:
+        """Return the validation command for the active scope."""
+        if self.workflow_mode == "rewrite" and self.session.current_directory:
+            entry = self.index.entries.get(self.session.current_directory)
+            if entry and entry.build_command:
+                return entry.build_command
+        return self.builder.config.build_command
+
     def _run_build_with_live_output(self) -> 'BuildResult':
         """
         Run the build command with LIVE output to terminal.
@@ -3633,7 +3676,7 @@ Output ONLY the lesson entry, nothing else."""
         from build_executor import BuildResult, CompilerError, ErrorParser
         import time
         
-        command = self.builder.config.build_command
+        command = self._current_build_command()
         source_root = self.builder.config.source_root
         
         build_timestamp = datetime.datetime.now().isoformat()
@@ -4033,10 +4076,13 @@ Output ONLY the lesson entry, nothing else."""
             
             result = f"SET_SCOPE_OK: Now {self.workflow['gerund']} {directory}\n\n"
             result += f"HIERARCHY:\n"
-            result += f"  Level 1: Source tree ({len(self.index.entries)} directories)\n"
+            unit_label = "work units" if self.workflow_mode == "rewrite" else "directories"
+            result += f"  Level 1: Source tree ({len(self.index.entries)} {unit_label})\n"
             result += f"  Level 2: {directory} ← YOU ARE HERE\n"
             result += f"  Level 3: {len(files_in_dir)} candidate files\n"
             result += f"  Level 4: Functions (auto-chunked for large files)\n\n"
+
+            result += self._format_rewrite_work_unit_context(self.index.entries.get(directory))
             
             if has_makefile:
                 result += f"✓ Directory has Makefile - valid source module\n\n"

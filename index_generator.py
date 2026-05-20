@@ -15,9 +15,11 @@ The index file contains:
 
 import os
 import subprocess
+import json
+import shlex
 from pathlib import Path
 from dataclasses import dataclass, field
-from typing import List, Dict, Optional, Iterator
+from typing import Any, List, Dict, Optional, Iterator
 from datetime import datetime
 import re
 
@@ -96,6 +98,17 @@ INDEX_ENTRY_PATTERN = re.compile(
     r'(?: - (\d{4}-\d{2}-\d{2}))?'
     r'(?: - (.+))?$'
 )
+UNIT_METADATA_PATTERN = re.compile(r'<!--\s*unit:\s*(\{.*\})\s*-->\s*$')
+
+REWRITE_STAGE_ORDER = {
+    "foundation": 0,
+    "bootstrap": 1,
+    "application": 2,
+    "validation": 3,
+    "integration": 4,
+    "kernel": 5,
+    "unknown": 99,
+}
 
 
 # ============================================================================
@@ -129,6 +142,13 @@ class DirectoryEntry:
     status: str = Status.PENDING # pending, current, done, skipped
     reviewed_date: Optional[str] = None
     notes: str = ""
+    unit_kind: str = "directory"
+    stage: str = "unknown"
+    depends_on: List[str] = field(default_factory=list)
+    files: List[str] = field(default_factory=list)
+    build_command: Optional[str] = None
+    test_command: Optional[str] = None
+    install_command: Optional[str] = None
 
 
 # File types considered "text" for review workflows
@@ -266,9 +286,11 @@ class ReviewIndex:
 
         if not scanned_known_layout or not self.entries:
             self._scan_directory(self.source_root, "", existing_status)
+
+        self._infer_rewrite_work_units()
         
         # Sort entries
-        self.entries = DirectoryEntryMap(dict(sorted(self.entries.items())))
+        self.entries = self._ordered_entries()
     
     def _scan_directory(self, path: Path, prefix: str,
                         existing_status: Dict) -> None:
@@ -393,6 +415,262 @@ class ReviewIndex:
         """Restore existing status from previous index."""
         if rel_path in existing_status:
             entry.status, entry.reviewed_date, entry.notes = existing_status[rel_path]
+
+    def ensure_rewrite_work_units(self) -> bool:
+        """Refresh inferred rewrite work-unit metadata for a loaded index."""
+        if self.workflow_mode != "rewrite":
+            return False
+
+        before = self._metadata_snapshot()
+        self._infer_rewrite_work_units()
+        self.entries = self._ordered_entries()
+        return before != self._metadata_snapshot()
+
+    def _metadata_snapshot(self) -> Dict[str, Any]:
+        """Return work-unit metadata for change detection."""
+        return {
+            "__order__": list(self.entries.keys()),
+            "entries": {
+                path: self._unit_metadata(entry)
+                for path, entry in self.entries.items()
+            },
+        }
+
+    def _infer_rewrite_work_units(self) -> None:
+        """Infer functional rewrite units from the source tree layout."""
+        if self.workflow_mode != "rewrite":
+            return
+
+        for entry in self.entries.values():
+            entry.files = self._candidate_files_for_entry(entry.path)
+            entry.unit_kind = "directory"
+            entry.stage = "unknown"
+            entry.depends_on = []
+            entry.build_command = None
+            entry.test_command = None
+            entry.install_command = None
+
+            if self._infer_rust_work_unit(entry):
+                continue
+            self._infer_makefile_work_unit(entry)
+
+    def _candidate_files_for_entry(self, rel_path: str) -> List[str]:
+        """Return direct source/build files that belong to a directory entry."""
+        directory = self.source_root / rel_path
+        files: List[str] = []
+        if not directory.is_dir():
+            return files
+
+        try:
+            for child in sorted(directory.iterdir()):
+                if not child.is_file() or child.name.startswith("."):
+                    continue
+                child_rel = str(child.relative_to(self.source_root))
+                if is_git_ignored(self.source_root, child_rel):
+                    continue
+                if self._is_file_reviewable(child, [], []):
+                    files.append(child_rel)
+        except PermissionError:
+            return files
+
+        return files
+
+    def _infer_rust_work_unit(self, entry: DirectoryEntry) -> bool:
+        """Infer Rust package/module/test work-unit metadata."""
+        directory = self.source_root / entry.path
+        cargo_root = self._find_cargo_root(directory)
+        if cargo_root is None:
+            return False
+
+        cargo_rel = self._rel_or_dot(cargo_root)
+        cargo_manifest = "Cargo.toml" if cargo_rel == "." else f"{cargo_rel}/Cargo.toml"
+        package_name = self._read_cargo_package_name(cargo_root / "Cargo.toml")
+        command = self._cargo_test_command(cargo_root, package_name)
+
+        entry.files = self._unique_paths([*entry.files, cargo_manifest])
+        entry.build_command = command
+        entry.test_command = command
+
+        parts = Path(entry.path).parts
+        direct_names = {Path(f).name for f in entry.files}
+        src_unit = self._rust_src_unit_for(cargo_root)
+
+        if parts and parts[-1] == "tests":
+            entry.unit_kind = "rust-tests"
+            entry.stage = "validation"
+            if src_unit and src_unit in self.entries and src_unit != entry.path:
+                entry.depends_on = [src_unit]
+            return True
+
+        if Path(entry.path).name == "src":
+            tests_dir = cargo_root / "tests"
+            if tests_dir.is_dir():
+                try:
+                    test_files = [
+                        str(p.relative_to(self.source_root))
+                        for p in sorted(tests_dir.glob("*.rs"))
+                        if p.is_file()
+                    ]
+                    entry.files = self._unique_paths([*entry.files, *test_files])
+                except ValueError:
+                    pass
+
+        has_lib = "lib.rs" in direct_names or (directory / "lib.rs").exists()
+        has_main = "main.rs" in direct_names or (directory / "main.rs").exists()
+
+        if has_lib and not has_main:
+            entry.unit_kind = "rust-library"
+            entry.stage = "foundation"
+        elif has_main or "bin" in parts:
+            entry.unit_kind = "rust-binary"
+            entry.stage = "application"
+            if src_unit and src_unit in self.entries and src_unit != entry.path:
+                entry.depends_on = [src_unit]
+        else:
+            entry.unit_kind = "rust-module"
+            entry.stage = "foundation"
+            if src_unit and src_unit in self.entries and src_unit != entry.path:
+                entry.depends_on = [src_unit]
+
+        return True
+
+    def _infer_makefile_work_unit(self, entry: DirectoryEntry) -> None:
+        """Infer FreeBSD/Makefile-oriented rewrite-unit metadata."""
+        directory = self.source_root / entry.path
+        has_makefile = (directory / "Makefile").exists() or (directory / "Makefile.inc").exists()
+        top = entry.path.split("/", 1)[0]
+
+        if top in {"include", "lib"}:
+            entry.stage = "foundation"
+            entry.unit_kind = "freebsd-library"
+        elif top in {"tools", "targets"}:
+            entry.stage = "bootstrap"
+            entry.unit_kind = "bootstrap-tool"
+        elif top in {"bin", "sbin", "usr.bin", "usr.sbin", "libexec"}:
+            entry.stage = "application"
+            entry.unit_kind = "freebsd-command"
+        elif top == "tests":
+            entry.stage = "validation"
+            entry.unit_kind = "freebsd-tests"
+        elif top == "sys":
+            entry.stage = "kernel"
+            entry.unit_kind = "freebsd-kernel"
+        else:
+            entry.stage = "integration"
+            entry.unit_kind = "makefile-module" if has_makefile else "directory"
+
+        if has_makefile:
+            entry.build_command = f"make -C {shlex.quote(entry.path)}"
+
+    def _find_cargo_root(self, directory: Path) -> Optional[Path]:
+        """Find the nearest Cargo.toml at or above a directory."""
+        current = directory
+        while True:
+            try:
+                current.relative_to(self.source_root)
+            except ValueError:
+                return None
+
+            if (current / "Cargo.toml").exists():
+                return current
+            if current == self.source_root:
+                return None
+            current = current.parent
+
+    def _rust_src_unit_for(self, cargo_root: Path) -> Optional[str]:
+        """Return the relative src unit path for a Cargo package if it exists."""
+        src_dir = cargo_root / "src"
+        if not src_dir.exists():
+            return None
+        return self._rel_or_dot(src_dir)
+
+    def _cargo_test_command(self, cargo_root: Path, package_name: Optional[str]) -> str:
+        """Build a Cargo command that validates a package-sized rewrite unit."""
+        if cargo_root == self.source_root:
+            return "cargo test"
+
+        root_manifest = self.source_root / "Cargo.toml"
+        if package_name and root_manifest.exists() and self._cargo_has_workspace(root_manifest):
+            return f"cargo test -p {shlex.quote(package_name)}"
+
+        manifest_rel = self._rel_or_dot(cargo_root / "Cargo.toml")
+        return f"cargo test --manifest-path {shlex.quote(manifest_rel)}"
+
+    @staticmethod
+    def _read_cargo_package_name(manifest: Path) -> Optional[str]:
+        """Extract package.name from Cargo.toml without requiring TOML dependencies."""
+        try:
+            text = manifest.read_text(encoding="utf-8")
+        except OSError:
+            return None
+
+        in_package = False
+        for raw_line in text.splitlines():
+            line = raw_line.split("#", 1)[0].strip()
+            if not line:
+                continue
+            if line.startswith("[") and line.endswith("]"):
+                in_package = line == "[package]"
+                continue
+            if in_package and line.startswith("name"):
+                match = re.match(r'name\s*=\s*["\']([^"\']+)["\']', line)
+                if match:
+                    return match.group(1)
+        return None
+
+    @staticmethod
+    def _cargo_has_workspace(manifest: Path) -> bool:
+        try:
+            text = manifest.read_text(encoding="utf-8")
+        except OSError:
+            return False
+        return bool(re.search(r"^\s*\[workspace\]\s*$", text, flags=re.MULTILINE))
+
+    def _rel_or_dot(self, path: Path) -> str:
+        rel = path.relative_to(self.source_root)
+        return "." if str(rel) == "." else rel.as_posix()
+
+    @staticmethod
+    def _unique_paths(paths: List[str]) -> List[str]:
+        seen = set()
+        result = []
+        for path in paths:
+            if not path or path in seen:
+                continue
+            seen.add(path)
+            result.append(path)
+        return result
+
+    def _ordered_entries(self) -> DirectoryEntryMap:
+        """Return entries in the order the workflow should process them."""
+        if self.workflow_mode != "rewrite":
+            return DirectoryEntryMap(dict(sorted(self.entries.items())))
+
+        remaining = dict(self.entries)
+        emitted = set()
+        ordered: Dict[str, DirectoryEntry] = {}
+
+        while remaining:
+            ready = [
+                (path, entry)
+                for path, entry in remaining.items()
+                if all(dep not in self.entries or dep in emitted for dep in entry.depends_on)
+            ]
+            if not ready:
+                ready = list(remaining.items())
+
+            path, entry = min(
+                ready,
+                key=lambda item: (
+                    REWRITE_STAGE_ORDER.get(item[1].stage, REWRITE_STAGE_ORDER["unknown"]),
+                    item[0],
+                ),
+            )
+            ordered[path] = entry
+            emitted.add(path)
+            del remaining[path]
+
+        return DirectoryEntryMap(ordered)
     
     def _load(self) -> None:
         """Load index from file."""
@@ -412,10 +690,19 @@ class ReviewIndex:
 
     def _parse_entries(self, content: str) -> None:
         """Parse all directory entries from index content."""
+        last_entry = None
         for line in content.split('\n'):
-            entry = self._parse_entry_line(line.strip())
+            stripped = line.strip()
+            entry = self._parse_entry_line(stripped)
             if entry:
                 self.entries[entry.path] = entry
+                last_entry = entry
+                continue
+
+            if last_entry:
+                metadata = self._parse_unit_metadata_line(stripped)
+                if metadata:
+                    self._apply_unit_metadata(last_entry, metadata)
 
     def _parse_entry_line(self, line: str) -> Optional[DirectoryEntry]:
         """Parse a single entry line into a DirectoryEntry object."""
@@ -435,6 +722,38 @@ class ReviewIndex:
             reviewed_date=date,
             notes=notes.strip() if notes else "",
         )
+
+    def _parse_unit_metadata_line(self, line: str) -> Optional[Dict[str, Any]]:
+        match = UNIT_METADATA_PATTERN.match(line)
+        if not match:
+            return None
+        try:
+            data = json.loads(match.group(1))
+        except json.JSONDecodeError:
+            return None
+        return data if isinstance(data, dict) else None
+
+    def _apply_unit_metadata(self, entry: DirectoryEntry, data: Dict[str, Any]) -> None:
+        entry.unit_kind = str(data.get("kind") or entry.unit_kind)
+        entry.stage = str(data.get("stage") or entry.stage)
+        entry.depends_on = self._string_list(data.get("depends_on"))
+        entry.files = self._string_list(data.get("files"))
+        entry.build_command = self._optional_string(data.get("build_command"))
+        entry.test_command = self._optional_string(data.get("test_command"))
+        entry.install_command = self._optional_string(data.get("install_command"))
+
+    @staticmethod
+    def _string_list(value: Any) -> List[str]:
+        if not isinstance(value, list):
+            return []
+        return [str(item) for item in value if item]
+
+    @staticmethod
+    def _optional_string(value: Any) -> Optional[str]:
+        if value is None:
+            return None
+        text = str(value).strip()
+        return text or None
     
     def save(self) -> None:
         """Save index to file."""
@@ -476,10 +795,11 @@ class ReviewIndex:
         done = sum(1 for e in self.entries.values() if e.status == Status.DONE)
         skipped = sum(1 for e in self.entries.values() if e.status == Status.SKIPPED)
         pending = total - done - skipped
+        unit_label = "work units" if self.workflow_mode == "rewrite" else "directories"
 
         return [
             "## Progress",
-            f"- Total directories: {total}",
+            f"- Total {unit_label}: {total}",
             f"- Completed: {done} ({100*done//total if total else 0}%)",
             f"- Skipped: {skipped}",
             f"- Remaining: {pending}",
@@ -498,6 +818,9 @@ class ReviewIndex:
 
     def _format_directory_groups(self) -> List[str]:
         """Format all directory group sections."""
+        if self.workflow_mode == "rewrite":
+            return self._format_rewrite_work_unit_groups()
+
         lines = []
         grouped_paths = set()
         for top_dir in self.TOP_DIRS:
@@ -524,9 +847,37 @@ class ReviewIndex:
         ]
 
         for path, entry in sorted(group.items()):
-            lines.append(self._format_entry_line(entry))
+            lines.extend(self._format_entry_block(entry))
 
         lines.append("")
+        return lines
+
+    def _format_rewrite_work_unit_groups(self) -> List[str]:
+        """Format rewrite entries by inferred bottom-up stages."""
+        lines = []
+        stages = sorted(
+            {entry.stage for entry in self.entries.values()},
+            key=lambda stage: (REWRITE_STAGE_ORDER.get(stage, REWRITE_STAGE_ORDER["unknown"]), stage),
+        )
+
+        for stage in stages:
+            group = {k: v for k, v in self.entries.items() if v.stage == stage}
+            group_done = sum(1 for e in group.values() if e.status == Status.DONE)
+            lines.extend([
+                f"## Stage: {stage} ({group_done}/{len(group)} done)",
+                "",
+            ])
+            for entry in group.values():
+                lines.extend(self._format_entry_block(entry))
+            lines.append("")
+
+        return lines
+
+    def _format_entry_block(self, entry: DirectoryEntry) -> List[str]:
+        lines = [self._format_entry_line(entry)]
+        if self.workflow_mode == "rewrite":
+            metadata = json.dumps(self._unit_metadata(entry), sort_keys=True)
+            lines.append(f"  <!-- unit: {metadata} -->")
         return lines
 
     def _format_entry_line(self, entry: DirectoryEntry) -> str:
@@ -540,6 +891,23 @@ class ReviewIndex:
             line += f" - {entry.notes}"
 
         return line
+
+    def _unit_metadata(self, entry: DirectoryEntry) -> Dict[str, Any]:
+        data: Dict[str, Any] = {
+            "kind": entry.unit_kind,
+            "stage": entry.stage,
+        }
+        if entry.depends_on:
+            data["depends_on"] = entry.depends_on
+        if entry.files:
+            data["files"] = entry.files
+        if entry.build_command:
+            data["build_command"] = entry.build_command
+        if entry.test_command:
+            data["test_command"] = entry.test_command
+        if entry.install_command:
+            data["install_command"] = entry.install_command
+        return data
 
     def _should_write_file(self, new_content: str) -> bool:
         """Determine if the file should be written based on content changes."""
@@ -610,10 +978,11 @@ class ReviewIndex:
 
         done = sum(1 for e in self.entries.values() if e.status == Status.DONE)
         total = len(self.entries)
+        unit_label = "work units" if self.workflow_mode == "rewrite" else "directories"
 
         lines = [
             f"=== {self.workflow['summary_heading']} ===",
-            f"Progress: {done}/{total} directories completed ({100*done//total if total else 0}%)",
+            f"Progress: {done}/{total} {unit_label} completed ({100*done//total if total else 0}%)",
             "",
         ]
 
@@ -640,7 +1009,11 @@ class ReviewIndex:
             lines.append("")
             lines.append("Next in queue:")
             for p in pending[:5]:
-                lines.append(f"  → {p}")
+                entry = self.entries[p]
+                if self.workflow_mode == "rewrite":
+                    lines.append(f"  → {p} [{entry.stage}/{entry.unit_kind}]")
+                else:
+                    lines.append(f"  → {p}")
 
         return '\n'.join(lines)
 
@@ -655,6 +1028,8 @@ def generate_index(
     if index.index_path.exists() and not force_rebuild:
         try:
             index._load()
+            if index.ensure_rewrite_work_units():
+                index.save()
             print(f"*** Using existing {index.workflow['noun']} index at {index.index_path}")
             return index
         except Exception as exc:
@@ -675,7 +1050,8 @@ if __name__ == "__main__":
     
     print(f"Generating {workflow_mode} index for: {source_root}")
     index = generate_index(source_root, force_rebuild=True, workflow_mode=workflow_mode)
-    print(f"Found {len(index.entries)} directories")
+    unit_label = "work units" if index.workflow_mode == "rewrite" else "directories"
+    print(f"Found {len(index.entries)} {unit_label}")
     print(f"Index saved to: {index.index_path}")
     print()
     print(index.get_summary_for_ai())

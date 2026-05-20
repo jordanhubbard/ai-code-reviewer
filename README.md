@@ -186,26 +186,42 @@ review:
       - "Existing tests still pass."
 ```
 
+Rewrite indexes are work-unit graphs, not just flat directory checklists. During
+index generation the tool infers units such as FreeBSD commands/libraries,
+Rust packages, Rust test units, bootstrap tools, and validation stages. Each
+unit can carry:
+
+- `kind` - command, library, Rust package, tests, bootstrap component, etc.
+- `stage` - foundation, bootstrap, application, validation, integration, kernel
+- `depends_on` - earlier units that should be completed first
+- `files` - related source, test, manifest, and build-glue files
+- `build_command` / `test_command` - unit-sized validation commands when known
+
+Rewrite mode processes these units bottom-up by stage and dependency. `SET_SCOPE`
+shows the selected unit metadata, and `BUILD` uses the unit-specific build
+command when the index can infer one.
+
 ## How It Works
 
 ### Hierarchical Workflow
 
 ```
 Source Tree (entire codebase)
-  └─ Directory (e.g., src/network/)  ← BUILD + COMMIT HERE
-      └─ File (e.g., tcp.c)
-          └─ Chunks (individual functions)
+  └─ Rewrite Unit (library, command, crate, bootstrap tool)  ← BUILD + COMMIT HERE
+      └─ Related files (source, tests, manifests, build glue)
+          └─ File (e.g., tcp.c)
+              └─ Chunks (individual functions)
 ```
 
 ### Workflow
 
-1. **SET_SCOPE** - Select directory to work
+1. **SET_SCOPE** - Select directory/work-unit key to work
 2. **READ_FILE** - Inspect files (chunked if large)
 3. **EDIT_FILE** / **WRITE_FILE** - Apply fixes or rewrites
-4. **BUILD** - Validate changes with your build command
+4. **BUILD** - Validate changes with the unit or configured build command
 5. **Iterate** - If build fails, fix and rebuild
 6. **Commit** - When build succeeds, commit changes
-7. **Next** - Move to next directory
+7. **Next** - Move to next work unit
 
 ### Large File Handling
 
