@@ -40,6 +40,7 @@ from index_generator import (
     generate_index,
     normalize_index_workflow,
     normalize_rewrite_selection_policy,
+    normalize_rewrite_source_suffixes,
 )
 from build_executor import BuildResult
 from chunker import get_chunker, format_chunk_for_review
@@ -2450,10 +2451,19 @@ class ReviewLoop:
         )
         return normalize_rewrite_selection_policy(str(raw) if raw is not None else None)
 
+    def _rewrite_required_source_suffixes(self) -> Optional[Set[str]]:
+        raw = (
+            self.rewrite_config.get("required_source_suffixes")
+            or self.rewrite_config.get("source_suffixes")
+            or self.rewrite_config.get("selection_source_suffixes")
+        )
+        return normalize_rewrite_source_suffixes(raw)
+
     def _next_pending_work_unit(self) -> Optional[str]:
         if self.workflow_mode == "rewrite":
             return self.index.get_next_pending(
-                selection_policy=self._rewrite_selection_policy()
+                selection_policy=self._rewrite_selection_policy(),
+                required_source_suffixes=self._rewrite_required_source_suffixes(),
             )
         return self.index.get_next_pending()
 
@@ -2501,11 +2511,17 @@ class ReviewLoop:
         constraints_text = "\n".join(f"- {item}" for item in constraints)
         criteria_text = "\n".join(f"- {item}" for item in success_criteria)
         selection_policy = self._rewrite_selection_policy()
+        required_suffixes = self._rewrite_required_source_suffixes()
+        suffix_text = (
+            f"Required source suffixes: {', '.join(sorted(required_suffixes))}\n"
+            if required_suffixes else ""
+        )
         return f"""REWRITE CONFIGURATION:
 Objective: {objective}
 Strategy: {strategy}
 Output policy: {output_policy}
 Work-unit selection: {selection_policy}
+{suffix_text}
 
 Constraints:
 {constraints_text}
@@ -4284,6 +4300,27 @@ Output ONLY the lesson entry, nothing else."""
 
                 if suffix in REVIEWABLE_SUFFIXES or item.name in REVIEWABLE_SPECIAL_FILES:
                     files_in_dir.append(rel_path)
+
+            if self.workflow_mode == "rewrite":
+                required_suffixes = self._rewrite_required_source_suffixes()
+                if required_suffixes:
+                    entry = self.index.entries.get(directory)
+                    has_required_source = (
+                        self.index._has_rewrite_implementation_source(entry, required_suffixes)
+                        if entry is not None
+                        else any(Path(path).suffix.lower() in required_suffixes for path in files_in_dir)
+                    )
+                    if not has_required_source:
+                        next_dir = self._next_pending_work_unit()
+                        suffix_list = ", ".join(sorted(required_suffixes))
+                        response = (
+                            f"SET_SCOPE_ERROR: {directory} has no source files matching the configured "
+                            f"rewrite suffix filter ({suffix_list}).\n"
+                            "Do not create placeholder files for this unit; choose a source-backed work unit."
+                        )
+                        if next_dir:
+                            response += f"\nNEXT: Use SET_SCOPE {next_dir}"
+                        return response
             
             # Update session state
             self.session.current_directory = directory

@@ -19,7 +19,7 @@ import json
 import shlex
 from pathlib import Path
 from dataclasses import dataclass, field
-from typing import Any, List, Dict, Optional, Iterator, Set
+from typing import Any, Iterable, List, Dict, Optional, Iterator, Set
 from datetime import datetime
 import re
 
@@ -158,6 +158,28 @@ def normalize_rewrite_selection_policy(policy: Optional[str] = None) -> str:
     """Normalize the configured rewrite work-unit selection policy."""
     raw = (policy or "bottom_up").strip().lower().replace("-", "_")
     return REWRITE_SELECTION_POLICY_ALIASES.get(raw, "bottom_up")
+
+
+def normalize_rewrite_source_suffixes(value: Any = None) -> Optional[Set[str]]:
+    """Normalize optional source suffix filters for rewrite work-unit selection."""
+    if value is None:
+        return None
+
+    if isinstance(value, str):
+        raw_items: Iterable[Any] = re.split(r"[\s,]+", value)
+    elif isinstance(value, (list, tuple, set)):
+        raw_items = value
+    else:
+        return None
+
+    suffixes: Set[str] = set()
+    for item in raw_items:
+        text = str(item).strip().lower()
+        if not text:
+            continue
+        suffixes.add(text if text.startswith(".") else f".{text}")
+
+    return suffixes or None
 
 
 class GitIgnoreIndex:
@@ -1035,24 +1057,33 @@ class ReviewIndex:
         """Strip volatile headers so that pure timestamp changes do not dirty git."""
         return re.sub(r'^Generated: .*$','Generated: <normalized>', content, flags=re.MULTILINE)
     
-    def get_next_pending(self, selection_policy: Optional[str] = None) -> Optional[str]:
+    def get_next_pending(
+        self,
+        selection_policy: Optional[str] = None,
+        required_source_suffixes: Any = None,
+    ) -> Optional[str]:
         """Get the next pending directory for this workflow."""
+        suffixes = normalize_rewrite_source_suffixes(required_source_suffixes)
         if self.workflow_mode == "rewrite":
             policy = normalize_rewrite_selection_policy(selection_policy)
             if policy == "small_first":
-                return self._get_next_pending_small_first()
+                return self._get_next_pending_small_first(suffixes)
 
         for path, entry in self.entries.items():
-            if entry.status == Status.PENDING:
+            if entry.status == Status.PENDING and self._matches_required_suffixes(entry, suffixes):
                 return path
         return None
 
-    def _get_next_pending_small_first(self) -> Optional[str]:
+    def _get_next_pending_small_first(
+        self,
+        required_source_suffixes: Optional[Set[str]] = None,
+    ) -> Optional[str]:
         """Prefer quick, buildable rewrite units while respecting dependencies."""
         pending = [
             (path, entry)
             for path, entry in self.entries.items()
             if entry.status == Status.PENDING
+            and self._matches_required_suffixes(entry, required_source_suffixes)
         ]
         if not pending:
             return None
@@ -1085,14 +1116,27 @@ class ReviewIndex:
         )
 
     @staticmethod
-    def _has_rewrite_implementation_source(entry: DirectoryEntry) -> bool:
+    def _matches_required_suffixes(
+        entry: DirectoryEntry,
+        required_source_suffixes: Optional[Set[str]] = None,
+    ) -> bool:
+        if required_source_suffixes is None:
+            return True
+        return ReviewIndex._has_rewrite_implementation_source(entry, required_source_suffixes)
+
+    @staticmethod
+    def _has_rewrite_implementation_source(
+        entry: DirectoryEntry,
+        required_source_suffixes: Optional[Set[str]] = None,
+    ) -> bool:
         """Return True when a rewrite unit contains real implementation source."""
-        if entry.c_files > 0:
+        if required_source_suffixes is None and entry.c_files > 0:
             return True
 
+        suffixes = required_source_suffixes or REWRITE_IMPLEMENTATION_SUFFIXES
         for file_path in entry.files:
             suffix = Path(file_path).suffix.lower()
-            if suffix in REWRITE_IMPLEMENTATION_SUFFIXES:
+            if suffix in suffixes:
                 return True
 
         return False

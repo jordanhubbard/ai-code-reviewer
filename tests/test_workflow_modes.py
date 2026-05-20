@@ -37,6 +37,9 @@ def _make_freebsd_smoke_selection_tree(root: Path) -> None:
     _make_source_tree(root)
     (root / "sbin" / "tests").mkdir(parents=True)
     (root / "sbin" / "tests" / "Makefile").write_text("SUBDIR=ifconfig\n")
+    (root / "usr.bin" / "command").mkdir(parents=True)
+    (root / "usr.bin" / "command" / "Makefile").write_text("SCRIPTS=command.sh\n")
+    (root / "usr.bin" / "command" / "command.sh").write_text("#!/bin/sh\nexit 0\n")
     (root / "include" / "arpa").mkdir(parents=True)
     (root / "include" / "arpa" / "Makefile").write_text("INCS=nameser.h\n")
     (root / "include" / "arpa" / "nameser.h").write_text(
@@ -125,6 +128,13 @@ class WorkflowModeTests(unittest.TestCase):
                 "bin/foo",
             )
             self.assertEqual(index.get_next_pending(selection_policy="smoke"), "bin/foo")
+            self.assertEqual(
+                index.get_next_pending(
+                    selection_policy="small_first",
+                    required_source_suffixes=[".c", ".cc", ".cpp", ".cxx"],
+                ),
+                "bin/foo",
+            )
 
     def test_rewrite_index_scans_generic_rust_project(self) -> None:
         with TemporaryDirectory() as tmp:
@@ -210,6 +220,7 @@ class WorkflowModeTests(unittest.TestCase):
                         "workflow": "rewrite",
                         "rewrite": {
                             "objective": "Rewrite small userland utilities side-by-side.",
+                            "source_suffixes": [".c", ".cc"],
                         },
                     },
                     target_directories=1,
@@ -232,6 +243,7 @@ class WorkflowModeTests(unittest.TestCase):
             self.assertIn("choose another scope instead of fabricating a rewrite", system_prompt)
             self.assertNotIn("FreeBSD source code", system_prompt)
             self.assertIn("Rewrite small userland utilities side-by-side.", init_message)
+            self.assertIn("Required source suffixes: .c, .cc", init_message)
 
             with patch.object(loop, "_record_directory_attempt", return_value=1):
                 result = loop._execute_action({"action": "SET_SCOPE", "directory": "bin/foo"})
