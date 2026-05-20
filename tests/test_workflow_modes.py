@@ -73,6 +73,27 @@ def _make_rust_source_tree(root: Path) -> None:
 
 
 class WorkflowModeTests(unittest.TestCase):
+    def test_file_editor_rejects_identical_noop_edit(self) -> None:
+        with TemporaryDirectory() as tmp:
+            path = Path(tmp) / "main.c"
+            original = "int main(void) { return 0; }\n"
+            path.write_text(original)
+
+            mock_git = MagicMock()
+            editor = reviewer.FileEditor(mock_git)
+
+            success, message, diff = editor.edit_file(
+                path,
+                "return 0;",
+                "return 0;",
+            )
+
+            self.assertFalse(success)
+            self.assertIn("No-op edit rejected", message)
+            self.assertEqual(diff, "")
+            self.assertEqual(path.read_text(), original)
+            mock_git.diff.assert_not_called()
+
     def test_rewrite_mode_skips_full_preflight_build_by_default(self) -> None:
         self.assertFalse(
             reviewer.should_run_preflight_build({"workflow": "rewrite"}, "rewrite")
@@ -327,6 +348,59 @@ class WorkflowModeTests(unittest.TestCase):
             self.assertTrue(compacted)
             self.assertLess(loop._estimate_history_tokens(), loop._history_token_budget(aggressive=True))
             self.assertIn("history compacted", loop.history[-1]["content"])
+
+    def test_repeated_noop_edit_requests_stop_run(self) -> None:
+        persona_dir = Path(__file__).resolve().parents[1] / "personas" / "friendly-mentor"
+
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _make_source_tree(root)
+            ops = OpsLogger(log_dir=root / ".ops-log", session_id="test-session")
+
+            mock_git = MagicMock(spec=reviewer.GitHelper)
+            mock_git.repo_root = root
+            mock_git._run.return_value = (0, "")
+            mock_git.is_ignored.return_value = False
+            mock_git.has_changes.return_value = False
+            mock_git.ensure_commit_prefix.side_effect = (
+                lambda message: message
+                if message.startswith(reviewer.COMMIT_PREFIX)
+                else f"{reviewer.COMMIT_PREFIX}{message}"
+            )
+
+            with patch.object(reviewer.ReviewLoop, "_init_beads_manager", return_value=None), \
+                 patch("reviewer.GitHelper", return_value=mock_git):
+                loop = reviewer.ReviewLoop(
+                    ollama_client=_FakeLLM(),
+                    build_executor=_FakeBuildExecutor(),
+                    source_root=root,
+                    persona_dir=persona_dir,
+                    review_config={"workflow": "rewrite"},
+                    target_directories=1,
+                    max_iterations_per_directory=10,
+                    max_parallel_files=0,
+                    ops_logger=ops,
+                )
+
+            loop.session.current_directory = "bin/foo"
+            action = {
+                "action": "EDIT_FILE",
+                "file_path": "bin/foo/main.c",
+                "old_text": "return 0;",
+                "new_text": "return 0;",
+            }
+
+            first = loop._execute_action(action)
+            second = loop._execute_action(action)
+            third = loop._execute_action(action)
+
+            self.assertIn("NO-OP EDIT REJECTED", first)
+            self.assertIn("NO-OP EDIT REJECTED", second)
+            self.assertIn("NO-OP EDIT LOOP DETECTED", third)
+            self.assertTrue(loop._stop_requested)
+            self.assertEqual(loop._stop_reason, "Repeated no-op EDIT_FILE loop on bin/foo/main.c")
+            self.assertFalse(loop.session.pending_changes)
+            self.assertEqual(loop.session.changed_files, [])
 
     def test_write_file_parser_accepts_incomplete_content_fences(self) -> None:
         action = reviewer.ActionParser.parse(

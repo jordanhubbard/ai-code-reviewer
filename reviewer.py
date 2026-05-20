@@ -23,6 +23,7 @@ Architecture:
 
 import argparse
 import datetime
+import hashlib
 import logging
 import os
 import re
@@ -59,6 +60,9 @@ from persona_metrics import PersonaMetricsTracker
 PersonaValidator = AgentSpecValidator
 
 logger = logging.getLogger(__name__)
+
+NOOP_EDIT_PREFIX = "No-op edit rejected"
+MAX_NOOP_EDIT_REPETITIONS = 3
 
 # File types considered "text" for review workflows
 # IMPORTANT: Only include ACTUAL SOURCE CODE file types here
@@ -400,6 +404,8 @@ class ReviewSession:
     # Edit failure loop detection
     edit_failure_count: int = 0  # Consecutive EDIT_FILE failures
     last_failed_edit_file: Optional[str] = None
+    noop_edit_count: int = 0  # Consecutive no-op EDIT_FILE attempts
+    last_noop_edit_hash: Optional[str] = None
     
     def get_progress_summary(self) -> str:
         """Get hierarchical progress summary."""
@@ -1837,6 +1843,11 @@ class FileEditor:
         try:
             content = file_path.read_text(encoding='utf-8')
 
+            if old_text == new_text:
+                return False, (
+                    f"{NOOP_EDIT_PREFIX} for {file_path}: OLD and NEW blocks are identical"
+                ), ""
+
             if old_text not in content:
                 closest = self._closest_block(content, old_text)
                 hint = ""
@@ -1852,6 +1863,10 @@ class FileEditor:
                 return False, f"OLD text appears {count} times in {file_path} - must be unique", ""
 
             new_content = content.replace(old_text, new_text)
+            if new_content == content:
+                return False, (
+                    f"{NOOP_EDIT_PREFIX} for {file_path}: replacement would not change file content"
+                ), ""
             file_path.write_text(new_content, encoding='utf-8')
 
             # Skip diff computation for batch processing (performance optimization)
@@ -2195,6 +2210,8 @@ class ReviewLoop:
         self._file_locks: Dict[str, threading.Lock] = {}
         self._lock_registry_lock = threading.Lock()
         self._interrupted = False  # Set on Ctrl+C for graceful shutdown
+        self._stop_requested = False
+        self._stop_reason: Optional[str] = None
         self._active_futures: List[Future] = []  # Track in-flight requests
 
         # Performance optimization settings
@@ -4388,6 +4405,93 @@ Output ONLY the lesson entry, nothing else."""
             )
         
         return None
+
+    @staticmethod
+    def _is_noop_edit_message(message: str) -> bool:
+        """Return True when FileEditor rejected an edit because it cannot change content."""
+        return message.startswith(NOOP_EDIT_PREFIX)
+
+    @staticmethod
+    def _noop_edit_hash(rel_path: str, old_text: str, new_text: str) -> str:
+        digest = hashlib.sha256()
+        digest.update(rel_path.encode('utf-8', errors='replace'))
+        digest.update(b'\0')
+        digest.update(old_text.encode('utf-8', errors='replace'))
+        digest.update(b'\0')
+        digest.update(new_text.encode('utf-8', errors='replace'))
+        return digest.hexdigest()
+
+    def _handle_noop_edit(
+        self,
+        rel_path: str,
+        message: str,
+        old_text: str,
+        new_text: str,
+    ) -> str:
+        """Track semantic no-op edits and stop the run if the same no-op repeats."""
+        edit_hash = self._noop_edit_hash(rel_path, old_text, new_text)
+        if edit_hash == self.session.last_noop_edit_hash:
+            self.session.noop_edit_count += 1
+        else:
+            self.session.noop_edit_count = 1
+            self.session.last_noop_edit_hash = edit_hash
+
+        # No-op edits are not file-mismatch failures. Keep the generic edit
+        # failure loop detector focused on OLD-block matching problems.
+        self.session.edit_failure_count = 0
+        self.session.last_failed_edit_file = None
+
+        remaining = MAX_NOOP_EDIT_REPETITIONS - self.session.noop_edit_count
+        if remaining > 0:
+            return (
+                f"EDIT_FILE_ERROR: {message}\n\n"
+                f"{'='*70}\n"
+                f"NO-OP EDIT REJECTED\n"
+                f"{'='*70}\n\n"
+                f"The requested EDIT_FILE would not change {rel_path}.\n"
+                f"Repeated no-op edits are treated as a control-loop failure.\n\n"
+                f"Choose a different action now:\n"
+                f"- Use ACTION: BUILD if the current scope already has real changes\n"
+                f"- Use ACTION: READ_FILE to inspect a different file\n"
+                f"- Use ACTION: SET_SCOPE to move to another work unit if this one is complete\n"
+                f"- Use ACTION: HALT if no safe progress remains\n\n"
+                f"If you repeat the same no-op edit {remaining} more time(s), this run will stop.\n"
+                f"{'='*70}\n"
+            )
+
+        self._stop_requested = True
+        self._stop_reason = f"Repeated no-op EDIT_FILE loop on {rel_path}"
+        logger.error("%s: %s", self._stop_reason, message)
+
+        if self.beads:
+            issue_desc = (
+                f"The AI repeated an EDIT_FILE action that could not change file contents.\n\n"
+                f"File: {rel_path}\n"
+                f"Attempts: {self.session.noop_edit_count}\n"
+                f"Reason: {message}\n"
+                f"Directory: {self.session.current_directory or 'unknown'}\n"
+                f"Session: {self.session.session_id}\n\n"
+                f"The run stopped rather than continuing to spend tokens on a semantic no-op."
+            )
+            self.beads.create_systemic_issue(
+                title=f"No-op edit loop on {rel_path}",
+                description=issue_desc,
+                issue_type='bug',
+                priority=1,
+                labels=['ai-behavior', 'edit-failure', 'no-op-loop']
+            )
+
+        return (
+            f"FATAL_NOOP_EDIT_LOOP: {message}\n\n"
+            f"{'='*70}\n"
+            f"NO-OP EDIT LOOP DETECTED - STOPPING RUN\n"
+            f"{'='*70}\n\n"
+            f"The same semantic no-op edit was attempted {self.session.noop_edit_count} times on:\n"
+            f"  {rel_path}\n\n"
+            f"The reviewer is stopping now. This is a control-loop failure, not a source change.\n"
+            f"No pending file changes were recorded for the rejected no-op edit.\n"
+            f"{'='*70}\n"
+        )
     
     def _execute_action(self, action: Dict[str, Any]) -> str:
         """Execute an action and return the result."""
@@ -4857,6 +4961,8 @@ Output ONLY the lesson entry, nothing else."""
                 # Reset edit failure tracking on success
                 self.session.edit_failure_count = 0
                 self.session.last_failed_edit_file = None
+                self.session.noop_edit_count = 0
+                self.session.last_noop_edit_hash = None
 
                 self.session.pending_changes = True
                 self.session.last_diff = diff
@@ -4883,6 +4989,12 @@ Output ONLY the lesson entry, nothing else."""
                 
                 # Log edit failure
                 self.ops.edit_failure(rel_path, message)
+
+                if self._is_noop_edit_message(message):
+                    return self._handle_noop_edit(rel_path, message, old_text, new_text)
+
+                self.session.noop_edit_count = 0
+                self.session.last_noop_edit_hash = None
                 
                 # Check if stuck in edit-read-edit loop
                 MAX_EDIT_FAILURES = 3
@@ -6099,6 +6211,11 @@ TO FIX:
             logger.info(f"Action result: {result[:100]}...")
 
             self.history.append({"role": "user", "content": result})
+
+            if self._stop_requested:
+                logger.error("Stopping run after action: %s", self._stop_reason)
+                print(f"\n*** Stopping run: {self._stop_reason}")
+                break
 
             # Check if we're in forever mode and no more work remains
             if self.forever_mode:
