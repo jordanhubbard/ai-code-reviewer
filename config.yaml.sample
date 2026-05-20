@@ -131,6 +131,10 @@ review:
     # Rewrites start from indexed bottom-up work units and validate each unit
     # with its inferred build command. Set true to force a full preflight first.
     preflight_build: false
+    # Work-unit selection policy:
+    #   bottom_up   - normal long-run behavior; stage/dependency order
+    #   small_first - smoke/e2e behavior; quick buildable units before huge units
+    selection_policy: "bottom_up"
     objective: "Improve the selected source module through behavior-preserving rewriting."
     strategy: "Make small, buildable rewrite increments within one directory at a time."
     output_policy: "Modify the source tree directly unless the persona calls for side-by-side output."

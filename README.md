@@ -176,6 +176,7 @@ review:
   persona: "personas/friendly-mentor"
   rewrite:
     preflight_build: false
+    selection_policy: "small_first"  # Use "bottom_up" for normal long runs
     objective: "Rewrite small userland utilities into Rust side-by-side."
     strategy: "Complete one buildable directory at a time."
     output_policy: "Create replacement files beside the original implementation."
@@ -198,9 +199,11 @@ unit can carry:
 - `files` - related source, test, manifest, and build-glue files
 - `build_command` / `test_command` - unit-sized validation commands when known
 
-Rewrite mode processes these units bottom-up by stage and dependency. `SET_SCOPE`
-shows the selected unit metadata, and `BUILD` uses the unit-specific build
-command when the index can infer one.
+Rewrite mode processes these units bottom-up by stage and dependency by default.
+For smoke/e2e runs, set `review.rewrite.selection_policy: "small_first"` to
+prefer quick buildable commands and packages before large foundational headers.
+`SET_SCOPE` shows the selected unit metadata, and `BUILD` uses the unit-specific
+build command when the index can infer one.
 
 ## How It Works
 

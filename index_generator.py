@@ -110,10 +110,45 @@ REWRITE_STAGE_ORDER = {
     "unknown": 99,
 }
 
+REWRITE_SELECTION_POLICY_ALIASES = {
+    "": "bottom_up",
+    "default": "bottom_up",
+    "bottomup": "bottom_up",
+    "bottom_up": "bottom_up",
+    "stage": "bottom_up",
+    "stage_order": "bottom_up",
+    "small": "small_first",
+    "smallest": "small_first",
+    "small_first": "small_first",
+    "quick": "small_first",
+    "smoke": "small_first",
+    "smoke_test": "small_first",
+}
+
+REWRITE_SMALL_FIRST_KIND_ORDER = {
+    "freebsd-command": 0,
+    "rust-binary": 0,
+    "rust-library": 1,
+    "rust-module": 1,
+    "freebsd-library": 2,
+    "makefile-module": 3,
+    "bootstrap-tool": 4,
+    "rust-tests": 5,
+    "freebsd-tests": 5,
+    "directory": 6,
+    "freebsd-kernel": 9,
+}
+
 
 # ============================================================================
 # Utility Functions
 # ============================================================================
+
+def normalize_rewrite_selection_policy(policy: Optional[str] = None) -> str:
+    """Normalize the configured rewrite work-unit selection policy."""
+    raw = (policy or "bottom_up").strip().lower().replace("-", "_")
+    return REWRITE_SELECTION_POLICY_ALIASES.get(raw, "bottom_up")
+
 
 class GitIgnoreIndex:
     """Fast in-process matcher for paths ignored by Git."""
@@ -987,12 +1022,53 @@ class ReviewIndex:
         """Strip volatile headers so that pure timestamp changes do not dirty git."""
         return re.sub(r'^Generated: .*$','Generated: <normalized>', content, flags=re.MULTILINE)
     
-    def get_next_pending(self) -> Optional[str]:
+    def get_next_pending(self, selection_policy: Optional[str] = None) -> Optional[str]:
         """Get the next pending directory for this workflow."""
+        if self.workflow_mode == "rewrite":
+            policy = normalize_rewrite_selection_policy(selection_policy)
+            if policy == "small_first":
+                return self._get_next_pending_small_first()
+
         for path, entry in self.entries.items():
             if entry.status == Status.PENDING:
                 return path
         return None
+
+    def _get_next_pending_small_first(self) -> Optional[str]:
+        """Prefer quick, buildable rewrite units while respecting dependencies."""
+        pending = [
+            (path, entry)
+            for path, entry in self.entries.items()
+            if entry.status == Status.PENDING
+        ]
+        if not pending:
+            return None
+
+        complete_statuses = {Status.DONE, Status.SKIPPED}
+        ready = [
+            (path, entry)
+            for path, entry in pending
+            if all(
+                dep not in self.entries
+                or self.entries[dep].status in complete_statuses
+                for dep in entry.depends_on
+            )
+        ]
+        candidates = ready or pending
+        path, _ = min(candidates, key=self._small_first_selection_key)
+        return path
+
+    @staticmethod
+    def _small_first_selection_key(item: Any) -> tuple:
+        path, entry = item
+        return (
+            0 if entry.build_command else 1,
+            REWRITE_SMALL_FIRST_KIND_ORDER.get(entry.unit_kind, 50),
+            entry.total_lines,
+            len(entry.files),
+            REWRITE_STAGE_ORDER.get(entry.stage, REWRITE_STAGE_ORDER["unknown"]),
+            path,
+        )
 
     def get_current(self) -> Optional[str]:
         """Get the directory currently being worked."""
@@ -1012,7 +1088,12 @@ class ReviewIndex:
             self.entries[path].status = Status.CURRENT
         self.current_position = path
 
-    def mark_done(self, path: str, notes: str = "") -> None:
+    def mark_done(
+        self,
+        path: str,
+        notes: str = "",
+        selection_policy: Optional[str] = None,
+    ) -> None:
         """Mark a directory as completed."""
         if path in self.entries:
             self.entries[path].status = Status.DONE
@@ -1021,7 +1102,7 @@ class ReviewIndex:
                 self.entries[path].notes = notes
 
         # Move current position to next
-        self.current_position = self.get_next_pending()
+        self.current_position = self.get_next_pending(selection_policy=selection_policy)
 
     def mark_skipped(self, path: str, reason: str = "") -> None:
         """Mark a directory as skipped."""

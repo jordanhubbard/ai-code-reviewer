@@ -33,6 +33,15 @@ def _make_source_tree(root: Path) -> None:
     (root / "bin" / "foo" / "main.c").write_text("int main(void) { return 0; }\n")
 
 
+def _make_freebsd_smoke_selection_tree(root: Path) -> None:
+    _make_source_tree(root)
+    (root / "include" / "arpa").mkdir(parents=True)
+    (root / "include" / "arpa" / "Makefile").write_text("INCS=nameser.h\n")
+    (root / "include" / "arpa" / "nameser.h").write_text(
+        "\n".join(f"#define NS_VALUE_{idx} {idx}" for idx in range(500)) + "\n"
+    )
+
+
 def _make_rust_source_tree(root: Path) -> None:
     (root / "src").mkdir(parents=True)
     (root / "tests").mkdir(parents=True)
@@ -94,6 +103,20 @@ class WorkflowModeTests(unittest.TestCase):
             self.assertTrue(index.index_path.exists())
             self.assertIn("=== REWRITE INDEX SUMMARY ===", index.get_summary_for_ai())
             self.assertFalse((root / ".ai-code-reviewer" / "REVIEW-INDEX.md").exists())
+
+    def test_rewrite_small_first_policy_prefers_buildable_smoke_units(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _make_freebsd_smoke_selection_tree(root)
+
+            index = generate_index(root, force_rebuild=True, workflow_mode="rewrite")
+
+            self.assertEqual(index.get_next_pending(), "include/arpa")
+            self.assertEqual(
+                index.get_next_pending(selection_policy="small_first"),
+                "bin/foo",
+            )
+            self.assertEqual(index.get_next_pending(selection_policy="smoke"), "bin/foo")
 
     def test_rewrite_index_scans_generic_rust_project(self) -> None:
         with TemporaryDirectory() as tmp:
@@ -205,6 +228,14 @@ class WorkflowModeTests(unittest.TestCase):
             self.assertIn("Build command: make -C bin/foo", result)
             self.assertIn("FILES TO REWRITE", result)
             self.assertEqual(loop._current_build_command(), "make -C bin/foo")
+
+    def test_tool_metadata_paths_are_recognized(self) -> None:
+        self.assertTrue(reviewer.is_tool_metadata_path(".reviewer-log/ops.jsonl"))
+        self.assertTrue(
+            reviewer.is_tool_metadata_path(".ai-code-reviewer/REWRITE-INDEX.md")
+        )
+        self.assertTrue(reviewer.is_tool_metadata_path("REWRITE-SUMMARY.md"))
+        self.assertFalse(reviewer.is_tool_metadata_path("bin/foo/main.c"))
 
 
 if __name__ == "__main__":

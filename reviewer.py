@@ -36,7 +36,11 @@ import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed, Future
 from difflib import SequenceMatcher
 
-from index_generator import generate_index, normalize_index_workflow
+from index_generator import (
+    generate_index,
+    normalize_index_workflow,
+    normalize_rewrite_selection_policy,
+)
 from build_executor import BuildResult
 from chunker import get_chunker, format_chunk_for_review
 from dataclasses import dataclass, field
@@ -103,6 +107,18 @@ MANPAGE_SUFFIXES = {'.1', '.2', '.3', '.4', '.5', '.6', '.7', '.8', '.9', '.mdoc
 # Used to collapse large code blocks in console output while keeping logs intact
 CODE_BLOCK_RE = re.compile(r"```(\w*)\n(.*?)```", re.DOTALL)
 COMMIT_PREFIX = "[ai-code-reviewer] "
+TOOL_METADATA_PREFIXES = (
+    ".ai-code-reviewer/",
+    ".angry-ai/",
+    ".beads/",
+    ".reviewer-log/",
+)
+TOOL_METADATA_FILES = {
+    "REVIEW-INDEX.md",
+    "REWRITE-INDEX.md",
+    "REVIEW-SUMMARY.md",
+    "REWRITE-SUMMARY.md",
+}
 
 WORKFLOW_PROFILES = {
     "review": {
@@ -147,6 +163,22 @@ def normalize_workflow_mode(review_config: Optional[Dict[str, Any]]) -> str:
     if isinstance(raw, dict):
         raw = raw.get("mode", "review")
     return normalize_index_workflow(str(raw))
+
+
+def is_tool_metadata_path(path: str) -> bool:
+    """Return True for reviewer-managed metadata paths inside a target tree."""
+    normalized = (path or "").strip().replace("\\", "/")
+    while normalized.startswith("./"):
+        normalized = normalized[2:]
+    normalized = normalized.lstrip("/")
+    if not normalized:
+        return False
+    if normalized in TOOL_METADATA_FILES:
+        return True
+    return any(
+        normalized == prefix.rstrip("/") or normalized.startswith(prefix)
+        for prefix in TOOL_METADATA_PREFIXES
+    )
 
 
 def load_yaml_config(config_path: Path) -> Dict[str, Any]:
@@ -846,6 +878,13 @@ class GitHelper:
         """Stage files for commit."""
         code, _ = self._run(['add'] + list(paths))
         return code == 0
+
+    def add_paths(self, paths: List[str]) -> bool:
+        """Stage specific paths for commit."""
+        if not paths:
+            return True
+        code, _ = self._run(['add', '--'] + list(paths))
+        return code == 0
     
     def add_all(self) -> bool:
         """Stage all changes."""
@@ -907,13 +946,46 @@ class GitHelper:
         if code != 0:
             raise GitCommandError(output.strip() or "git status --short failed")
         return output
-    
-    def changed_files_list(self) -> List[str]:
+
+    @staticmethod
+    def _parse_status_porcelain_z(output: str) -> List[str]:
+        """Parse `git status --porcelain -z` output into changed paths."""
+        paths: List[str] = []
+        items = output.split('\0')
+        idx = 0
+        while idx < len(items):
+            item = items[idx]
+            idx += 1
+            if not item:
+                continue
+            status = item[:2]
+            path = item[3:] if len(item) > 3 else ""
+            if not path:
+                continue
+            paths.append(path)
+            if "R" in status or "C" in status:
+                idx += 1
+        return paths
+
+    def changed_files_list(self, include_untracked: bool = False) -> List[str]:
         """Get list of changed files."""
+        if include_untracked:
+            code, output = self._run(['status', '--porcelain', '-z'])
+            if code != 0 or not output:
+                return []
+            return self._parse_status_porcelain_z(output)
+
         code, output = self._run(['diff', '--name-only', 'HEAD'])
         if output:
             return [f.strip() for f in output.split('\n') if f.strip()]
         return []
+
+    def staged_files_list(self) -> List[str]:
+        """Get list of staged files."""
+        code, output = self._run(['diff', '--staged', '--name-only'])
+        if code != 0 or not output:
+            return []
+        return [f.strip() for f in output.split('\n') if f.strip()]
     
     def is_ignored(self, path: str) -> bool:
         """
@@ -2077,6 +2149,8 @@ class ReviewLoop:
         )
         unit_label = "work units" if self.workflow_mode == "rewrite" else "directories"
         print(f"    Found {len(self.index.entries)} {unit_label} for {self.workflow['noun']}")
+        if self.workflow_mode == "rewrite":
+            print(f"    Work-unit selection: {self._rewrite_selection_policy()}")
         self.beads = self._init_beads_manager()
         
         # Conversation history
@@ -2361,6 +2435,31 @@ class ReviewLoop:
             return items or default
         return default
 
+    def _rewrite_selection_policy(self) -> str:
+        raw = (
+            self.rewrite_config.get("selection_policy")
+            or self.rewrite_config.get("work_unit_selection")
+            or self.rewrite_config.get("work_unit_order")
+            or self.rewrite_config.get("selection")
+        )
+        return normalize_rewrite_selection_policy(str(raw) if raw is not None else None)
+
+    def _next_pending_work_unit(self) -> Optional[str]:
+        if self.workflow_mode == "rewrite":
+            return self.index.get_next_pending(
+                selection_policy=self._rewrite_selection_policy()
+            )
+        return self.index.get_next_pending()
+
+    def _active_current_work_unit(self) -> Optional[str]:
+        current = self.index.get_current()
+        if not current:
+            return None
+        entry = self.index.entries.get(current)
+        if entry is not None and entry.status == "current":
+            return current
+        return None
+
     def _rewrite_prompt_context(self) -> str:
         objective = (
             self.rewrite_config.get("objective")
@@ -2395,10 +2494,12 @@ class ReviewLoop:
 
         constraints_text = "\n".join(f"- {item}" for item in constraints)
         criteria_text = "\n".join(f"- {item}" for item in success_criteria)
+        selection_policy = self._rewrite_selection_policy()
         return f"""REWRITE CONFIGURATION:
 Objective: {objective}
 Strategy: {strategy}
 Output policy: {output_policy}
+Work-unit selection: {selection_policy}
 
 Constraints:
 {constraints_text}
@@ -2465,8 +2566,8 @@ Success criteria:
         
         # Get current position and next target from index
         index_summary = self.index.get_summary_for_ai()
-        current = self.index.get_current()
-        next_target = self.index.get_next_pending()
+        current = self._active_current_work_unit()
+        next_target = self._next_pending_work_unit()
         
         # Build the initial user message with context
         init_message = f"""WORKFLOW MODE: {self.workflow['display_name']} ({self.workflow_mode})
@@ -3460,7 +3561,12 @@ If no changes needed, respond with just: NO_EDITS_NEEDED"""
                     # Mark directory complete in index if all its files succeeded
                     dir_files = [f for f in all_changed if f.startswith(dir_path)]
                     if all(f in successful_files for f in dir_files):
-                        self.index.mark_done(dir_path, f"Completed via commit {commit_hash}")
+                        self.index.mark_done(
+                            dir_path,
+                            f"Completed via commit {commit_hash}",
+                            selection_policy=self._rewrite_selection_policy()
+                            if self.workflow_mode == "rewrite" else None,
+                        )
                         self._beads_mark_completed(dir_path, commit_hash)
             else:
                 print(f"*** Commit failed: {output}")
@@ -3830,9 +3936,78 @@ Output ONLY the lesson entry, nothing else."""
                     allowed_branches=self.allowed_branches,
                 )
                 return False, f"Failed to push after retry: {output}"
-        
+
         print("*** Pushed successfully!")
         return True, output
+
+    def _commit_tool_metadata_after_success(
+        self,
+        source_commit_hash: str,
+    ) -> Optional[str]:
+        """Commit tool metadata written after the main source commit."""
+        changed_paths = self.git.changed_files_list(include_untracked=True)
+        metadata_paths = [
+            path for path in changed_paths
+            if is_tool_metadata_path(path)
+        ]
+        if not metadata_paths:
+            return None
+
+        non_metadata_staged = [
+            path for path in self.git.staged_files_list()
+            if not is_tool_metadata_path(path)
+        ]
+        if non_metadata_staged:
+            print(
+                "*** Warning: skipping metadata commit because non-metadata files "
+                f"are already staged: {', '.join(non_metadata_staged)}"
+            )
+            return None
+
+        print(
+            "\n*** Committing post-success metadata: "
+            f"{', '.join(metadata_paths[:5])}"
+            f"{'...' if len(metadata_paths) > 5 else ''}"
+        )
+        if not self.git.add_paths(metadata_paths):
+            print("*** Warning: failed to stage post-success metadata")
+            return None
+
+        staged_non_metadata = [
+            path for path in self.git.staged_files_list()
+            if not is_tool_metadata_path(path)
+        ]
+        if staged_non_metadata:
+            print(
+                "*** Warning: metadata commit would include non-metadata files; "
+                f"leaving changes uncommitted: {', '.join(staged_non_metadata)}"
+            )
+            return None
+
+        message = (
+            f"metadata: record {self.workflow['noun']} completion\n\n"
+            f"Source commit: {source_commit_hash}"
+        )
+        success, output = self.git.commit(message)
+        if not success:
+            print(f"*** Warning: metadata commit failed: {output}")
+            return None
+
+        success, output = self.git.pull_rebase()
+        if not success:
+            print(f"*** Warning: metadata pull --rebase failed: {output}")
+            self.git.abort_rebase_if_needed()
+            return None
+
+        success, output = self.git.push()
+        if not success:
+            print(f"*** Warning: metadata push failed: {output}")
+            return None
+
+        _, metadata_hash = self.git._run(['rev-parse', 'HEAD'])
+        metadata_hash = metadata_hash.strip()[:12]
+        print(f"*** Metadata committed and pushed: {metadata_hash}")
+        return metadata_hash
     
     def _get_action_hash(self, action: Dict[str, Any]) -> str:
         """Generate a hash representing the action for loop detection."""
@@ -4019,7 +4194,7 @@ Output ONLY the lesson entry, nothing else."""
                 attempts = self._get_retry_record(directory).get('attempts', 0)
                 self.index.mark_skipped(directory, reason=f"Auto-skipped after {attempts} retries")
                 self.index.save()
-                next_dir = self.index.get_next_pending()
+                next_dir = self._next_pending_work_unit()
                 skip_msg = (
                     f"AUTO_SKIP: Directory {directory} skipped automatically after {attempts} failed attempts.\n\n"
                     f"To retry it later, remove or edit {self.retry_tracker_path.name}."
@@ -4539,8 +4714,12 @@ Output ONLY the lesson entry, nothing else."""
                 # Mark directory as done in the persistent index BEFORE commit
                 # so updated workflow metadata is included in the commit
                 if self.session.current_directory:
-                    self.index.mark_done(self.session.current_directory, 
-                                       f"{self.workflow['past_tense'].capitalize()} by session {self.session.session_id}")
+                    self.index.mark_done(
+                        self.session.current_directory,
+                        f"{self.workflow['past_tense'].capitalize()} by session {self.session.session_id}",
+                        selection_policy=self._rewrite_selection_policy()
+                        if self.workflow_mode == "rewrite" else None,
+                    )
                     self.index.save()
                 
                 # Commit and push (includes all .ai-code-reviewer/ metadata)
@@ -4568,18 +4747,22 @@ Output ONLY the lesson entry, nothing else."""
                             files_changed=changed_files,
                             commit_hash=commit_hash,
                         )
+
+                    metadata_commit_hash = self._commit_tool_metadata_after_success(
+                        commit_hash
+                    )
                     
                     self.session.pending_changes = False
                     self.session.changed_files = []
                     
                     # Get next suggested directory from index
-                    next_dir = self.index.get_next_pending()
+                    next_dir = self._next_pending_work_unit()
                     next_msg = f"\nNEXT: Use SET_SCOPE {next_dir}" if next_dir else "\nNo more directories pending."
                     
                     return f"BUILD_SUCCESS: Build completed successfully.\n" \
                            f"Directory {current_dir} is now complete.\n" \
                            f"Changes committed and pushed.\n" \
-                           f"Metadata files in .ai-code-reviewer/ updated.\n\n" \
+                           f"Post-success metadata commit: {metadata_commit_hash or 'none'}.\n\n" \
                            f"Completed directories so far: {self.session.directories_completed}" \
                            f"{next_msg}\n\nFINAL DIFFS:\n{final_diffs}"
                 else:
@@ -4649,7 +4832,7 @@ Output ONLY the lesson entry, nothing else."""
                 error_response += f"5. BUILD again when ready\n\n"
                 
                 # Suggest next action
-                next_dir = self.index.get_next_pending()
+                next_dir = self._next_pending_work_unit()
                 if reverted_files:
                     error_response += f"REVERTED DIRECTORIES WILL BE RETRIED:\n"
                     for d in reverted_dirs:
@@ -4669,7 +4852,7 @@ Output ONLY the lesson entry, nothing else."""
                 suggestion_lines = "\n".join(f"  - {d}" for d in open_dirs[:5])
                 if open_count > 5:
                     suggestion_lines += f"\n  ... and {open_count - 5} more"
-                next_dir = self.index.get_next_pending() or open_dirs[0]
+                next_dir = self._next_pending_work_unit() or open_dirs[0]
                 return (
                     f"HALT_REJECTED: Forever mode is active with {open_count} directories still requiring {self.workflow['noun']}.\n\n"
                     f"Open directories:\n{suggestion_lines}\n\n"
@@ -4686,7 +4869,7 @@ Output ONLY the lesson entry, nothing else."""
             # This prevents the AI from stopping early when there are still pending
             # directories (or an in-progress CURRENT scope).
             if self.forever_mode:
-                next_pending = self.index.get_next_pending()
+                next_pending = self._next_pending_work_unit()
                 current_dir = self.session.current_directory
                 current_incomplete = False
                 if current_dir:
@@ -4730,7 +4913,7 @@ Output ONLY the lesson entry, nothing else."""
                     return f"HALT_ACKNOWLEDGED (no directories found for {self.workflow['noun']})"
             
             # 3. Check if there are more directories that should be reviewed (using the index)
-            next_pending = self.index.get_next_pending()
+            next_pending = self._next_pending_work_unit()
             pending_count = sum(1 for e in self.index.entries.values() if e.status == 'pending')
             
             if next_pending and self.session.directories_completed < 3:
@@ -5291,7 +5474,7 @@ TO FIX:
                 self._cleanup_dirty_state()
                 if self.forever_mode:
                     # In forever mode, rotate to next directory but don't abandon this one
-                    next_dir = self.index.get_next_pending()
+                    next_dir = self._next_pending_work_unit()
                     if next_dir and next_dir != stuck_dir:
                         print(f"*** Rotating to next directory: {next_dir} (will return to {stuck_dir} later)")
                         logger.info(f"Forever mode: rotating from {stuck_dir} ({directory_iterations} iterations) to {next_dir}")
@@ -5530,7 +5713,7 @@ TO FIX:
                 self.history.append({"role": "user", "content": result})
 
                 if self.forever_mode and self.session.consecutive_halt_rejections >= 3:
-                    next_dir = self.index.get_next_pending()
+                    next_dir = self._next_pending_work_unit()
                     if self.beads and self.beads.has_open_work():
                         open_dirs = self.beads.get_open_directories()
                         if open_dirs:
@@ -5563,7 +5746,7 @@ TO FIX:
 
             # Check if we're in forever mode and no more work remains
             if self.forever_mode:
-                next_pending = self.index.get_next_pending()
+                next_pending = self._next_pending_work_unit()
                 if self.beads and next_pending is None and self.session.current_directory is None:
                     self.beads.refresh_issues()
                 beads_open = self.beads.has_open_work() if self.beads else False

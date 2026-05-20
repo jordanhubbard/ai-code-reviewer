@@ -36,6 +36,22 @@ class GitHelperWorktreeTests(unittest.TestCase):
             self.assertEqual(git._get_worktree_path_for_branch("main"), "/tmp/wt")
             self.assertIsNone(git._get_worktree_path_for_branch("missing"))
 
+    def test_changed_files_list_includes_untracked_porcelain_paths(self) -> None:
+        git = reviewer.GitHelper(Path("/tmp/repo"))
+        sample = (
+            " M .reviewer-log/ops.jsonl\0"
+            "?? .ai-code-reviewer/new.json\0"
+            "R  new-name.c\0"
+            "old-name.c\0"
+        )
+        with patch.object(git, "_run", return_value=(0, sample)):
+            result = git.changed_files_list(include_untracked=True)
+
+        self.assertEqual(
+            result,
+            [".reviewer-log/ops.jsonl", ".ai-code-reviewer/new.json", "new-name.c"],
+        )
+
     def test_ensure_repository_ready_uses_fallback_branch_when_in_worktree(self) -> None:
         git = reviewer.GitHelper(Path("/tmp/repo"))
 
