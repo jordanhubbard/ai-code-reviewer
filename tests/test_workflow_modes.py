@@ -40,6 +40,10 @@ def _make_freebsd_smoke_selection_tree(root: Path) -> None:
     (root / "include" / "arpa" / "nameser.h").write_text(
         "\n".join(f"#define NS_VALUE_{idx} {idx}" for idx in range(500)) + "\n"
     )
+    (root / "usr.sbin" / "hyperv" / "tools").mkdir(parents=True)
+    (root / "usr.sbin" / "hyperv" / "tools" / "Makefile.inc").write_text(
+        "CFLAGS.gcc+= -Wno-uninitialized\n"
+    )
 
 
 def _make_rust_source_tree(root: Path) -> None:
@@ -112,6 +116,7 @@ class WorkflowModeTests(unittest.TestCase):
             index = generate_index(root, force_rebuild=True, workflow_mode="rewrite")
 
             self.assertEqual(index.get_next_pending(), "include/arpa")
+            self.assertIsNone(index.entries["usr.sbin/hyperv/tools"].build_command)
             self.assertEqual(
                 index.get_next_pending(selection_policy="small_first"),
                 "bin/foo",

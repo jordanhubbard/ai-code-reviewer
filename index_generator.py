@@ -632,7 +632,10 @@ class ReviewIndex:
     def _infer_makefile_work_unit(self, entry: DirectoryEntry) -> None:
         """Infer FreeBSD/Makefile-oriented rewrite-unit metadata."""
         directory = self.source_root / entry.path
-        has_makefile = (directory / "Makefile").exists() or (directory / "Makefile.inc").exists()
+        has_build_makefile = (
+            (directory / "Makefile").exists()
+            or (directory / "BSDmakefile").exists()
+        )
         top = entry.path.split("/", 1)[0]
 
         if top in {"include", "lib"}:
@@ -652,9 +655,9 @@ class ReviewIndex:
             entry.unit_kind = "freebsd-kernel"
         else:
             entry.stage = "integration"
-            entry.unit_kind = "makefile-module" if has_makefile else "directory"
+            entry.unit_kind = "makefile-module" if has_build_makefile else "directory"
 
-        if has_makefile:
+        if has_build_makefile:
             entry.build_command = f"make -C {shlex.quote(entry.path)}"
 
     def _find_cargo_root(self, directory: Path) -> Optional[Path]:
