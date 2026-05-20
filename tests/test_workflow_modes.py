@@ -190,6 +190,11 @@ class WorkflowModeTests(unittest.TestCase):
             mock_git._run.return_value = (0, "")
             mock_git.is_ignored.return_value = False
             mock_git.has_changes.return_value = False
+            mock_git.ensure_commit_prefix.side_effect = (
+                lambda message: message
+                if message.startswith(reviewer.COMMIT_PREFIX)
+                else f"{reviewer.COMMIT_PREFIX}{message}"
+            )
 
             with patch.object(reviewer.ReviewLoop, "_init_beads_manager", return_value=None), \
                  patch("reviewer.GitHelper", return_value=mock_git):
@@ -233,6 +238,11 @@ class WorkflowModeTests(unittest.TestCase):
             self.assertIn("Build command: make -C bin/foo", result)
             self.assertIn("FILES TO REWRITE", result)
             self.assertEqual(loop._current_build_command(), "make -C bin/foo")
+
+            with patch.object(loop, "_ask_ai_simple", return_value=None):
+                commit_msg = loop._generate_commit_message("", [], "bin/foo")
+            self.assertIn("[ai-code-reviewer]", commit_msg)
+            self.assertIn("foo", commit_msg)
 
     def test_tool_metadata_paths_are_recognized(self) -> None:
         self.assertTrue(reviewer.is_tool_metadata_path(".reviewer-log/ops.jsonl"))

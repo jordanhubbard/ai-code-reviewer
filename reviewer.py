@@ -3697,7 +3697,7 @@ Example format:
 
 Output ONLY the commit message, no other text."""
 
-        message = self._ask_ai_simple(prompt)
+        message = self._ask_ai_simple(prompt) or ""
         
         # Clean up the response - remove any markdown formatting
         message = message.strip()
