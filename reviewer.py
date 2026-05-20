@@ -441,6 +441,25 @@ class SecretScanner:
         r'fake[_-]?(key|secret|token)',
         r'dummy[_-]?(key|secret|token)',
     ]
+
+    EXCLUDE_FILES = [
+        r'(^|/)\.ai-code-reviewer/',
+        r'(^|/)\.reviewer-log/',
+        r'(^|/)\.beads/',
+        r'(^|/)REVIEW-INDEX\.md$',
+        r'(^|/)REWRITE-INDEX\.md$',
+        r'(^|/)REVIEW-SUMMARY\.md$',
+        r'(^|/)REWRITE-SUMMARY\.md$',
+    ]
+
+    @classmethod
+    def _is_excluded_file(cls, file_path: Optional[str]) -> bool:
+        if not file_path:
+            return False
+        return any(
+            re.search(exclude, file_path, re.IGNORECASE)
+            for exclude in cls.EXCLUDE_FILES
+        )
     
     @classmethod
     def scan_diff(cls, diff_output: str) -> List[Tuple[str, str, str]]:
@@ -464,6 +483,8 @@ class SecretScanner:
             
             # Only scan added lines (those starting with +)
             if not line.startswith('+') or line.startswith('+++'):
+                continue
+            if cls._is_excluded_file(current_file):
                 continue
             
             # Remove the + prefix
