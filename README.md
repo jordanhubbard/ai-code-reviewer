@@ -85,6 +85,7 @@ source:
   build_timeout: 600
 
 review:
+  workflow: "review"                 # review or rewrite
   persona: "personas/freebsd-angry-ai"  # Choose your agent
 ```
 
@@ -155,9 +156,39 @@ review:
   persona: "personas/my-agent"
 ```
 
+## Workflow Modes
+
+The runner has two workflow modes. Personas still provide behavior and taste,
+but the workflow mode controls the system prompt, progress index, summary file,
+and success criteria.
+
+| Mode | Metadata | Use For |
+|------|----------|---------|
+| `review` | `REVIEW-INDEX.md`, `REVIEW-SUMMARY.md` | Defect-finding, fixes, audits |
+| `rewrite` | `REWRITE-INDEX.md`, `REWRITE-SUMMARY.md` | Translation, refactors, API migrations, decomposition, hardening rewrites |
+
+Rewrite mode is broader than translation. Configure it with an objective and
+constraints:
+
+```yaml
+review:
+  workflow: "rewrite"
+  persona: "personas/friendly-mentor"
+  rewrite:
+    objective: "Rewrite small userland utilities into Rust side-by-side."
+    strategy: "Complete one buildable directory at a time."
+    output_policy: "Create replacement files beside the original implementation."
+    constraints:
+      - "Preserve CLI behavior and exit statuses."
+      - "Do not start kernel rewrites."
+    success_criteria:
+      - "The configured build command succeeds."
+      - "Existing tests still pass."
+```
+
 ## How It Works
 
-### Hierarchical Review
+### Hierarchical Workflow
 
 ```
 Source Tree (entire codebase)
@@ -168,9 +199,9 @@ Source Tree (entire codebase)
 
 ### Workflow
 
-1. **SET_SCOPE** - Select directory to review
-2. **READ_FILE** - Review files (chunked if large)
-3. **EDIT_FILE** - Fix issues found
+1. **SET_SCOPE** - Select directory to work
+2. **READ_FILE** - Inspect files (chunked if large)
+3. **EDIT_FILE** / **WRITE_FILE** - Apply fixes or rewrites
 4. **BUILD** - Validate changes with your build command
 5. **Iterate** - If build fails, fix and rebuild
 6. **Commit** - When build succeeds, commit changes

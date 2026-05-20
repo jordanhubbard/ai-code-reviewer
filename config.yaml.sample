@@ -119,6 +119,24 @@ source:
 
 # Review configuration
 review:
+  # Workflow mode controls the runner's system prompt, progress index, summary,
+  # and success framing. "review" is the historical defect-finding workflow.
+  # "rewrite" is for scoped source rewrites: translation, API migration,
+  # decomposition, simplification, hardening rewrites, or other transformations.
+  workflow: "review"                # Options: review, rewrite
+
+  # Rewrite workflow settings. Used only when workflow: "rewrite".
+  rewrite:
+    objective: "Improve the selected source module through behavior-preserving rewriting."
+    strategy: "Make small, buildable rewrite increments within one directory at a time."
+    output_policy: "Modify the source tree directly unless the persona calls for side-by-side output."
+    constraints:
+      - "Preserve externally visible behavior unless explicitly instructed otherwise."
+      - "Keep changes scoped to the active directory and necessary build glue."
+    success_criteria:
+      - "The configured build command succeeds."
+      - "The rewritten code is coherent, maintainable, and behavior-preserving for the selected scope."
+
   # File chunking settings (prevents timeouts on large files)
   # Files larger than chunk_threshold get split into chunks
   chunk_threshold: 400          # Lines before file is chunked (default: 400)
@@ -152,7 +170,7 @@ review:
   persona: "personas/freebsd-angry-ai"
   
   # Target number of directories to complete per session
-  # Session continues until this many directories are successfully reviewed,
+  # Session continues until this many directories are successfully completed,
   # built, committed and pushed. Use 0 for unlimited (run until HALT or error).
   target_directories: 10
   
@@ -163,6 +181,8 @@ review:
   
   # Parallel file processing
   # Controls how many files are reviewed concurrently within a directory.
+  # Rewrite mode disables automatic parallel file review so a single coherent
+  # rewrite plan controls the directory.
   # Set to 0 for DYNAMIC mode: automatically determined from server metrics
   # Set to 1 for SEQUENTIAL mode: review files one at a time (safest)
   # Set to 2+ for STATIC parallel mode: fixed number of concurrent reviews

@@ -2,11 +2,11 @@
 """
 Index Generator for Angry AI
 
-Generates and maintains a structured index of all reviewable directories
+Generates and maintains a structured index of all workable directories
 in the FreeBSD source tree. This gives the AI a "file browser" view of
 the entire codebase with progress tracking.
 
-The index file (REVIEW-INDEX.md) contains:
+The index file contains:
 - All directories with C source code
 - Status markers: [ ] pending, [>] current, [x] done, [-] skipped
 - File counts and metadata
@@ -49,6 +49,38 @@ STATUS_TO_MARKER = {
     Status.DONE: StatusMarker.DONE,
     Status.SKIPPED: StatusMarker.SKIPPED,
 }
+
+INDEX_WORKFLOWS = {
+    "review": {
+        "index_file": "REVIEW-INDEX.md",
+        "title": "FreeBSD Source Review Index",
+        "noun": "review",
+        "verb": "review",
+        "gerund": "reviewing",
+        "done": "reviewed",
+        "summary_heading": "REVIEW INDEX SUMMARY",
+    },
+    "rewrite": {
+        "index_file": "REWRITE-INDEX.md",
+        "title": "FreeBSD Source Rewrite Index",
+        "noun": "rewrite",
+        "verb": "rewrite",
+        "gerund": "rewriting",
+        "done": "rewritten",
+        "summary_heading": "REWRITE INDEX SUMMARY",
+    },
+}
+
+
+def normalize_index_workflow(workflow_mode: str = "review") -> str:
+    """Normalize and validate a workflow mode for index storage."""
+    mode = (workflow_mode or "review").strip().lower().replace("-", "_")
+    if mode == "rewriter":
+        mode = "rewrite"
+    if mode not in INDEX_WORKFLOWS:
+        supported = ", ".join(sorted(INDEX_WORKFLOWS))
+        raise ValueError(f"Unsupported workflow mode '{workflow_mode}'. Supported modes: {supported}")
+    return mode
 
 MARKER_TO_STATUS = {
     StatusMarker.PENDING: Status.PENDING,
@@ -152,10 +184,10 @@ class DirectoryEntryMap(dict):
 
 class ReviewIndex:
     """
-    Manages the review index file.
+    Manages the workflow index file.
     
     The index provides a persistent view of:
-    - What directories exist and need review
+    - What directories exist and need work
     - Current progress (what's done, what's next)
     - Where to resume after interruption
     """
@@ -170,8 +202,11 @@ class ReviewIndex:
         'release', 'secure', 'share', 'stand', 'sys', 'targets', 'tests', 'tools'
     ]
     
-    def __init__(self, source_root: Path):
+    def __init__(self, source_root: Path, workflow_mode: str = "review"):
         self.source_root = source_root
+        self.workflow_mode = normalize_index_workflow(workflow_mode)
+        self.workflow = INDEX_WORKFLOWS[self.workflow_mode]
+        self.INDEX_FILE = self.workflow["index_file"]
         # Store index in .ai-code-reviewer/ metadata directory
         self.meta_dir = source_root / self.META_DIR
         self.meta_dir.mkdir(parents=True, exist_ok=True)
@@ -185,6 +220,9 @@ class ReviewIndex:
     
     def _migrate_legacy_index(self) -> None:
         """Migrate REVIEW-INDEX.md from source root to .ai-code-reviewer/"""
+        if self.workflow_mode != "review":
+            return
+
         legacy_path = self.source_root / self.INDEX_FILE
         
         if not legacy_path.exists():
@@ -395,18 +433,22 @@ class ReviewIndex:
 
     def _format_header(self) -> List[str]:
         """Format the file header section."""
+        noun = self.workflow["noun"]
+        verb = self.workflow["verb"]
+        gerund = self.workflow["gerund"]
+        done = self.workflow["done"]
         return [
-            "# FreeBSD Source Review Index",
+            f"# {self.workflow['title']}",
             "",
-            "This file tracks review progress across the source tree.",
+            f"This file tracks {noun} progress across the source tree.",
             "**DO NOT EDIT MANUALLY** - Updated automatically by the review tool.",
             "",
             f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}",
             "",
             "## Status Legend",
-            "- `[ ]` Pending - needs review",
-            "- `[>]` Current - being reviewed now",
-            "- `[x]` Done - reviewed and committed",
+            f"- `[ ]` Pending - needs {verb}",
+            f"- `[>]` Current - being {gerund} now",
+            f"- `[x]` Done - {done} and committed",
             "- `[-]` Skipped - no changes needed or deferred",
             "",
         ]
@@ -496,21 +538,21 @@ class ReviewIndex:
         return re.sub(r'^Generated: .*$','Generated: <normalized>', content, flags=re.MULTILINE)
     
     def get_next_pending(self) -> Optional[str]:
-        """Get the next pending directory to review."""
+        """Get the next pending directory for this workflow."""
         for path, entry in self.entries.items():
             if entry.status == Status.PENDING:
                 return path
         return None
 
     def get_current(self) -> Optional[str]:
-        """Get the directory currently being reviewed."""
+        """Get the directory currently being worked."""
         for path, entry in self.entries.items():
             if entry.status == Status.CURRENT:
                 return path
         return self.current_position
 
     def set_current(self, path: str) -> None:
-        """Set a directory as currently being reviewed."""
+        """Set a directory as currently being worked."""
         # Clear any existing current
         for entry in self.entries.values():
             if entry.status == Status.CURRENT:
@@ -548,7 +590,7 @@ class ReviewIndex:
         total = len(self.entries)
 
         lines = [
-            "=== REVIEW INDEX SUMMARY ===",
+            f"=== {self.workflow['summary_heading']} ===",
             f"Progress: {done}/{total} directories completed ({100*done//total if total else 0}%)",
             "",
         ]
@@ -581,16 +623,20 @@ class ReviewIndex:
         return '\n'.join(lines)
 
 
-def generate_index(source_root: Path, force_rebuild: bool = False) -> ReviewIndex:
-    """Generate or load the review index."""
-    index = ReviewIndex(source_root)
+def generate_index(
+    source_root: Path,
+    force_rebuild: bool = False,
+    workflow_mode: str = "review",
+) -> ReviewIndex:
+    """Generate or load the workflow index."""
+    index = ReviewIndex(source_root, workflow_mode=workflow_mode)
     if index.index_path.exists() and not force_rebuild:
         try:
             index._load()
-            print(f"*** Using existing review index at {index.index_path}")
+            print(f"*** Using existing {index.workflow['noun']} index at {index.index_path}")
             return index
         except Exception as exc:
-            print(f"WARNING: Failed to load review index ({exc}); regenerating")
+            print(f"WARNING: Failed to load {index.workflow['noun']} index ({exc}); regenerating")
     index.generate()
     index.save()
     return index
@@ -603,11 +649,11 @@ if __name__ == "__main__":
         source_root = Path(sys.argv[1])
     else:
         source_root = Path(__file__).parent.parent
+    workflow_mode = sys.argv[2] if len(sys.argv) > 2 else "review"
     
-    print(f"Generating index for: {source_root}")
-    index = generate_index(source_root, force_rebuild=True)
-    print(f"Found {len(index.entries)} reviewable directories")
+    print(f"Generating {workflow_mode} index for: {source_root}")
+    index = generate_index(source_root, force_rebuild=True, workflow_mode=workflow_mode)
+    print(f"Found {len(index.entries)} directories")
     print(f"Index saved to: {index.index_path}")
     print()
     print(index.get_summary_for_ai())
-

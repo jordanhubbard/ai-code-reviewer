@@ -54,6 +54,7 @@ source:
 
 # 3. Agent selection (OPTIONAL)
 review:
+  workflow: "review"  # review or rewrite
   persona: "personas/freebsd-angry-ai"  # See available agents below
 ```
 
@@ -85,6 +86,25 @@ Agents define the AI's review personality. Each is configured in [Oracle Agent S
 | `personas/performance-cop` | Speed, algorithms | Performance optimization |
 | `personas/friendly-mentor` | Learning | Training, onboarding |
 | `personas/example` | Balanced | General code review |
+
+## Workflow Modes
+
+Set `review.workflow` to choose the runner protocol:
+
+- `review` uses `REVIEW-INDEX.md` and `REVIEW-SUMMARY.md` for audits and fixes.
+- `rewrite` uses `REWRITE-INDEX.md` and `REWRITE-SUMMARY.md` for transformations such as translation, refactoring, API migration, decomposition, or hardening rewrites.
+
+Example:
+
+```yaml
+review:
+  workflow: "rewrite"
+  persona: "personas/friendly-mentor"
+  rewrite:
+    objective: "Rewrite small userland utilities into Rust side-by-side."
+    constraints:
+      - "Preserve CLI behavior and exit statuses."
+```
 
 ### Agent Configuration
 
@@ -248,7 +268,8 @@ personas/<name>/
 ```
 <source-root>/.ai-code-reviewer/
 ├── LESSONS.md        # Learned patterns
-├── REVIEW-SUMMARY.md # Progress tracking
+├── REVIEW-SUMMARY.md # Review progress tracking
+├── REWRITE-SUMMARY.md # Rewrite progress tracking when workflow: rewrite
 └── logs/             # Session logs
 ```
 
@@ -260,9 +281,9 @@ personas/<name>/
 
 After successful setup:
 
-1. The system generates a review index of your source tree
+1. The system generates a workflow index of your source tree
 2. Runs a pre-flight build check
-3. AI starts reviewing code directory by directory
+3. AI starts working code directory by directory
 4. Progress tracked in `<source>/.ai-code-reviewer/`
 
 ## Getting Help
