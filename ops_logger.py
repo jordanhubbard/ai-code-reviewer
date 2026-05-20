@@ -421,7 +421,8 @@ def create_logger_from_config(
     
     log_dir = ops_config.get('log_dir', '.reviewer-log')
     if not Path(log_dir).is_absolute():
-        log_dir = Path.cwd() / log_dir
+        base_dir = source_root if source_root is not None else Path.cwd()
+        log_dir = base_dir / log_dir
     
     sync_to_branch = ops_config.get('sync_to_branch')
     

@@ -320,6 +320,16 @@ def get_branch_preferences(config: Dict[str, Any]) -> Tuple[Optional[str], List[
     return preferred, branches
 
 
+def resolve_run_log_dir(config: Dict[str, Any], source_root: Path) -> Path:
+    """Resolve run logs relative to the configured source root."""
+    logging_cfg = config.get('logging') or {}
+    raw_log_dir = logging_cfg.get('log_dir', '.ai-code-reviewer/logs')
+    log_dir = Path(raw_log_dir)
+    if not log_dir.is_absolute():
+        log_dir = source_root / log_dir
+    return log_dir
+
+
 @dataclass
 class ReviewSession:
     """Tracks state of a review session with hierarchical progress."""
@@ -1964,8 +1974,8 @@ class ReviewLoop:
                 "---\n\n"
             )
         
-        # Logs go in persona directory too (or override)
-        self.log_dir = log_dir or (persona_dir / 'logs')
+        # Run logs are source-specific work artifacts.
+        self.log_dir = log_dir or (source_root / ".ai-code-reviewer" / "logs")
         self.log_dir.mkdir(parents=True, exist_ok=True)
         
         self.git = GitHelper(source_root)
@@ -6235,6 +6245,7 @@ Examples:
         persona_dir=persona_dir,
         review_config=review_config,
         ops_logger=ops_logger,
+        log_dir=resolve_run_log_dir(config, source_root),
         target_directories=review_config.get('target_directories', 10) if not args.forever else 0,
         max_iterations_per_directory=review_config.get('max_iterations_per_directory', 200),
         max_parallel_files=review_config.get('max_parallel_files', 1),

@@ -5,7 +5,7 @@ from unittest.mock import MagicMock, patch
 
 import reviewer
 from index_generator import generate_index
-from ops_logger import OpsLogger
+from ops_logger import OpsLogger, create_logger_from_config
 
 
 class _FakeBuildExecutor:
@@ -45,6 +45,23 @@ def _make_rust_source_tree(root: Path) -> None:
 
 
 class WorkflowModeTests(unittest.TestCase):
+    def test_relative_run_log_paths_use_source_root(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.assertEqual(
+                reviewer.resolve_run_log_dir(
+                    {"logging": {"log_dir": ".ai-code-reviewer/logs"}},
+                    root,
+                ),
+                root / ".ai-code-reviewer" / "logs",
+            )
+
+            ops = create_logger_from_config(
+                {"ops_logging": {"log_dir": ".reviewer-log"}},
+                source_root=root,
+            )
+            self.assertEqual(ops.log_dir, root / ".reviewer-log")
+
     def test_rewrite_index_uses_separate_metadata_file(self) -> None:
         with TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -118,13 +135,13 @@ class WorkflowModeTests(unittest.TestCase):
                     target_directories=1,
                     max_iterations_per_directory=10,
                     max_parallel_files=0,
-                    log_dir=root / "logs",
                     ops_logger=ops,
                 )
 
             self.assertEqual(loop.workflow_mode, "rewrite")
             self.assertEqual(loop.review_summary_file.name, "REWRITE-SUMMARY.md")
             self.assertEqual(loop.index.index_path.name, "REWRITE-INDEX.md")
+            self.assertEqual(loop.log_dir, root / ".ai-code-reviewer" / "logs")
             self.assertFalse(loop._parallel_mode)
 
             system_prompt = loop.history[0]["content"]
