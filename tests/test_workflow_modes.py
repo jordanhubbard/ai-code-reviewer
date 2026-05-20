@@ -275,6 +275,31 @@ class WorkflowModeTests(unittest.TestCase):
             self.assertIn("[ai-code-reviewer]", commit_msg)
             self.assertIn("foo", commit_msg)
 
+    def test_write_file_parser_accepts_incomplete_content_fences(self) -> None:
+        action = reviewer.ActionParser.parse(
+            "ACTION: WRITE_FILE usr.bin/foo/Cargo.toml\n"
+            "CONTENT:\n"
+            "<<<\n"
+            "[package]\n"
+            "name = \"foo\"\n"
+        )
+
+        self.assertIsNotNone(action)
+        self.assertEqual(action["action"], "WRITE_FILE")
+        self.assertEqual(action["file_path"], "usr.bin/foo/Cargo.toml")
+        self.assertIn("name = \"foo\"", action["content"])
+
+    def test_write_file_parser_accepts_plain_content(self) -> None:
+        action = reviewer.ActionParser.parse(
+            "ACTION: WRITE_FILE usr.bin/foo/Cargo.toml\n"
+            "CONTENT:\n"
+            "[package]\n"
+            "name = \"foo\"\n"
+        )
+
+        self.assertIsNotNone(action)
+        self.assertEqual(action["content"], "[package]\nname = \"foo\"")
+
     def test_tool_metadata_paths_are_recognized(self) -> None:
         self.assertTrue(reviewer.is_tool_metadata_path(".reviewer-log/ops.jsonl"))
         self.assertTrue(

@@ -1967,9 +1967,9 @@ class ActionParser:
 
         elif action == 'WRITE_FILE':
             result['file_path'] = arg
-            content_match = re.search(r'CONTENT:\s*<<<(.*?)>>>', body, re.DOTALL)
-            if content_match:
-                result['content'] = content_match.group(1).strip()
+            content = cls._parse_content_block(body)
+            if content is not None:
+                result['content'] = content
 
         elif action == 'READ_FILE':
             result['file_path'] = arg
@@ -1993,6 +1993,25 @@ class ActionParser:
             pass  # No arguments needed
 
         return result
+
+    @staticmethod
+    def _parse_content_block(body: str) -> Optional[str]:
+        """Parse WRITE_FILE content, tolerating common incomplete fence formats."""
+        content_match = re.search(r'CONTENT:\s*<<<(.*?)>>>', body, re.DOTALL)
+        if content_match:
+            return content_match.group(1).strip()
+
+        unterminated_match = re.search(r'CONTENT:\s*<<<(.*)\Z', body, re.DOTALL)
+        if unterminated_match:
+            content = unterminated_match.group(1).strip()
+            return content or None
+
+        plain_match = re.search(r'CONTENT:\s*(.*)\Z', body, re.DOTALL)
+        if plain_match:
+            content = plain_match.group(1).strip()
+            return content or None
+
+        return None
 
 
 class ReviewLoop:
