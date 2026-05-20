@@ -2608,7 +2608,7 @@ Respond with analysis followed by a single ACTION line.
     def _build_rewrite_system_prompt(self) -> str:
         """Build the system prompt for the rewrite workflow."""
         rewrite_context = self._rewrite_prompt_context()
-        return f"""You are an autonomous code rewriting AI for FreeBSD source code.
+        return f"""You are an autonomous code rewriting AI for source code.
 
 IMPORTANT: Work ONE DIRECTORY AT A TIME. Each directory (bin/cpuset/, sbin/mount/, etc.)
 is a coherent rewrite unit with its own build context. Rewrite ALL relevant files in a
@@ -2666,7 +2666,7 @@ replacement text
 CRITICAL EDIT_FILE RULES:
 - OLD block must be COPIED EXACTLY from the file you just read
 - Do NOT paraphrase or summarize - copy the EXACT characters
-- FreeBSD code uses TABS for indentation in C and make files
+- Preserve the file's existing formatting conventions; Rust rewrites should remain rustfmt-compatible
 - Include enough context lines to make the replacement unique
 - The <<< and >>> delimiters are REQUIRED
 - Prefer coherent, minimal replacement blocks over giant rewrites when possible
@@ -2692,13 +2692,10 @@ ACTION: HALT
     * There are still directories pending and less than 3 completed
   - Keep working until all target directories are done
 
-FREEBSD SOURCE TREE STRUCTURE:
-- bin/       - Essential user commands
-- sbin/      - Essential system commands
-- usr.bin/   - Non-essential user commands
-- usr.sbin/  - Non-essential system commands
-- lib/       - System libraries
-- sys/       - Kernel source
+SOURCE TREE STRUCTURE:
+- FreeBSD trees commonly use bin/, sbin/, usr.bin/, usr.sbin/, lib/, sys/, and tests/
+- Rust trees commonly use Cargo.toml, src/, crates/, examples/, benches/, and tests/
+- Other projects should be followed according to their local build and module layout
 
 REWRITE WORKFLOW:
 1. Pick a directory that is not already marked complete in the rewrite index
@@ -3492,7 +3489,7 @@ If no changes needed, respond with just: NO_EDITS_NEEDED"""
             else:
                 component = "various"
         
-        prompt = f"""Generate a git commit message for these FreeBSD source code changes.
+        prompt = f"""Generate a git commit message for these source code changes.
 
 Workflow mode: {self.workflow['display_name']}
 
@@ -3550,7 +3547,7 @@ Output ONLY the commit message, no other text."""
         if len(error_report) > 4000:
             error_report = error_report[:4000] + "\n... [truncated] ..."
         
-        prompt = f"""A FreeBSD build failed. Extract a concise lesson learned.
+        prompt = f"""A build failed. Extract a concise lesson learned.
 
 Build errors:
 ```
@@ -5855,16 +5852,17 @@ def validate_source_tree(source_root: Path) -> Tuple[bool, str]:
         return False, f"Source root is not a directory: {source_root}"
     
     # Check for common indicators of a source tree
-    # FreeBSD: Makefile with buildworld target
-    # Linux kernel: Makefile with vmlinux target  
-    # Other: any Makefile or CMakeLists.txt
+    # FreeBSD/Linux kernel: Makefile
+    # CMake: CMakeLists.txt
+    # Rust: Cargo.toml
     makefile = source_root / "Makefile"
     cmake = source_root / "CMakeLists.txt"
+    cargo = source_root / "Cargo.toml"
     
-    if not makefile.exists() and not cmake.exists():
+    if not makefile.exists() and not cmake.exists() and not cargo.exists():
         return False, (
             f"Source root does not appear to be a buildable project: {source_root}\n"
-            f"Expected to find Makefile or CMakeLists.txt but found neither.\n"
+            f"Expected to find Makefile, CMakeLists.txt, or Cargo.toml but found none.\n"
             f"Please set source.root in config.yaml to point to your source tree."
         )
     

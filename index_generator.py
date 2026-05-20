@@ -3,11 +3,11 @@
 Index Generator for Angry AI
 
 Generates and maintains a structured index of all workable directories
-in the FreeBSD source tree. This gives the AI a "file browser" view of
-the entire codebase with progress tracking.
+in a source tree. This gives the AI a "file browser" view of the entire
+codebase with progress tracking.
 
 The index file contains:
-- All directories with C source code
+- All directories with reviewable source code
 - Status markers: [ ] pending, [>] current, [x] done, [-] skipped
 - File counts and metadata
 - Current position pointer for resuming work
@@ -53,7 +53,7 @@ STATUS_TO_MARKER = {
 INDEX_WORKFLOWS = {
     "review": {
         "index_file": "REVIEW-INDEX.md",
-        "title": "FreeBSD Source Review Index",
+        "title": "Source Review Index",
         "noun": "review",
         "verb": "review",
         "gerund": "reviewing",
@@ -62,7 +62,7 @@ INDEX_WORKFLOWS = {
     },
     "rewrite": {
         "index_file": "REWRITE-INDEX.md",
-        "title": "FreeBSD Source Rewrite Index",
+        "title": "Source Rewrite Index",
         "noun": "rewrite",
         "verb": "rewrite",
         "gerund": "rewriting",
@@ -201,6 +201,9 @@ class ReviewIndex:
         'cddl', 'contrib', 'crypto', 'gnu', 'include', 'kerberos5', 'krb5',
         'release', 'secure', 'share', 'stand', 'sys', 'targets', 'tests', 'tools'
     ]
+    GENERIC_SKIP_DIRS = {
+        'target', 'node_modules', '__pycache__', '.venv', 'venv',
+    }
     
     def __init__(self, source_root: Path, workflow_mode: str = "review"):
         self.source_root = source_root
@@ -252,35 +255,40 @@ class ReviewIndex:
         
         self.entries = DirectoryEntryMap()
         
+        scanned_known_layout = False
         for top_dir in self.TOP_DIRS:
             top_path = self.source_root / top_dir
             if not top_path.exists():
                 continue
+            scanned_known_layout = True
             
             self._scan_directory(top_path, top_dir, existing_status)
+
+        if not scanned_known_layout or not self.entries:
+            self._scan_directory(self.source_root, "", existing_status)
         
         # Sort entries
         self.entries = DirectoryEntryMap(dict(sorted(self.entries.items())))
     
     def _scan_directory(self, path: Path, prefix: str,
                         existing_status: Dict) -> None:
-        """Recursively scan for directories with C source."""
+        """Recursively scan for directories with reviewable source."""
         try:
             for item in sorted(path.iterdir()):
                 if not self._should_process_directory(item):
                     continue
 
-                rel_path = f"{prefix}/{item.name}"
+                rel_path = self._join_rel_path(prefix, item.name)
 
                 # Skip directories that are gitignored
                 if is_git_ignored(self.source_root, rel_path):
                     continue
 
                 # Scan directory contents
-                c_files, h_files, reviewable_found = self._scan_directory_contents(item, rel_path)
+                c_files, h_files, line_files, reviewable_found = self._scan_directory_contents(item, rel_path)
 
                 if reviewable_found:
-                    total_lines = self._count_lines(c_files + h_files)
+                    total_lines = self._count_lines(line_files)
 
                     entry = DirectoryEntry(
                         path=rel_path,
@@ -307,15 +315,23 @@ class ReviewIndex:
             return False
         if item.name.startswith('.'):
             return False
+        if item.name in self.GENERIC_SKIP_DIRS:
+            return False
         # CRITICAL: Prevent self-review if ai-code-reviewer is in the source tree
         if item.name in ['ai-code-reviewer', 'angry-ai']:
             return False
         return True
 
+    @staticmethod
+    def _join_rel_path(prefix: str, name: str) -> str:
+        """Join a scanned prefix and child name without leading slashes."""
+        return f"{prefix}/{name}" if prefix else name
+
     def _scan_directory_contents(self, directory: Path, rel_path: str) -> tuple:
         """Scan a directory's contents and identify reviewable files."""
         c_files = []
         h_files = []
+        line_files = []
         reviewable_found = False
 
         try:
@@ -330,11 +346,12 @@ class ReviewIndex:
 
                 if self._is_file_reviewable(child, c_files, h_files):
                     reviewable_found = True
+                    line_files.append(child)
 
         except PermissionError:
             reviewable_found = False
 
-        return c_files, h_files, reviewable_found
+        return c_files, h_files, line_files, reviewable_found
 
     def _is_file_reviewable(self, file_path: Path, c_files: List[Path],
                            h_files: List[Path]) -> bool:
@@ -482,22 +499,27 @@ class ReviewIndex:
     def _format_directory_groups(self) -> List[str]:
         """Format all directory group sections."""
         lines = []
+        grouped_paths = set()
         for top_dir in self.TOP_DIRS:
-            group_lines = self._format_directory_group(top_dir)
+            group = {k: v for k, v in self.entries.items()
+                     if k.startswith(f"{top_dir}/")}
+            grouped_paths.update(group)
+            group_lines = self._format_directory_group(f"{top_dir}/", group)
             lines.extend(group_lines)
+
+        remaining = {k: v for k, v in self.entries.items()
+                     if k not in grouped_paths}
+        lines.extend(self._format_directory_group("Project", remaining))
         return lines
 
-    def _format_directory_group(self, top_dir: str) -> List[str]:
+    def _format_directory_group(self, title: str, group: Dict[str, DirectoryEntry]) -> List[str]:
         """Format a single directory group section."""
-        group = {k: v for k, v in self.entries.items()
-                if k.startswith(f"{top_dir}/")}
-
         if not group:
             return []
 
         group_done = sum(1 for e in group.values() if e.status == Status.DONE)
         lines = [
-            f"## {top_dir}/ ({group_done}/{len(group)} done)",
+            f"## {title} ({group_done}/{len(group)} done)",
             "",
         ]
 

@@ -31,6 +31,17 @@ def _make_source_tree(root: Path) -> None:
     (root / "bin" / "foo" / "main.c").write_text("int main(void) { return 0; }\n")
 
 
+def _make_rust_source_tree(root: Path) -> None:
+    (root / "src").mkdir(parents=True)
+    (root / "Cargo.toml").write_text(
+        "[package]\n"
+        "name = \"rewrite-smoke\"\n"
+        "version = \"0.1.0\"\n"
+        "edition = \"2021\"\n"
+    )
+    (root / "src" / "main.rs").write_text("fn main() { println!(\"hello\"); }\n")
+
+
 class WorkflowModeTests(unittest.TestCase):
     def test_rewrite_index_uses_separate_metadata_file(self) -> None:
         with TemporaryDirectory() as tmp:
@@ -43,6 +54,19 @@ class WorkflowModeTests(unittest.TestCase):
             self.assertTrue(index.index_path.exists())
             self.assertIn("=== REWRITE INDEX SUMMARY ===", index.get_summary_for_ai())
             self.assertFalse((root / ".ai-code-reviewer" / "REVIEW-INDEX.md").exists())
+
+    def test_rewrite_index_scans_generic_rust_project(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _make_rust_source_tree(root)
+
+            index = generate_index(root, force_rebuild=True, workflow_mode="rewrite")
+            valid, error = reviewer.validate_source_tree(root)
+
+            self.assertEqual(index.index_path.name, "REWRITE-INDEX.md")
+            self.assertTrue(valid, error)
+            self.assertIn("src", index.entries)
+            self.assertEqual(index.entries["src"].total_lines, 1)
 
     def test_rewrite_loop_uses_rewrite_prompt_and_summary(self) -> None:
         persona_dir = Path(__file__).resolve().parents[1] / "personas" / "friendly-mentor"
@@ -88,6 +112,7 @@ class WorkflowModeTests(unittest.TestCase):
             init_message = loop.history[1]["content"]
             self.assertIn("code rewriting AI", system_prompt)
             self.assertIn("broader than translation", system_prompt)
+            self.assertNotIn("FreeBSD source code", system_prompt)
             self.assertIn("Rewrite small userland utilities side-by-side.", init_message)
 
             with patch.object(loop, "_record_directory_attempt", return_value=1):
