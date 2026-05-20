@@ -190,6 +190,10 @@ class LLMClient:
     def config(self):
         return self
 
+    @property
+    def timeout(self):
+        return self._timeout
+
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
