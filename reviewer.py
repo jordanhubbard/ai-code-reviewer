@@ -1882,6 +1882,13 @@ class FileEditor:
     def write_file(self, file_path: Path, content: str) -> Tuple[bool, str, str]:
         """Write content to a file."""
         try:
+            if file_path.exists():
+                existing = file_path.read_text(encoding='utf-8')
+                if existing == content:
+                    return False, (
+                        f"{NOOP_EDIT_PREFIX} for {file_path}: WRITE_FILE content is identical to existing file"
+                    ), ""
+
             file_path.parent.mkdir(parents=True, exist_ok=True)
             file_path.write_text(content, encoding='utf-8')
             diff = self.git.diff(str(file_path))
@@ -4412,8 +4419,10 @@ Output ONLY the lesson entry, nothing else."""
         return message.startswith(NOOP_EDIT_PREFIX)
 
     @staticmethod
-    def _noop_edit_hash(rel_path: str, old_text: str, new_text: str) -> str:
+    def _noop_edit_hash(action_type: str, rel_path: str, old_text: str, new_text: str) -> str:
         digest = hashlib.sha256()
+        digest.update(action_type.encode('utf-8', errors='replace'))
+        digest.update(b'\0')
         digest.update(rel_path.encode('utf-8', errors='replace'))
         digest.update(b'\0')
         digest.update(old_text.encode('utf-8', errors='replace'))
@@ -4427,9 +4436,10 @@ Output ONLY the lesson entry, nothing else."""
         message: str,
         old_text: str,
         new_text: str,
+        action_type: str = 'EDIT_FILE',
     ) -> str:
         """Track semantic no-op edits and stop the run if the same no-op repeats."""
-        edit_hash = self._noop_edit_hash(rel_path, old_text, new_text)
+        edit_hash = self._noop_edit_hash(action_type, rel_path, old_text, new_text)
         if edit_hash == self.session.last_noop_edit_hash:
             self.session.noop_edit_count += 1
         else:
@@ -4448,7 +4458,7 @@ Output ONLY the lesson entry, nothing else."""
                 f"{'='*70}\n"
                 f"NO-OP EDIT REJECTED\n"
                 f"{'='*70}\n\n"
-                f"The requested EDIT_FILE would not change {rel_path}.\n"
+                f"The requested {action_type} would not change {rel_path}.\n"
                 f"Repeated no-op edits are treated as a control-loop failure.\n\n"
                 f"Choose a different action now:\n"
                 f"- Use ACTION: BUILD if the current scope already has real changes\n"
@@ -4460,12 +4470,13 @@ Output ONLY the lesson entry, nothing else."""
             )
 
         self._stop_requested = True
-        self._stop_reason = f"Repeated no-op EDIT_FILE loop on {rel_path}"
+        self._stop_reason = f"Repeated no-op {action_type} loop on {rel_path}"
         logger.error("%s: %s", self._stop_reason, message)
 
         if self.beads:
             issue_desc = (
-                f"The AI repeated an EDIT_FILE action that could not change file contents.\n\n"
+                f"The AI repeated a file-modification action that could not change file contents.\n\n"
+                f"Action: {action_type}\n"
                 f"File: {rel_path}\n"
                 f"Attempts: {self.session.noop_edit_count}\n"
                 f"Reason: {message}\n"
@@ -4474,7 +4485,7 @@ Output ONLY the lesson entry, nothing else."""
                 f"The run stopped rather than continuing to spend tokens on a semantic no-op."
             )
             self.beads.create_systemic_issue(
-                title=f"No-op edit loop on {rel_path}",
+                title=f"No-op {action_type} loop on {rel_path}",
                 description=issue_desc,
                 issue_type='bug',
                 priority=1,
@@ -4482,11 +4493,11 @@ Output ONLY the lesson entry, nothing else."""
             )
 
         return (
-            f"FATAL_NOOP_EDIT_LOOP: {message}\n\n"
+            f"FATAL_NOOP_{action_type}_LOOP: {message}\n\n"
             f"{'='*70}\n"
             f"NO-OP EDIT LOOP DETECTED - STOPPING RUN\n"
             f"{'='*70}\n\n"
-            f"The same semantic no-op edit was attempted {self.session.noop_edit_count} times on:\n"
+            f"The same semantic no-op {action_type} was attempted {self.session.noop_edit_count} times on:\n"
             f"  {rel_path}\n\n"
             f"The reviewer is stopping now. This is a control-loop failure, not a source change.\n"
             f"No pending file changes were recorded for the rejected no-op edit.\n"
@@ -5071,18 +5082,32 @@ Output ONLY the lesson entry, nothing else."""
                 return "WRITE_FILE_ERROR: Missing CONTENT block"
             
             success, message, diff = self.editor.write_file(path, content)
+            rel_path = str(path.relative_to(self.source_root))
             
             if success:
+                self.session.noop_edit_count = 0
+                self.session.last_noop_edit_hash = None
                 self.session.pending_changes = True
                 self.session.last_diff = diff
-                if str(path) not in self.session.changed_files:
-                    self.session.changed_files.append(str(path.relative_to(self.source_root)))
+                if rel_path not in self.session.changed_files:
+                    self.session.changed_files.append(rel_path)
                 
                 result = f"WRITE_FILE_OK: {message}\nDiffs will be shown for all changed files after BUILD succeeds."
                 
                 print(f"\n*** Wrote: {path}")
                 return result
             else:
+                self.ops.edit_failure(rel_path, message)
+                if self._is_noop_edit_message(message):
+                    return self._handle_noop_edit(
+                        rel_path,
+                        message,
+                        content,
+                        content,
+                        action_type='WRITE_FILE',
+                    )
+                self.session.noop_edit_count = 0
+                self.session.last_noop_edit_hash = None
                 return f"WRITE_FILE_ERROR: {message}"
         
         elif action_type == 'BUILD':
