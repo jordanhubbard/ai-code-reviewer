@@ -1,4 +1,6 @@
 import unittest
+import shutil
+import subprocess
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import MagicMock, patch
@@ -122,6 +124,29 @@ class WorkflowModeTests(unittest.TestCase):
             loaded = generate_index(root, force_rebuild=False, workflow_mode="rewrite")
             self.assertEqual(loaded.entries["src"].unit_kind, "rust-binary")
             self.assertEqual(loaded.entries["tests"].depends_on, ["src"])
+
+    @unittest.skipIf(shutil.which("git") is None, "git command not available")
+    def test_rewrite_index_skips_gitignored_directories(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _make_source_tree(root)
+            (root / ".gitignore").write_text("bin/generated/\n")
+            (root / "bin" / "generated").mkdir(parents=True)
+            (root / "bin" / "generated" / "main.c").write_text(
+                "int main(void) { return 1; }\n"
+            )
+            subprocess.run(
+                ["git", "init"],
+                cwd=root,
+                check=True,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+
+            index = generate_index(root, force_rebuild=True, workflow_mode="rewrite")
+
+            self.assertIn("bin/foo", index.entries)
+            self.assertNotIn("bin/generated", index.entries)
 
     def test_rewrite_loop_uses_rewrite_prompt_and_summary(self) -> None:
         persona_dir = Path(__file__).resolve().parents[1] / "personas" / "friendly-mentor"

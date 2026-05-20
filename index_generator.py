@@ -19,7 +19,7 @@ import json
 import shlex
 from pathlib import Path
 from dataclasses import dataclass, field
-from typing import Any, List, Dict, Optional, Iterator
+from typing import Any, List, Dict, Optional, Iterator, Set
 from datetime import datetime
 import re
 
@@ -115,21 +115,81 @@ REWRITE_STAGE_ORDER = {
 # Utility Functions
 # ============================================================================
 
+class GitIgnoreIndex:
+    """Fast in-process matcher for paths ignored by Git."""
+
+    def __init__(self, repo_root: Path):
+        self.repo_root = repo_root
+        self.ignored_paths: Set[str] = set()
+        self.ignored_dirs: Set[str] = set()
+        self._load()
+
+    @staticmethod
+    def _normalize(path: str) -> str:
+        return path.strip("/").replace("\\", "/")
+
+    def _load(self) -> None:
+        try:
+            result = subprocess.run(
+                [
+                    "git",
+                    "-C",
+                    str(self.repo_root),
+                    "ls-files",
+                    "--others",
+                    "--ignored",
+                    "--exclude-standard",
+                    "--directory",
+                    "-z",
+                ],
+                capture_output=True,
+            )
+        except Exception:
+            return
+
+        if result.returncode != 0:
+            return
+
+        for raw_path in result.stdout.split(b"\0"):
+            if not raw_path:
+                continue
+            decoded = raw_path.decode("utf-8", errors="replace")
+            is_dir = decoded.endswith("/") or decoded.endswith("\\")
+            path = self._normalize(decoded)
+            if not path:
+                continue
+            if is_dir:
+                self.ignored_dirs.add(path)
+            else:
+                self.ignored_paths.add(path)
+
+    def is_ignored(self, path: str) -> bool:
+        path = self._normalize(path)
+        if not path:
+            return False
+        if path == ".git" or path.startswith(".git/") or "/.git/" in path:
+            return True
+        if path in self.ignored_paths or path in self.ignored_dirs:
+            return True
+
+        parts = path.split("/")
+        for idx in range(1, len(parts)):
+            if "/".join(parts[:idx]) in self.ignored_dirs:
+                return True
+        return False
+
+
+_GIT_IGNORE_INDEXES: Dict[str, GitIgnoreIndex] = {}
+
+
 def is_git_ignored(repo_root: Path, path: str) -> bool:
     """Check if a path is ignored by .gitignore."""
-    # Always ignore .git directory
-    if path.startswith('.git/') or path == '.git' or '/.git/' in path:
-        return True
-    
-    try:
-        result = subprocess.run(
-            ['git', '-C', str(repo_root), 'check-ignore', '-q', path],
-            capture_output=True,
-            text=True
-        )
-        return result.returncode == 0
-    except Exception:
-        return False
+    root = str(repo_root.resolve())
+    checker = _GIT_IGNORE_INDEXES.get(root)
+    if checker is None:
+        checker = GitIgnoreIndex(repo_root)
+        _GIT_IGNORE_INDEXES[root] = checker
+    return checker.is_ignored(path)
 
 
 @dataclass
