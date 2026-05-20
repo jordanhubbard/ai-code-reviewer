@@ -2478,6 +2478,76 @@ class ReviewLoop:
         )
         return normalize_rewrite_source_suffixes(raw)
 
+    def _rewrite_requires_rust_build(self, changed_files: Optional[List[str]] = None) -> bool:
+        if self.workflow_mode != "rewrite":
+            return False
+
+        raw = self.rewrite_config.get("require_rust_build")
+        if raw is not None:
+            return _config_bool(raw, default=True)
+
+        if changed_files and self._changed_files_include_rust_artifact(changed_files):
+            return True
+
+        text_parts = [
+            self.rewrite_config.get("objective"),
+            self.rewrite_config.get("goal"),
+            self.rewrite_config.get("strategy"),
+            self.rewrite_config.get("style"),
+            self.rewrite_config.get("output_policy"),
+            self.rewrite_config.get("target_language"),
+            self.rewrite_config.get("language"),
+        ]
+        return "rust" in " ".join(str(part) for part in text_parts if part).lower()
+
+    @staticmethod
+    def _changed_files_include_rust_artifact(changed_files: List[str]) -> bool:
+        for file_path in changed_files:
+            path = Path(file_path)
+            if path.suffix.lower() == ".rs" or path.name in {"Cargo.toml", "Cargo.lock"}:
+                return True
+        return False
+
+    @staticmethod
+    def _build_output_has_rust_invocation(raw_output: str) -> bool:
+        patterns = [
+            r"(^|\s)(cargo|rustc)(\s|$)",
+            r"\bCompiling\s+\S+\s+v\d",
+            r"\bFinished\s+`(?:dev|release)` profile",
+        ]
+        return any(re.search(pattern, raw_output, re.MULTILINE) for pattern in patterns)
+
+    def _rewrite_build_completion_error(
+        self,
+        build_result: BuildResult,
+        changed_files: List[str],
+    ) -> Optional[str]:
+        if not self._rewrite_requires_rust_build(changed_files):
+            return None
+
+        current_dir = self.session.current_directory or "(current scope)"
+        if not self._changed_files_include_rust_artifact(changed_files):
+            return (
+                "BUILD_REJECTED: Rust rewrite completion requires Rust source or Cargo manifest changes.\n\n"
+                "The active build succeeded, but this scope did not add or modify any .rs file, "
+                "Cargo.toml, or Cargo.lock. This is not a completed Rust rewrite.\n\n"
+                f"Keep working in {current_dir}: add the Rust replacement and update the build files "
+                "so the normal unit build compiles it."
+            )
+
+        if self._build_output_has_rust_invocation(build_result.raw_output):
+            return None
+
+        return (
+            "BUILD_REJECTED: Rust rewrite build did not compile the Rust replacement.\n\n"
+            "The active build command exited successfully, but its output did not show cargo or "
+            "rustc running. A side target that must be invoked manually is not enough: the task is "
+            "not done until the build files make the normal active unit build produce the Rust version "
+            "instead of the previous C/C++ implementation.\n\n"
+            f"Keep working in {current_dir}: modify the Makefile/build glue so "
+            f"`{self._current_build_command()}` invokes the Rust build, then run BUILD again."
+        )
+
     def _next_pending_work_unit(self) -> Optional[str]:
         if self.workflow_mode == "rewrite":
             return self.index.get_next_pending(
@@ -2522,6 +2592,7 @@ class ReviewLoop:
             self.rewrite_config.get("success_criteria"),
             [
                 "The configured build command succeeds.",
+                "For Rust translations, the normal active unit build compiles the Rust replacement.",
                 "The rewritten code is coherent, maintainable, and behavior-preserving for the selected scope.",
                 "Any translation, refactor, API migration, or decomposition is documented in the commit message.",
             ],
@@ -2891,6 +2962,7 @@ ACTION: BUILD
   - Run the configured build command to validate ALL changes in current scope
   - If succeeds: all changes in scope directory are committed together
   - If fails: analyze errors, fix them, rebuild
+  - For Rust translations: the normal active build command must invoke cargo/rustc and build the Rust replacement
 
 ACTION: HALT
   - Signal completely done with rewrite session
@@ -2926,9 +2998,10 @@ RULES:
 4. Use relative paths from source root
 5. Preserve public interfaces, CLI behavior, ABI, file formats, and tests unless instructed
 6. If translating to another language, include the build integration needed to compile it
-7. Do not create placeholder crates, stub binaries, or synthetic support files just to satisfy the rewrite objective
-8. If the selected unit has no source relevant to the configured objective, choose another scope instead of fabricating a rewrite
-9. CONSULT LESSONS.md before making edits to avoid repeating failed approaches
+7. For Rust translations, a side target is not completion; the normal active unit build must build the Rust version instead of the previous implementation
+8. Do not create placeholder crates, stub binaries, or synthetic support files just to satisfy the rewrite objective
+9. If the selected unit has no source relevant to the configured objective, choose another scope instead of fabricating a rewrite
+10. CONSULT LESSONS.md before making edits to avoid repeating failed approaches
 
 Respond with analysis followed by a single ACTION line.
 """
@@ -4769,10 +4842,25 @@ Output ONLY the lesson entry, nothing else."""
             
             # Run build with live output
             result = self._run_build_with_live_output()
+            rewrite_completion_error = (
+                self._rewrite_build_completion_error(result, changed_files)
+                if result.success else None
+            )
 
-            # Record build result in metrics
-            self.metrics.record_build(success=result.success)
+            # Record build result in metrics. A Rust rewrite build that skips
+            # the Rust artifact is a workflow failure even if make exits 0.
+            self.metrics.record_build(success=result.success and not rewrite_completion_error)
             self.metrics.total_iterations = self.session.action_history.__len__() if hasattr(self.session, 'action_history') else 0
+
+            if rewrite_completion_error:
+                self.session.build_failures += 1
+                self.ops.build_failure(
+                    result.duration_seconds,
+                    error_count=0,
+                    warning_count=result.warning_count,
+                    error_summary="Rust rewrite build did not compile Rust artifact",
+                )
+                return rewrite_completion_error
 
             if result.success:
                 # Build succeeded!

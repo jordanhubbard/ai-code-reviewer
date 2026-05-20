@@ -234,6 +234,7 @@ class WorkflowModeTests(unittest.TestCase):
                         "workflow": "rewrite",
                         "rewrite": {
                             "objective": "Rewrite small userland utilities side-by-side.",
+                            "target_language": "rust",
                             "source_suffixes": [".c", ".cc"],
                         },
                     },
@@ -255,6 +256,7 @@ class WorkflowModeTests(unittest.TestCase):
             self.assertIn("broader than translation", system_prompt)
             self.assertIn("Do not create placeholder crates", system_prompt)
             self.assertIn("choose another scope instead of fabricating a rewrite", system_prompt)
+            self.assertIn("normal active unit build must build the Rust version", system_prompt)
             self.assertNotIn("FreeBSD source code", system_prompt)
             self.assertIn("Rewrite small userland utilities side-by-side.", init_message)
             self.assertIn("Required source suffixes: .c, .cc", init_message)
@@ -274,6 +276,43 @@ class WorkflowModeTests(unittest.TestCase):
                 commit_msg = loop._generate_commit_message("", [], "bin/foo")
             self.assertIn("[ai-code-reviewer]", commit_msg)
             self.assertIn("foo", commit_msg)
+
+            changed_files = [
+                "bin/foo/Makefile",
+                "bin/foo/crates/foo/Cargo.toml",
+                "bin/foo/crates/foo/src/main.rs",
+            ]
+            c_only_build = reviewer.BuildResult(
+                success=True,
+                return_code=0,
+                duration_seconds=1.0,
+                raw_output="cc -o foo foo.o\n",
+            )
+            rejection = loop._rewrite_build_completion_error(c_only_build, changed_files)
+            self.assertIsNotNone(rejection)
+            self.assertIn("BUILD_REJECTED", rejection)
+            self.assertIn("normal active unit build produce the Rust version", rejection)
+
+            rust_build = reviewer.BuildResult(
+                success=True,
+                return_code=0,
+                duration_seconds=1.0,
+                raw_output="cargo build --manifest-path crates/foo/Cargo.toml\n",
+            )
+            self.assertIsNone(loop._rewrite_build_completion_error(rust_build, changed_files))
+
+            no_rust_changes = reviewer.BuildResult(
+                success=True,
+                return_code=0,
+                duration_seconds=1.0,
+                raw_output="cargo build --manifest-path crates/foo/Cargo.toml\n",
+            )
+            no_rust_rejection = loop._rewrite_build_completion_error(
+                no_rust_changes,
+                ["bin/foo/Makefile"],
+            )
+            self.assertIsNotNone(no_rust_rejection)
+            self.assertIn("requires Rust source or Cargo manifest changes", no_rust_rejection)
 
     def test_write_file_parser_accepts_incomplete_content_fences(self) -> None:
         action = reviewer.ActionParser.parse(
