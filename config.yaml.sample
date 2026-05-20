@@ -59,6 +59,13 @@ llm:
   # Maximum tokens to generate per response
   max_tokens: 4096
 
+  # Model context window and budgeting safety margin.  The client uses these
+  # to cap max_tokens before sending requests so prompt + output stays under
+  # the server limit instead of triggering vLLM 400 errors.
+  context_window: 65536
+  context_safety_tokens: 2048
+  min_response_tokens: 512
+
   # Temperature for generation (0.0 = deterministic, 1.0 = creative)
   temperature: 0.1
 

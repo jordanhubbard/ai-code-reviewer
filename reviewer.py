@@ -3722,6 +3722,150 @@ If no changes needed, respond with just: NO_EDITS_NEEDED"""
             hidden = len(sanitized) - max_chars
             return f"{trimmed}\n... [truncated {hidden} chars; see persona logs for full output]"
         return sanitized
+
+    @staticmethod
+    def _estimate_text_tokens(text: str) -> int:
+        if not text:
+            return 0
+        return max(1, (len(text) + 2) // 3)
+
+    def _estimate_history_tokens(self, history: Optional[List[Dict[str, str]]] = None) -> int:
+        messages = history if history is not None else self.history
+        estimator = getattr(self.ollama, "estimate_messages_tokens", None)
+        if callable(estimator):
+            try:
+                return int(estimator(messages))
+            except Exception:
+                pass
+        return sum(
+            self._estimate_text_tokens(str(message.get("content", ""))) + 4
+            for message in messages
+        )
+
+    def _llm_context_window(self) -> int:
+        value = getattr(self.ollama, "context_window", None)
+        try:
+            return int(value) if value else 65536
+        except (TypeError, ValueError):
+            return 65536
+
+    def _llm_response_budget(self) -> int:
+        value = getattr(self.ollama, "max_tokens", None)
+        try:
+            return int(value) if value else 4096
+        except (TypeError, ValueError):
+            return 4096
+
+    def _llm_safety_tokens(self) -> int:
+        value = getattr(self.ollama, "context_safety_tokens", None)
+        try:
+            return int(value) if value is not None else 2048
+        except (TypeError, ValueError):
+            return 2048
+
+    def _history_token_budget(self, aggressive: bool = False) -> int:
+        configured = int(self.review_config.get("max_history_tokens", 0) or 0)
+        context_budget = (
+            self._llm_context_window()
+            - self._llm_response_budget()
+            - self._llm_safety_tokens()
+        )
+        context_budget = max(2048, context_budget)
+        if configured > 0:
+            budget = min(configured, context_budget)
+        else:
+            budget = min(24000, context_budget)
+        if aggressive:
+            budget = min(budget, max(2048, context_budget // 2))
+        return max(1024, budget)
+
+    @staticmethod
+    def _compact_text(text: str, max_chars: int) -> str:
+        if len(text) <= max_chars:
+            return text
+        if max_chars <= 200:
+            return text[:max_chars]
+        head_len = max_chars // 2
+        tail_len = max_chars - head_len - 120
+        if tail_len < 80:
+            tail_len = 80
+            head_len = max_chars - tail_len - 120
+        omitted = len(text) - head_len - tail_len
+        return (
+            text[:head_len].rstrip()
+            + f"\n\n... [history compacted: omitted {omitted} chars] ...\n\n"
+            + text[-tail_len:].lstrip()
+        )
+
+    def _compact_history_message(self, message: Dict[str, str], max_chars: int) -> Dict[str, str]:
+        return {
+            "role": message.get("role", "user"),
+            "content": self._compact_text(str(message.get("content", "")), max_chars),
+        }
+
+    def _compact_history_for_llm(self, aggressive: bool = False) -> bool:
+        """Prune and compact chat history before it is sent to the LLM."""
+        if len(self.history) <= 2:
+            return False
+
+        original_messages = len(self.history)
+        original_tokens = self._estimate_history_tokens(self.history)
+        token_budget = self._history_token_budget(aggressive=aggressive)
+        char_budget = token_budget * 3
+        per_message_chars = int(
+            self.review_config.get(
+                "max_history_message_chars",
+                8000 if aggressive else 24000,
+            )
+        )
+        per_message_chars = max(1000, per_message_chars)
+
+        preserved = list(self.history[:2])
+        recent = [
+            self._compact_history_message(message, per_message_chars)
+            for message in self.history[2:]
+        ]
+
+        def total_chars(messages: List[Dict[str, str]]) -> int:
+            return sum(len(str(message.get("content", ""))) for message in messages)
+
+        while total_chars(preserved + recent) > char_budget and len(recent) > 2:
+            recent = recent[2:]
+
+        if total_chars(preserved + recent) > char_budget:
+            tighter = max(1000, per_message_chars // 2)
+            recent = [self._compact_history_message(message, tighter) for message in recent]
+
+        while total_chars(preserved + recent) > char_budget and len(recent) > 1:
+            recent = recent[1:]
+
+        if total_chars(preserved + recent) > char_budget and len(preserved) >= 2:
+            init_budget = max(2000, char_budget // 3)
+            preserved[1] = self._compact_history_message(preserved[1], init_budget)
+
+        if total_chars(preserved + recent) > char_budget and preserved:
+            system_budget = max(2000, char_budget // 4)
+            preserved[0] = self._compact_history_message(preserved[0], system_budget)
+
+        self.history = preserved + recent
+        new_tokens = self._estimate_history_tokens(self.history)
+        changed = original_messages != len(self.history) or new_tokens < original_tokens
+        if changed:
+            logger.info(
+                "Compacted history from %s messages/~%s tokens to %s messages/~%s tokens "
+                "(budget=%s, aggressive=%s)",
+                original_messages,
+                original_tokens,
+                len(self.history),
+                new_tokens,
+                token_budget,
+                aggressive,
+            )
+        return changed
+
+    def _history_append_user(self, content: str) -> None:
+        self.history.append({"role": "user", "content": content})
+        self._compact_history_for_llm()
     
     def _resolve_path(self, path_str: str) -> Path:
         """Resolve a relative path within the source tree."""
@@ -5187,15 +5331,34 @@ Output ONLY the lesson entry, nothing else."""
             lines.append(f"  ... plus {len(remaining) - limit} more")
         return '\n'.join(lines)
 
-    def _render_final_diffs(self, files: List[str]) -> str:
+    def _render_final_diffs(self, files: List[str], max_chars: int = 12000) -> str:
         if not files:
             return "No files were modified in this directory."
         sections = []
+        skipped = []
         for rel_path in files:
+            if is_tool_metadata_path(rel_path):
+                skipped.append(rel_path)
+                continue
             diff = self.git.diff(rel_path)
             header = f"--- {rel_path} ---"
             body = diff if diff.strip() else "(no changes)"
-            sections.append(f"{header}\n```diff\n{body}\n```")
+            section = f"{header}\n```diff\n{body}\n```"
+            current_len = sum(len(item) for item in sections)
+            if current_len + len(section) > max_chars:
+                remaining = max_chars - current_len
+                if remaining > 500:
+                    sections.append(self._compact_text(section, remaining))
+                skipped.append(rel_path)
+                break
+            sections.append(section)
+        if skipped:
+            sections.append(
+                f"... [diff output compacted; omitted {len(skipped)} file(s): "
+                f"{', '.join(skipped[:8])}{' ...' if len(skipped) > 8 else ''}]"
+            )
+        if not sections:
+            return "Only tool metadata changed in this directory."
         return "\n\n".join(sections)
     
     # Error classification for forever mode
@@ -5205,6 +5368,7 @@ Output ONLY the lesson entry, nothing else."""
         'connection': 'Connection to LLM server failed',
         'rate_limit': 'Rate limited by LLM server',
         'temporary': 'Temporary server error',
+        'context_length': 'LLM request exceeded the model context window',
     }
     UNRECOVERABLE_ERRORS = {
         'model_not_found': 'Model does not exist on server',
@@ -5224,6 +5388,14 @@ Output ONLY the lesson entry, nothing else."""
         error_lower = error_msg.lower()
         
         # Check for recoverable errors first
+        if (
+            'maximum context length' in error_lower
+            or 'context length' in error_lower
+            or 'input_tokens' in error_lower
+            or 'prompt contains' in error_lower
+            or 'context budget' in error_lower
+        ):
+            return (True, 'context_length', self.RECOVERABLE_ERRORS['context_length'])
         if 'timed out' in error_lower or 'timeout' in error_lower:
             return (True, 'timeout', self.RECOVERABLE_ERRORS['timeout'])
         if 'connection' in error_lower or 'connect' in error_lower:
@@ -5692,8 +5864,8 @@ TO FIX:
                 self.session.llm_retry_backoff = 5  # Start with 5 second backoff
             
             try:
-                history_chars = sum(len(m.get('content', '')) for m in self.history)
-                history_tokens_est = history_chars // 4
+                self._compact_history_for_llm()
+                history_tokens_est = self._estimate_history_tokens()
                 print(f"Waiting for LLM response (~{history_tokens_est} tokens in context)...", flush=True)
                 llm_start = time.time()
                 response = self.ollama.chat(self.history)
@@ -5708,6 +5880,20 @@ TO FIX:
                 
                 logger.error(f"LLM error ({error_type}): {error_msg}")
                 self.ops.ai_error(error_msg)
+
+                if error_type == 'context_length':
+                    self.session.llm_retry_count += 1
+                    compacted = self._compact_history_for_llm(aggressive=True)
+                    print(f"\n{'='*60}")
+                    print("LLM context budget exceeded; compacting conversation history")
+                    print('='*60)
+                    print(f"Estimated context after compaction: ~{self._estimate_history_tokens()} tokens")
+                    print(f"Compaction changed history: {compacted}")
+                    print('='*60)
+                    if self.session.llm_retry_count <= 3:
+                        continue
+                    print("Context remained too large after repeated compaction attempts.")
+                    break
                 
                 if is_recoverable and self.forever_mode:
                     # In forever mode, recoverable errors should retry, not stop
@@ -5950,20 +6136,7 @@ TO FIX:
                         )
                     })
 
-            # Prune history to stay within model context budget.
-            # Use char count / 4 as token estimate. Reserve 25% of context
-            # for output + safety margin, use the rest for history.
-            max_history_tokens = self.review_config.get('max_history_tokens', 24000)
-            max_history_chars = max_history_tokens * 4
-            total_chars = sum(len(msg.get('content', '')) for msg in self.history)
-            if total_chars > max_history_chars and len(self.history) > 4:
-                # Keep system prompt [0], init message [1], and trim from oldest
-                preserved = self.history[:2]
-                recent = self.history[2:]
-                while sum(len(m.get('content', '')) for m in preserved + recent) > max_history_chars and len(recent) > 2:
-                    recent = recent[2:]  # Drop oldest exchange (assistant + user pair)
-                self.history = preserved + recent
-                logger.info(f"Pruned history to {len(self.history)} messages (~{sum(len(m.get('content', '')) for m in self.history) // 4} tokens)")
+            self._compact_history_for_llm()
         
         # Clean up real source edits before ending, but keep generated metadata
         # so session metrics and logs can be committed deliberately below.

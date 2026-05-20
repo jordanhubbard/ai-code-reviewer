@@ -314,6 +314,20 @@ class WorkflowModeTests(unittest.TestCase):
             self.assertIsNotNone(no_rust_rejection)
             self.assertIn("requires Rust source or Cargo manifest changes", no_rust_rejection)
 
+            loop.history.extend(
+                [
+                    {"role": "assistant", "content": "analysis\nACTION: BUILD"},
+                    {
+                        "role": "user",
+                        "content": "BUILD_SUCCESS\nFINAL DIFFS:\n" + ("x" * 200_000),
+                    },
+                ]
+            )
+            compacted = loop._compact_history_for_llm(aggressive=True)
+            self.assertTrue(compacted)
+            self.assertLess(loop._estimate_history_tokens(), loop._history_token_budget(aggressive=True))
+            self.assertIn("history compacted", loop.history[-1]["content"])
+
     def test_write_file_parser_accepts_incomplete_content_fences(self) -> None:
         action = reviewer.ActionParser.parse(
             "ACTION: WRITE_FILE usr.bin/foo/Cargo.toml\n"

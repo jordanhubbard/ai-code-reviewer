@@ -36,6 +36,7 @@ Environment variable overrides (applied to *first* provider only):
 import json
 import logging
 import os
+import re
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 from urllib.error import HTTPError, URLError
@@ -54,6 +55,10 @@ class LLMConnectionError(LLMError):
 
 class LLMModelNotFoundError(LLMError):
     """Raised when no model is available for the request."""
+
+
+class LLMContextLengthError(LLMError):
+    """Raised when a request cannot fit within the model context window."""
 
 
 # ---------------------------------------------------------------------------
@@ -160,6 +165,9 @@ class LLMClient:
         temperature: float = 0.1,
         model: str = "",
         max_http_connections: int = 16,
+        context_window: int = 65536,
+        context_safety_tokens: int = 2048,
+        min_response_tokens: int = 512,
     ):
         if not providers:
             raise LLMConnectionError("No LLM providers configured")
@@ -170,6 +178,9 @@ class LLMClient:
         self._max_tokens = max_tokens
         self._temperature = temperature
         self._model = model
+        self._context_window = context_window
+        self._context_safety_tokens = max(0, context_safety_tokens)
+        self._min_response_tokens = max(1, min_response_tokens)
 
         if _HTTP_CLIENT_AVAILABLE:
             self._http = PooledHTTPClient(
@@ -194,9 +205,75 @@ class LLMClient:
     def timeout(self):
         return self._timeout
 
+    @property
+    def max_tokens(self):
+        return self._max_tokens
+
+    @property
+    def context_window(self):
+        return self._context_window
+
+    @property
+    def context_safety_tokens(self):
+        return self._context_safety_tokens
+
+    @property
+    def min_response_tokens(self):
+        return self._min_response_tokens
+
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
+
+    @staticmethod
+    def estimate_text_tokens(text: str) -> int:
+        """Cheap conservative token estimate used for request budgeting."""
+        if not text:
+            return 0
+        return max(1, (len(text) + 2) // 3)
+
+    @classmethod
+    def estimate_messages_tokens(cls, messages: List[Dict[str, Any]]) -> int:
+        total = 0
+        for message in messages:
+            total += 4  # chat-template role/turn overhead approximation
+            total += cls.estimate_text_tokens(str(message.get("role", "")))
+            total += cls.estimate_text_tokens(str(message.get("content", "")))
+        return total
+
+    def request_max_tokens_for(
+        self,
+        messages: List[Dict[str, Any]],
+        requested_max_tokens: Optional[int] = None,
+    ) -> int:
+        requested = requested_max_tokens if requested_max_tokens is not None else self._max_tokens
+        requested = max(1, int(requested))
+        if self._context_window <= 0:
+            return requested
+
+        prompt_tokens = self.estimate_messages_tokens(messages)
+        available = self._context_window - prompt_tokens - self._context_safety_tokens
+        if available < self._min_response_tokens:
+            raise LLMContextLengthError(
+                "LLM request exceeds context budget: "
+                f"estimated prompt={prompt_tokens} tokens, "
+                f"context_window={self._context_window}, "
+                f"safety={self._context_safety_tokens}, "
+                f"minimum_response={self._min_response_tokens}."
+            )
+
+        capped = min(requested, available)
+        if capped < requested:
+            logger.warning(
+                "Capping max_tokens from %s to %s to fit context window "
+                "(estimated prompt=%s, context=%s, safety=%s)",
+                requested,
+                capped,
+                prompt_tokens,
+                self._context_window,
+                self._context_safety_tokens,
+            )
+        return capped
 
     def _auth_headers(self, provider: ProviderConfig) -> Dict[str, str]:
         if provider.api_key:
@@ -234,6 +311,10 @@ class LLMClient:
             if e.code == 404:
                 raise LLMModelNotFoundError(
                     f"Provider {provider.url} returned 404 — model not found: {detail}"
+                ) from e
+            if e.code == 400 and self._looks_like_context_error(detail):
+                raise LLMContextLengthError(
+                    f"Provider {provider.url} rejected request for context length: {detail}"
                 ) from e
             raise LLMConnectionError(
                 f"Provider HTTP {e.code} at {url}: {detail}"
@@ -296,6 +377,8 @@ class LLMClient:
                 return result
             except LLMModelNotFoundError:
                 raise
+            except LLMContextLengthError:
+                raise
             except LLMError as e:
                 errors.append(f"{provider.url}: {e}")
                 logger.warning(f"Provider {provider.url} failed: {e}")
@@ -303,6 +386,20 @@ class LLMClient:
 
         raise LLMConnectionError(
             "All LLM providers failed:\n  " + "\n  ".join(errors)
+        )
+
+    @staticmethod
+    def _looks_like_context_error(detail: str) -> bool:
+        text = detail.lower()
+        return any(
+            marker in text
+            for marker in (
+                "maximum context length",
+                "context length",
+                "input_tokens",
+                "prompt contains",
+                "too many tokens",
+            )
         )
 
     # ------------------------------------------------------------------
@@ -318,7 +415,7 @@ class LLMClient:
         payload: Dict[str, Any] = {
             "messages": messages,
             "model": self._model,
-            "max_tokens": max_tokens if max_tokens is not None else self._max_tokens,
+            "max_tokens": self.request_max_tokens_for(messages, max_tokens),
             "temperature": temperature if temperature is not None else self._temperature,
         }
 
@@ -456,6 +553,17 @@ def create_client_from_config(config_dict: Dict[str, Any]) -> LLMClient:
     )
     timeout = int(llm_cfg.get("timeout") or th_cfg.get("timeout") or 600)
     max_tokens = int(llm_cfg.get("max_tokens") or th_cfg.get("max_tokens") or 4096)
+    context_window = int(llm_cfg.get("context_window") or th_cfg.get("context_window") or 65536)
+    context_safety_tokens = int(
+        llm_cfg.get("context_safety_tokens")
+        or th_cfg.get("context_safety_tokens")
+        or 2048
+    )
+    min_response_tokens = int(
+        llm_cfg.get("min_response_tokens")
+        or th_cfg.get("min_response_tokens")
+        or 512
+    )
     temperature_raw = llm_cfg.get("temperature")
     if temperature_raw is None:
         temperature_raw = th_cfg.get("temperature")
@@ -470,6 +578,9 @@ def create_client_from_config(config_dict: Dict[str, Any]) -> LLMClient:
         temperature=temperature,
         model=model,
         max_http_connections=max_http_connections,
+        context_window=context_window,
+        context_safety_tokens=context_safety_tokens,
+        min_response_tokens=min_response_tokens,
     )
 
     # --- Probe providers at startup ---
