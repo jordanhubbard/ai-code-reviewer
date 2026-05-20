@@ -35,6 +35,8 @@ def _make_source_tree(root: Path) -> None:
 
 def _make_freebsd_smoke_selection_tree(root: Path) -> None:
     _make_source_tree(root)
+    (root / "sbin" / "tests").mkdir(parents=True)
+    (root / "sbin" / "tests" / "Makefile").write_text("SUBDIR=ifconfig\n")
     (root / "include" / "arpa").mkdir(parents=True)
     (root / "include" / "arpa" / "Makefile").write_text("INCS=nameser.h\n")
     (root / "include" / "arpa" / "nameser.h").write_text(
@@ -117,6 +119,7 @@ class WorkflowModeTests(unittest.TestCase):
 
             self.assertEqual(index.get_next_pending(), "include/arpa")
             self.assertIsNone(index.entries["usr.sbin/hyperv/tools"].build_command)
+            self.assertEqual(index.entries["sbin/tests"].build_command, "make -C sbin/tests")
             self.assertEqual(
                 index.get_next_pending(selection_policy="small_first"),
                 "bin/foo",
@@ -225,6 +228,8 @@ class WorkflowModeTests(unittest.TestCase):
             init_message = loop.history[1]["content"]
             self.assertIn("code rewriting AI", system_prompt)
             self.assertIn("broader than translation", system_prompt)
+            self.assertIn("Do not create placeholder crates", system_prompt)
+            self.assertIn("choose another scope instead of fabricating a rewrite", system_prompt)
             self.assertNotIn("FreeBSD source code", system_prompt)
             self.assertIn("Rewrite small userland utilities side-by-side.", init_message)
 

@@ -2891,7 +2891,9 @@ RULES:
 4. Use relative paths from source root
 5. Preserve public interfaces, CLI behavior, ABI, file formats, and tests unless instructed
 6. If translating to another language, include the build integration needed to compile it
-7. CONSULT LESSONS.md before making edits to avoid repeating failed approaches
+7. Do not create placeholder crates, stub binaries, or synthetic support files just to satisfy the rewrite objective
+8. If the selected unit has no source relevant to the configured objective, choose another scope instead of fabricating a rewrite
+9. CONSULT LESSONS.md before making edits to avoid repeating failed approaches
 
 Respond with analysis followed by a single ACTION line.
 """

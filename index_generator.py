@@ -139,6 +139,16 @@ REWRITE_SMALL_FIRST_KIND_ORDER = {
     "freebsd-kernel": 9,
 }
 
+REWRITE_IMPLEMENTATION_SUFFIXES = {
+    ".c", ".cc", ".cpp", ".cxx",
+    ".m", ".mm",
+    ".s",
+    ".l", ".y", ".ll", ".yy",
+    ".rs", ".go",
+    ".sh", ".bash", ".ksh", ".zsh",
+    ".py", ".awk", ".sed", ".perl", ".pl",
+}
+
 
 # ============================================================================
 # Utility Functions
@@ -1066,12 +1076,26 @@ class ReviewIndex:
         path, entry = item
         return (
             0 if entry.build_command else 1,
+            0 if ReviewIndex._has_rewrite_implementation_source(entry) else 1,
             REWRITE_SMALL_FIRST_KIND_ORDER.get(entry.unit_kind, 50),
             entry.total_lines,
             len(entry.files),
             REWRITE_STAGE_ORDER.get(entry.stage, REWRITE_STAGE_ORDER["unknown"]),
             path,
         )
+
+    @staticmethod
+    def _has_rewrite_implementation_source(entry: DirectoryEntry) -> bool:
+        """Return True when a rewrite unit contains real implementation source."""
+        if entry.c_files > 0:
+            return True
+
+        for file_path in entry.files:
+            suffix = Path(file_path).suffix.lower()
+            if suffix in REWRITE_IMPLEMENTATION_SUFFIXES:
+                return True
+
+        return False
 
     def get_current(self) -> Optional[str]:
         """Get the directory currently being worked."""
