@@ -149,6 +149,15 @@ REWRITE_IMPLEMENTATION_SUFFIXES = {
     ".py", ".awk", ".sed", ".perl", ".pl",
 }
 
+REWRITE_TOOLCHAIN_PATH_MARKERS = {
+    "clang",
+    "compiler-rt",
+    "libclang_rt",
+    "lld",
+    "lldb",
+    "llvm",
+}
+
 
 # ============================================================================
 # Utility Functions
@@ -674,6 +683,9 @@ class ReviewIndex:
         if "tests" in parts:
             entry.stage = "validation"
             entry.unit_kind = "freebsd-tests"
+        elif self._is_toolchain_rewrite_unit(entry.path):
+            entry.stage = "bootstrap"
+            entry.unit_kind = "bootstrap-tool"
         elif top in {"include", "lib"}:
             entry.stage = "foundation"
             entry.unit_kind = "freebsd-library"
@@ -695,6 +707,17 @@ class ReviewIndex:
 
         if has_build_makefile:
             entry.build_command = f"make -C {shlex.quote(entry.path)}"
+
+    @staticmethod
+    def _is_toolchain_rewrite_unit(rel_path: str) -> bool:
+        """Return True for compiler/toolchain units that should come after basics."""
+        for part in Path(rel_path).parts:
+            name = part.lower()
+            if name in REWRITE_TOOLCHAIN_PATH_MARKERS:
+                return True
+            if name.startswith(("clang-", "llvm-", "lld-", "lldb-")):
+                return True
+        return False
 
     def _find_cargo_root(self, directory: Path) -> Optional[Path]:
         """Find the nearest Cargo.toml at or above a directory."""

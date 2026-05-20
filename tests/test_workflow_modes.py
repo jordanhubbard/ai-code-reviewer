@@ -43,6 +43,11 @@ def _make_freebsd_smoke_selection_tree(root: Path) -> None:
     (root / "usr.bin" / "command").mkdir(parents=True)
     (root / "usr.bin" / "command" / "Makefile").write_text("SCRIPTS=command.sh\n")
     (root / "usr.bin" / "command" / "command.sh").write_text("#!/bin/sh\nexit 0\n")
+    (root / "usr.bin" / "clang" / "llvm-dwp").mkdir(parents=True)
+    (root / "usr.bin" / "clang" / "llvm-dwp" / "Makefile").write_text("PROG=llvm-dwp\n")
+    (root / "usr.bin" / "clang" / "llvm-dwp" / "llvm-dwp-driver.cpp").write_text(
+        "int main(void) { return 0; }\n"
+    )
     (root / "include" / "arpa").mkdir(parents=True)
     (root / "include" / "arpa" / "Makefile").write_text("INCS=nameser.h\n")
     (root / "include" / "arpa" / "nameser.h").write_text(
@@ -131,6 +136,7 @@ class WorkflowModeTests(unittest.TestCase):
                 index.entries["libexec/rtld-elf/tests/libval"].unit_kind,
                 "freebsd-tests",
             )
+            self.assertEqual(index.entries["usr.bin/clang/llvm-dwp"].unit_kind, "bootstrap-tool")
             self.assertEqual(
                 index.get_next_pending(selection_policy="small_first"),
                 "bin/foo",
