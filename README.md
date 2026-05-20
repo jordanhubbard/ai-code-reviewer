@@ -175,6 +175,7 @@ review:
   workflow: "rewrite"
   persona: "personas/friendly-mentor"
   rewrite:
+    preflight_build: false
     objective: "Rewrite small userland utilities into Rust side-by-side."
     strategy: "Complete one buildable directory at a time."
     output_policy: "Create replacement files beside the original implementation."
@@ -182,7 +183,7 @@ review:
       - "Preserve CLI behavior and exit statuses."
       - "Do not start kernel rewrites."
     success_criteria:
-      - "The configured build command succeeds."
+      - "The active work-unit build command succeeds."
       - "Existing tests still pass."
 ```
 

@@ -5936,6 +5936,43 @@ def check_beads_installation() -> Tuple[bool, Optional[str]]:
     return (bd_path is not None, bd_path)
 
 
+def _config_bool(value: Any, default: bool = False) -> bool:
+    """Return a config boolean from native bools or common string forms."""
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"1", "true", "yes", "on"}:
+            return True
+        if normalized in {"0", "false", "no", "off"}:
+            return False
+    return bool(value)
+
+
+def should_run_preflight_build(
+    review_config: Optional[Dict[str, Any]],
+    workflow_mode: str,
+    skip_preflight_arg: bool = False,
+) -> bool:
+    """Return whether to run the full configured preflight build."""
+    if skip_preflight_arg:
+        return False
+
+    cfg = review_config or {}
+    if "preflight_build" in cfg:
+        return _config_bool(cfg.get("preflight_build"), default=True)
+
+    if workflow_mode == "rewrite":
+        rewrite_cfg = cfg.get("rewrite", {})
+        if not isinstance(rewrite_cfg, dict):
+            rewrite_cfg = {}
+        return _config_bool(rewrite_cfg.get("preflight_build"), default=False)
+
+    return True
+
+
 def main():
     """Main entry point."""
     parser = argparse.ArgumentParser(
@@ -6205,9 +6242,15 @@ Examples:
     # Create operations logger for internal metrics
     ops_logger = create_logger_from_config(config, source_root=source_root)
     
-    # PRE-FLIGHT SANITY CHECK: Verify source builds before starting review
-    # If build fails, revert commits until it builds again
-    if not args.skip_preflight:
+    # PRE-FLIGHT SANITY CHECK: Verify source builds before starting review.
+    # Rewrite mode defaults this off so it can start with bottom-up work units
+    # instead of front-loading an entire toolchain/bootstrap build.
+    run_preflight = should_run_preflight_build(
+        review_config,
+        workflow_mode,
+        skip_preflight_arg=args.skip_preflight,
+    )
+    if run_preflight:
         # Get max_reverts from config, default to 100
         max_reverts = review_config.get('max_reverts', 100)
         
@@ -6224,9 +6267,19 @@ Examples:
             logger.error("Use --skip-preflight to bypass this check (not recommended)")
             sys.exit(1)
     else:
-        logger.warning("Skipping pre-flight build check (--skip-preflight)")
-        print("\n⚠️  WARNING: Pre-flight check skipped!")
-        print("   If source doesn't build, AI may make things worse.\n")
+        if args.skip_preflight:
+            logger.warning("Skipping pre-flight build check (--skip-preflight)")
+            print("\nWARNING: Pre-flight check skipped!")
+            print("   If source doesn't build, AI may make things worse.\n")
+        elif workflow_mode == "rewrite":
+            logger.info("Rewrite workflow: skipping full-tree preflight build")
+            print("\n*** Rewrite workflow: skipping full-tree preflight build")
+            print("*** Work-unit build commands from REWRITE-INDEX.md will validate each rewrite increment.")
+            print("*** Set review.rewrite.preflight_build: true to opt into full preflight.\n")
+        else:
+            logger.warning("Skipping pre-flight build check by configuration")
+            print("\nWARNING: Pre-flight check skipped by configuration.")
+            print("   If source doesn't build, AI may make things worse.\n")
 
     ready, ready_msg = git_helper.ensure_repository_ready(
         preferred_branch=preferred_branch,

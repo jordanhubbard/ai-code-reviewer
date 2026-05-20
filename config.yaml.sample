@@ -127,6 +127,10 @@ review:
 
   # Rewrite workflow settings. Used only when workflow: "rewrite".
   rewrite:
+    # Full source.build_command preflight is skipped by default in rewrite mode.
+    # Rewrites start from indexed bottom-up work units and validate each unit
+    # with its inferred build command. Set true to force a full preflight first.
+    preflight_build: false
     objective: "Improve the selected source module through behavior-preserving rewriting."
     strategy: "Make small, buildable rewrite increments within one directory at a time."
     output_policy: "Modify the source tree directly unless the persona calls for side-by-side output."
@@ -134,7 +138,8 @@ review:
       - "Preserve externally visible behavior unless explicitly instructed otherwise."
       - "Keep changes scoped to the active directory and necessary build glue."
     success_criteria:
-      - "The configured build command succeeds."
+      - "The active work-unit build command succeeds."
+      - "The configured full build command succeeds when used as an integration gate."
       - "The rewritten code is coherent, maintainable, and behavior-preserving for the selected scope."
 
   # File chunking settings (prevents timeouts on large files)

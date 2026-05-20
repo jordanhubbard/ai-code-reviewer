@@ -45,6 +45,25 @@ def _make_rust_source_tree(root: Path) -> None:
 
 
 class WorkflowModeTests(unittest.TestCase):
+    def test_rewrite_mode_skips_full_preflight_build_by_default(self) -> None:
+        self.assertFalse(
+            reviewer.should_run_preflight_build({"workflow": "rewrite"}, "rewrite")
+        )
+        self.assertTrue(
+            reviewer.should_run_preflight_build(
+                {"workflow": "rewrite", "rewrite": {"preflight_build": True}},
+                "rewrite",
+            )
+        )
+        self.assertTrue(
+            reviewer.should_run_preflight_build({"workflow": "review"}, "review")
+        )
+        self.assertFalse(
+            reviewer.should_run_preflight_build(
+                {"workflow": "review"}, "review", skip_preflight_arg=True
+            )
+        )
+
     def test_relative_run_log_paths_use_source_root(self) -> None:
         with TemporaryDirectory() as tmp:
             root = Path(tmp)
