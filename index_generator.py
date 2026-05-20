@@ -669,8 +669,12 @@ class ReviewIndex:
             or (directory / "BSDmakefile").exists()
         )
         top = entry.path.split("/", 1)[0]
+        parts = Path(entry.path).parts
 
-        if top in {"include", "lib"}:
+        if "tests" in parts:
+            entry.stage = "validation"
+            entry.unit_kind = "freebsd-tests"
+        elif top in {"include", "lib"}:
             entry.stage = "foundation"
             entry.unit_kind = "freebsd-library"
         elif top in {"tools", "targets"}:

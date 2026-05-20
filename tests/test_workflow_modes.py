@@ -37,6 +37,9 @@ def _make_freebsd_smoke_selection_tree(root: Path) -> None:
     _make_source_tree(root)
     (root / "sbin" / "tests").mkdir(parents=True)
     (root / "sbin" / "tests" / "Makefile").write_text("SUBDIR=ifconfig\n")
+    (root / "libexec" / "rtld-elf" / "tests" / "libval").mkdir(parents=True)
+    (root / "libexec" / "rtld-elf" / "tests" / "libval" / "Makefile").write_text("LIB=val\n")
+    (root / "libexec" / "rtld-elf" / "tests" / "libval" / "libval.c").write_text("int val(void) { return 0; }\n")
     (root / "usr.bin" / "command").mkdir(parents=True)
     (root / "usr.bin" / "command" / "Makefile").write_text("SCRIPTS=command.sh\n")
     (root / "usr.bin" / "command" / "command.sh").write_text("#!/bin/sh\nexit 0\n")
@@ -123,6 +126,11 @@ class WorkflowModeTests(unittest.TestCase):
             self.assertEqual(index.get_next_pending(), "include/arpa")
             self.assertIsNone(index.entries["usr.sbin/hyperv/tools"].build_command)
             self.assertEqual(index.entries["sbin/tests"].build_command, "make -C sbin/tests")
+            self.assertEqual(index.entries["sbin/tests"].unit_kind, "freebsd-tests")
+            self.assertEqual(
+                index.entries["libexec/rtld-elf/tests/libval"].unit_kind,
+                "freebsd-tests",
+            )
             self.assertEqual(
                 index.get_next_pending(selection_policy="small_first"),
                 "bin/foo",
