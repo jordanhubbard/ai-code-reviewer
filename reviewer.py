@@ -44,7 +44,7 @@ from index_generator import (
     normalize_rewrite_selection_policy,
     normalize_rewrite_source_suffixes,
 )
-from build_executor import BuildResult
+from build_executor import BuildResult, ErrorParser
 from chunker import get_chunker, format_chunk_for_review
 from dataclasses import dataclass, field
 from ops_logger import OpsLogger, create_logger_from_config
@@ -2542,13 +2542,250 @@ class ReviewLoop:
         ]
         return any(re.search(pattern, raw_output, re.MULTILINE) for pattern in patterns)
 
+    @staticmethod
+    def _build_output_has_invocation(raw_output: str, invocation: str) -> bool:
+        invocation = str(invocation).strip()
+        if not invocation:
+            return True
+        if invocation in {"cargo", "rustc"}:
+            return bool(re.search(rf"(^|\s|/){re.escape(invocation)}(\s|$)", raw_output, re.MULTILINE))
+        return invocation in raw_output
+
+    def _rewrite_contract(self) -> Dict[str, Any]:
+        contract = self.rewrite_config.get("contract")
+        return contract if isinstance(contract, dict) else {}
+
+    def _find_contract_cargo_manifest(self, changed_files: List[str]) -> Optional[Path]:
+        current_dir = self.session.current_directory
+        candidates: List[Path] = []
+        for rel_path in changed_files:
+            path = Path(rel_path)
+            if path.name == "Cargo.toml":
+                candidates.append(self.source_root / path)
+
+        if current_dir:
+            unit_root = self.source_root / current_dir
+            if unit_root.exists():
+                candidates.extend(sorted(unit_root.glob("**/Cargo.toml")))
+
+        seen: Set[Path] = set()
+        for candidate in candidates:
+            resolved = candidate.resolve()
+            if resolved in seen:
+                continue
+            seen.add(resolved)
+            if candidate.exists():
+                return candidate
+        return None
+
+    def _contract_vars(self, manifest_path: Optional[Path] = None) -> Dict[str, str]:
+        unit = self.session.current_directory or ""
+        safe_unit = re.sub(r"[^A-Za-z0-9_.-]+", "_", unit or "unit")
+        target_dir = Path("/tmp") / f"ai-code-reviewer-rust-{self.session.session_id}" / safe_unit
+        crate_dir = manifest_path.parent if manifest_path else (self.source_root / unit if unit else self.source_root)
+        values = {
+            "source_root": str(self.source_root),
+            "unit": unit,
+            "crate": str(crate_dir),
+            "crate_dir": str(crate_dir),
+            "manifest": str(manifest_path) if manifest_path else "",
+            "target_dir": str(target_dir),
+            "objdir": str(target_dir),
+        }
+        return values
+
+    def _format_contract_command(self, template: str, values: Dict[str, str]) -> Tuple[Optional[str], Optional[str]]:
+        try:
+            return template.format(**values), None
+        except KeyError as exc:
+            return None, f"Unknown rewrite contract variable {{{exc.args[0]}}} in command: {template}"
+        except Exception as exc:
+            return None, f"Unable to format rewrite contract command {template!r}: {exc}"
+
+    def _cargo_offline_enforced(self, command: str) -> bool:
+        if not re.search(r"(^|\s|/)cargo(\s|$)", command):
+            return True
+        env = self.builder.config.build_environment or {}
+        return "--offline" in command or str(env.get("CARGO_NET_OFFLINE", "")).lower() in {"1", "true", "yes", "on"}
+
+    def _run_contract_command(self, command: str, timeout: int = 600) -> BuildResult:
+        start = time.time()
+        try:
+            result = subprocess.run(
+                command,
+                shell=True,
+                cwd=str(self.source_root),
+                env=self.builder._build_env(),
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+            )
+            raw_output = (result.stdout or "") + (result.stderr or "")
+            errors, warnings = ErrorParser.parse_output(raw_output)
+            return BuildResult(
+                success=result.returncode == 0,
+                return_code=result.returncode,
+                duration_seconds=time.time() - start,
+                errors=errors,
+                warnings=warnings,
+                raw_output=raw_output,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raw_output = ((exc.stdout or "") + (exc.stderr or "")) if isinstance(exc.stdout, str) else ""
+            return BuildResult(
+                success=False,
+                return_code=-1,
+                duration_seconds=time.time() - start,
+                raw_output=raw_output + f"\nCommand timed out after {timeout}s",
+            )
+        except Exception as exc:
+            return BuildResult(
+                success=False,
+                return_code=-1,
+                duration_seconds=time.time() - start,
+                raw_output=f"Command failed: {exc}",
+            )
+
+    def _run_contract_process(self, command: str, timeout: int = 60) -> subprocess.CompletedProcess:
+        return subprocess.run(
+            command,
+            shell=True,
+            cwd=str(self.source_root),
+            env=self.builder._build_env(),
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+
+    def _rewrite_contract_cli_error(self, contract: Dict[str, Any], values: Dict[str, str]) -> Optional[str]:
+        equivalence = contract.get("equivalence")
+        if not isinstance(equivalence, dict):
+            return None
+        cases = equivalence.get("cli")
+        if not cases:
+            return None
+        if not isinstance(cases, list):
+            return "CONTRACT_REJECTED: rewrite.contract.equivalence.cli must be a list."
+
+        for idx, case in enumerate(cases, 1):
+            if not isinstance(case, dict):
+                return f"CONTRACT_REJECTED: CLI equivalence case {idx} must be a mapping."
+            timeout = int(case.get("timeout", 60))
+
+            source_template = case.get("source_command")
+            rust_template = case.get("rust_command")
+            command_template = case.get("command")
+
+            if source_template and rust_template:
+                source_command, err = self._format_contract_command(str(source_template), values)
+                if err:
+                    return f"CONTRACT_REJECTED: {err}"
+                rust_command, err = self._format_contract_command(str(rust_template), values)
+                if err:
+                    return f"CONTRACT_REJECTED: {err}"
+                source_result = self._run_contract_process(source_command or "", timeout=timeout)
+                rust_result = self._run_contract_process(rust_command or "", timeout=timeout)
+                if source_result.returncode != rust_result.returncode:
+                    return (
+                        f"CONTRACT_REJECTED: CLI case {idx} exit-code mismatch "
+                        f"(source={source_result.returncode}, rust={rust_result.returncode})."
+                    )
+                if source_result.stdout != rust_result.stdout:
+                    return f"CONTRACT_REJECTED: CLI case {idx} stdout mismatch."
+                if source_result.stderr != rust_result.stderr:
+                    return f"CONTRACT_REJECTED: CLI case {idx} stderr mismatch."
+                continue
+
+            if command_template:
+                command, err = self._format_contract_command(str(command_template), values)
+                if err:
+                    return f"CONTRACT_REJECTED: {err}"
+                result = self._run_contract_process(command or "", timeout=timeout)
+                expected_exit = case.get("exit_code", case.get("expected_exit_code"))
+                if expected_exit is not None and result.returncode != int(expected_exit):
+                    return (
+                        f"CONTRACT_REJECTED: CLI case {idx} exit-code mismatch "
+                        f"(expected={expected_exit}, actual={result.returncode})."
+                    )
+                expected_stdout = case.get("stdout", case.get("expected_stdout"))
+                if expected_stdout is not None and result.stdout != str(expected_stdout):
+                    return f"CONTRACT_REJECTED: CLI case {idx} stdout mismatch."
+                expected_stderr = case.get("stderr", case.get("expected_stderr"))
+                if expected_stderr is not None and result.stderr != str(expected_stderr):
+                    return f"CONTRACT_REJECTED: CLI case {idx} stderr mismatch."
+                continue
+
+            return (
+                f"CONTRACT_REJECTED: CLI equivalence case {idx} needs source_command/rust_command "
+                "or command with expected outputs."
+            )
+        return None
+
+    def _rewrite_contract_completion_error(
+        self,
+        build_result: BuildResult,
+        changed_files: List[str],
+    ) -> Optional[str]:
+        contract = self._rewrite_contract()
+        if not contract:
+            return None
+
+        artifacts = contract.get("artifacts") if isinstance(contract.get("artifacts"), dict) else {}
+        if _config_bool(artifacts.get("rust_files_required"), default=False):
+            if not any(Path(path).suffix.lower() == ".rs" for path in changed_files):
+                return "CONTRACT_REJECTED: rewrite contract requires a changed Rust .rs source file."
+        if _config_bool(artifacts.get("cargo_manifest_required"), default=False):
+            if not any(Path(path).name == "Cargo.toml" for path in changed_files):
+                return "CONTRACT_REJECTED: rewrite contract requires a changed Cargo.toml manifest."
+
+        required_invocations = contract.get("integrated_build_must_invoke") or []
+        if isinstance(required_invocations, str):
+            required_invocations = [required_invocations]
+        for invocation in required_invocations:
+            if not self._build_output_has_invocation(build_result.raw_output, str(invocation)):
+                return (
+                    f"CONTRACT_REJECTED: integrated build did not visibly invoke {invocation!r}.\n\n"
+                    f"Command was: {self._current_build_command()}"
+                )
+
+        manifest = self._find_contract_cargo_manifest(changed_files)
+        values = self._contract_vars(manifest)
+
+        rust_build = contract.get("rust_build")
+        if rust_build:
+            if not manifest:
+                return "CONTRACT_REJECTED: rewrite contract rust_build requires a Cargo.toml manifest in the active unit."
+            rust_command, err = self._format_contract_command(str(rust_build), values)
+            if err:
+                return f"CONTRACT_REJECTED: {err}"
+            external_crates = str(artifacts.get("external_crates", "")).lower()
+            if external_crates in {"vendored_only", "offline", "vendored-only"} and not self._cargo_offline_enforced(rust_command or ""):
+                return (
+                    "CONTRACT_REJECTED: rewrite contract requires offline/vendored Cargo use, "
+                    "but rust_build does not include --offline and CARGO_NET_OFFLINE is not enabled."
+                )
+            result = self._run_contract_command(rust_command or "", timeout=int(contract.get("timeout", 600)))
+            if not result.success:
+                return (
+                    "CONTRACT_REJECTED: configured Rust build failed.\n\n"
+                    f"Command: {rust_command}\n"
+                    f"Exit code: {result.return_code}\n"
+                    f"Output:\n{self._compact_text(result.raw_output, 4000)}"
+                )
+
+        cli_error = self._rewrite_contract_cli_error(contract, values)
+        if cli_error:
+            return cli_error
+
+        return None
+
     def _rewrite_build_completion_error(
         self,
         build_result: BuildResult,
         changed_files: List[str],
     ) -> Optional[str]:
         if not self._rewrite_requires_rust_build(changed_files):
-            return None
+            return self._rewrite_contract_completion_error(build_result, changed_files)
 
         current_dir = self.session.current_directory or "(current scope)"
         if not self._changed_files_include_rust_artifact(changed_files):
@@ -2561,7 +2798,7 @@ class ReviewLoop:
             )
 
         if self._build_output_has_rust_invocation(build_result.raw_output):
-            return None
+            return self._rewrite_contract_completion_error(build_result, changed_files)
 
         return (
             "BUILD_REJECTED: Rust rewrite build did not compile the Rust replacement.\n\n"

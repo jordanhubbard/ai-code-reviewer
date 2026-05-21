@@ -152,6 +152,25 @@ review:
       - "The active work-unit build command succeeds."
       - "The configured full build command succeeds when used as an integration gate."
       - "The rewritten code is coherent, maintainable, and behavior-preserving for the selected scope."
+    # Optional machine-checked acceptance contract. These checks run after the
+    # active unit build succeeds and before the unit is marked done.
+    contract:
+      # Require that the normal active unit build output shows these tools.
+      integrated_build_must_invoke: []
+      # Optional explicit Rust build. Variables available:
+      #   {unit}, {source_root}, {crate}, {crate_dir}, {manifest}, {target_dir}, {objdir}
+      # Example:
+      # rust_build: "cargo build --manifest-path {manifest} --offline --target-dir {target_dir}"
+      rust_build: ""
+      artifacts:
+        rust_files_required: false
+        cargo_manifest_required: false
+        # Set to vendored_only to require --offline or CARGO_NET_OFFLINE=true for cargo commands.
+        external_crates: ""
+      equivalence:
+        # Optional CLI checks. Each case may either compare source_command and rust_command,
+        # or run command and compare exit_code/stdout/stderr.
+        cli: []
 
   # File chunking settings (prevents timeouts on large files)
   # Files larger than chunk_threshold get split into chunks

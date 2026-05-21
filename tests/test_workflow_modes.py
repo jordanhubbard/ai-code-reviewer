@@ -13,8 +13,12 @@ from ops_logger import OpsLogger, create_logger_from_config
 class _FakeBuildExecutor:
     class _Cfg:
         build_command = "true"
+        build_environment = {}
 
     config = _Cfg()
+
+    def _build_env(self):
+        return None
 
 
 class _FakeLLM:
@@ -392,6 +396,64 @@ class WorkflowModeTests(unittest.TestCase):
             self.assertIsNotNone(no_rust_rejection)
             self.assertIn("requires Rust source or Cargo manifest changes", no_rust_rejection)
 
+            (root / "bin" / "foo" / "rust").mkdir()
+            (root / "bin" / "foo" / "rust" / "Cargo.toml").write_text(
+                "[package]\nname = \"foo\"\nversion = \"0.0.0\"\nedition = \"2021\"\n"
+            )
+            loop.session.current_directory = "bin/foo"
+            loop.rewrite_config["contract"] = {
+                "integrated_build_must_invoke": ["cargo"],
+                "rust_build": "cargo build --manifest-path {manifest} --offline --target-dir {target_dir}",
+                "artifacts": {
+                    "rust_files_required": True,
+                    "cargo_manifest_required": True,
+                    "external_crates": "vendored_only",
+                },
+            }
+            contract_files = [
+                "bin/foo/rust/Cargo.toml",
+                "bin/foo/rust/src/main.rs",
+            ]
+            contract_build = reviewer.BuildResult(
+                success=True,
+                return_code=0,
+                duration_seconds=1.0,
+                raw_output="cargo build --manifest-path bin/foo/rust/Cargo.toml\n",
+            )
+            with patch.object(
+                loop,
+                "_run_contract_command",
+                return_value=reviewer.BuildResult(
+                    success=True,
+                    return_code=0,
+                    duration_seconds=0.1,
+                    raw_output="Finished `dev` profile",
+                ),
+            ) as contract_run:
+                self.assertIsNone(loop._rewrite_build_completion_error(contract_build, contract_files))
+            contract_run.assert_called_once()
+
+            with patch.object(
+                loop,
+                "_run_contract_command",
+                return_value=reviewer.BuildResult(
+                    success=False,
+                    return_code=101,
+                    duration_seconds=0.1,
+                    raw_output="cargo error",
+                ),
+            ):
+                contract_failure = loop._rewrite_build_completion_error(contract_build, contract_files)
+            self.assertIsNotNone(contract_failure)
+            self.assertIn("configured Rust build failed", contract_failure)
+
+            loop.rewrite_config["contract"]["rust_build"] = (
+                "cargo build --manifest-path {manifest} --target-dir {target_dir}"
+            )
+            offline_failure = loop._rewrite_build_completion_error(contract_build, contract_files)
+            self.assertIsNotNone(offline_failure)
+            self.assertIn("requires offline/vendored Cargo", offline_failure)
+
             loop.history.extend(
                 [
                     {"role": "assistant", "content": "analysis\nACTION: BUILD"},
@@ -405,6 +467,43 @@ class WorkflowModeTests(unittest.TestCase):
             self.assertTrue(compacted)
             self.assertLess(loop._estimate_history_tokens(), loop._history_token_budget(aggressive=True))
             self.assertIn("history compacted", loop.history[-1]["content"])
+
+    def test_rewrite_contract_cli_equivalence_checks(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _make_source_tree(root)
+            ops = OpsLogger(log_dir=root / ".ops-log", session_id="test-session")
+            mock_git = _mock_git_for_loop(root)
+            loop = _make_rewrite_loop(root, mock_git, ops)
+            loop.session.current_directory = "bin/foo"
+            loop.rewrite_config["require_rust_build"] = False
+            loop.rewrite_config["contract"] = {
+                "equivalence": {
+                    "cli": [
+                        {
+                            "source_command": "printf source",
+                            "rust_command": "printf rust",
+                        }
+                    ]
+                }
+            }
+            build_result = reviewer.BuildResult(
+                success=True,
+                return_code=0,
+                duration_seconds=0.1,
+                raw_output="",
+            )
+
+            equal = subprocess.CompletedProcess(args="", returncode=0, stdout="same", stderr="")
+            with patch.object(loop, "_run_contract_process", side_effect=[equal, equal]):
+                self.assertIsNone(loop._rewrite_build_completion_error(build_result, ["bin/foo/main.c"]))
+
+            source = subprocess.CompletedProcess(args="", returncode=0, stdout="source", stderr="")
+            rust = subprocess.CompletedProcess(args="", returncode=0, stdout="rust", stderr="")
+            with patch.object(loop, "_run_contract_process", side_effect=[source, rust]):
+                mismatch = loop._rewrite_build_completion_error(build_result, ["bin/foo/main.c"])
+            self.assertIsNotNone(mismatch)
+            self.assertIn("stdout mismatch", mismatch)
 
     def test_scope_change_ignores_metadata_only_dirty_state(self) -> None:
         with TemporaryDirectory() as tmp:
