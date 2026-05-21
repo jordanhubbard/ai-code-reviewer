@@ -2165,7 +2165,8 @@ class ReviewLoop:
         self.ops = ops_logger or OpsLogger(session_id=self.session.session_id)
 
         # Retry tracker for problematic directories
-        self.retry_tracker_path = self.persona_dir / 'retry-tracker.json'
+        safe_persona_name = re.sub(r'[^A-Za-z0-9_.-]+', '_', self.persona_dir.name)
+        self.retry_tracker_path = self.source_meta_dir / f'{safe_persona_name}-retry-tracker.json'
         self.retry_tracker = self._load_retry_tracker()
         self.max_directory_retries = int(self.review_config.get('max_directory_retries', 3))
         

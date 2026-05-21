@@ -348,6 +348,10 @@ class WorkflowModeTests(unittest.TestCase):
             self.assertEqual(loop.review_summary_file.name, "REWRITE-SUMMARY.md")
             self.assertEqual(loop.index.index_path.name, "REWRITE-INDEX.md")
             self.assertEqual(loop.log_dir, root / ".ai-code-reviewer" / "logs")
+            self.assertEqual(
+                loop.retry_tracker_path,
+                root / ".ai-code-reviewer" / "friendly-mentor-retry-tracker.json",
+            )
             self.assertFalse(loop._parallel_mode)
 
             system_prompt = loop.history[0]["content"]
