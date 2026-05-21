@@ -2874,6 +2874,48 @@ class ReviewLoop:
             return current
         return None
 
+    def _rewrite_build_template_context(self) -> str:
+        """Return deterministic build guidance for common Rust rewrite targets."""
+        if not self._rewrite_requires_rust_build():
+            return ""
+        return """
+FreeBSD Rust command Makefile template:
+Use this local template for simple command rewrites when no real Rust make
+fragment exists. Replace <prog> with the command name and adjust paths only when
+the active unit needs them.
+
+```make
+PROG=	<prog>
+BINDIR?=	/usr/bin
+BINOWN?=	root
+BINGRP?=	wheel
+BINMODE?=	555
+
+CARGO?=		cargo
+CARGO_TARGET_DIR?=	${.OBJDIR}/cargo-target
+
+${PROG}: ${.CURDIR}/Cargo.toml ${.CURDIR}/src/main.rs
+	${CARGO} build --manifest-path ${.CURDIR}/Cargo.toml \
+	    --offline --target-dir ${CARGO_TARGET_DIR}
+	${CP} ${CARGO_TARGET_DIR}/debug/${PROG} ${.TARGET}
+
+all: ${PROG}
+
+install: ${PROG}
+	${INSTALL} -o ${BINOWN} -g ${BINGRP} -m ${BINMODE} \
+	    ${PROG} ${DESTDIR}${BINDIR}/${PROG}
+
+clean:
+	${RM} ${PROG}
+	${RM} -rf ${CARGO_TARGET_DIR}
+
+CLEANFILES+=	${PROG} ${CARGO_TARGET_DIR}
+```
+
+Do not include bsd.prog.mk or invent bsd.rust.mk unless the included file exists
+and the resulting normal active unit build still invokes cargo or rustc.
+"""
+
     def _rewrite_prompt_context(self) -> str:
         objective = (
             self.rewrite_config.get("objective")
@@ -2919,11 +2961,12 @@ class ReviewLoop:
 Objective: {objective}
 Strategy: {strategy}
 Output policy: {output_policy}
-Work-unit selection: {selection_policy}
-{suffix_text}
+	Work-unit selection: {selection_policy}
+	{suffix_text}
+	{self._rewrite_build_template_context()}
 
-Constraints:
-{constraints_text}
+	Constraints:
+	{constraints_text}
 
 Success criteria:
 {criteria_text}

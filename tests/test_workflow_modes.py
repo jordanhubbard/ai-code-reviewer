@@ -364,6 +364,8 @@ class WorkflowModeTests(unittest.TestCase):
             self.assertNotIn("FreeBSD source code", system_prompt)
             self.assertIn("Rewrite small userland utilities side-by-side.", init_message)
             self.assertIn("Required source suffixes: .c, .cc", init_message)
+            self.assertIn("FreeBSD Rust command Makefile template", init_message)
+            self.assertIn("--offline --target-dir", init_message)
 
             with patch.object(loop, "_record_directory_attempt", return_value=1):
                 result = loop._execute_action({"action": "SET_SCOPE", "directory": "bin/foo"})
