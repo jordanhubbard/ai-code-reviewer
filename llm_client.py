@@ -427,11 +427,16 @@ class LLMClient:
         result = self._try_chat_with_failover(payload)
 
         try:
-            return result["choices"][0]["message"]["content"]
+            content = result["choices"][0]["message"]["content"]
         except (KeyError, IndexError, TypeError) as e:
             raise LLMConnectionError(
                 f"Unexpected response shape from LLM provider: {result!r}"
             ) from e
+        if not isinstance(content, str):
+            raise LLMConnectionError(
+                f"Unexpected non-text response from LLM provider: {result!r}"
+            )
+        return content
 
     def generate(
         self,

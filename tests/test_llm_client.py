@@ -1,6 +1,6 @@
 import unittest
 
-from llm_client import LLMClient, LLMContextLengthError, ProviderConfig
+from llm_client import LLMClient, LLMConnectionError, LLMContextLengthError, ProviderConfig
 
 
 class LLMClientTests(unittest.TestCase):
@@ -51,6 +51,21 @@ class LLMClientTests(unittest.TestCase):
 
         with self.assertRaises(LLMContextLengthError):
             client.chat(messages)
+
+        client.shutdown()
+
+    def test_chat_rejects_non_text_message_content(self) -> None:
+        client = LLMClient(
+            providers=[ProviderConfig(url="http://127.0.0.1:1")],
+        )
+
+        def fake_chat(payload):
+            return {"choices": [{"message": {"content": None}}]}
+
+        client._try_chat_with_failover = fake_chat
+
+        with self.assertRaises(LLMConnectionError):
+            client.chat([{"role": "user", "content": "hello"}])
 
         client.shutdown()
 

@@ -3991,13 +3991,15 @@ If no changes needed, respond with just: NO_EDITS_NEEDED"""
         """Log conversation exchange to file."""
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         log_file = self.log_dir / f"step_{step:04d}_{timestamp}.txt"
+        safe_request = request if isinstance(request, str) else str(request or "")
+        safe_response = response if isinstance(response, str) else str(response or "")
         
         with open(log_file, 'w') as f:
             f.write(f"=== STEP {step} ===\n\n")
             f.write("--- REQUEST ---\n")
-            f.write(request)
+            f.write(safe_request)
             f.write("\n\n--- RESPONSE ---\n")
-            f.write(response)
+            f.write(safe_response)
 
     def _format_response_for_console(self, response: str) -> str:
         """Collapse noisy code blocks before printing to stdout."""
@@ -6400,6 +6402,8 @@ TO FIX:
                 print(f"Waiting for LLM response (~{history_tokens_est} tokens in context)...", flush=True)
                 llm_start = time.time()
                 response = self.ollama.chat(self.history)
+                if not isinstance(response, str):
+                    raise ValueError(f"LLM returned non-text response: {type(response).__name__}")
                 llm_elapsed = time.time() - llm_start
                 print(f"LLM responded in {llm_elapsed:.1f}s")
                 # Reset retry counters on success
