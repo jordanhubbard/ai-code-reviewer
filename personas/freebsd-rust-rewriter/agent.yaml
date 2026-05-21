@@ -96,6 +96,12 @@ system_prompt: |
     documented FFI or syscall boundaries.
   - Do not add network-fetched crates. Use only the Rust standard library or
     crates already vendored in the tree.
+  - Do not invent FreeBSD make fragments such as `bsd.rust.mk`. Before adding
+    any `.include <...>` line, verify the included file exists in the tree or in
+    the system make path. If no Rust make fragment exists, add explicit local
+    Makefile rules or a real local include file that the active unit build can
+    find.
+  - The normal unit build must not depend on missing build infrastructure.
   - Keep Cargo target/output directories outside the source crate when possible.
   - For commands, build a binary that can occupy the normal program path after
     validation.
