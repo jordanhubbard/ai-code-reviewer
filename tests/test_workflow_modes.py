@@ -616,6 +616,41 @@ class WorkflowModeTests(unittest.TestCase):
             self.assertEqual(loop.session.completed_directories, ["bin/foo"])
             self.assertEqual(loop.index.entries["bin/foo"].status, reviewer.Status.DONE)
 
+    def test_rewrite_build_failure_does_not_partial_commit(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _make_two_unit_source_tree(root)
+            ops = OpsLogger(log_dir=root / ".ops-log", session_id="test-session")
+            mock_git = _mock_git_for_loop(root)
+            mock_git.changed_files_list.return_value = [
+                "bin/foo/Makefile",
+                "bin/foo/rust/Cargo.toml",
+            ]
+            loop = _make_rewrite_loop(root, mock_git, ops)
+            loop.session.current_directory = "bin/foo"
+            loop.session.pending_changes = True
+            loop.session.changed_files = ["bin/foo/Makefile", "bin/foo/rust/Cargo.toml"]
+            build_result = reviewer.BuildResult(
+                success=False,
+                return_code=2,
+                duration_seconds=0.1,
+                raw_output="make: Could not find bsd.rust.mk\n",
+            )
+
+            with patch.object(loop, "_run_build_with_live_output", return_value=build_result), \
+                 patch.object(loop, "_selective_revert_and_commit") as selective:
+                result = loop._execute_action({"action": "BUILD"})
+
+            self.assertIn("BUILD_FAILED", result)
+            self.assertIn("No changes were committed", result)
+            selective.assert_not_called()
+            mock_git.commit.assert_not_called()
+            mock_git.push.assert_not_called()
+            self.assertEqual(loop.session.current_directory, "bin/foo")
+            self.assertTrue(loop.session.pending_changes)
+            self.assertEqual(loop.session.changed_files, ["bin/foo/Makefile", "bin/foo/rust/Cargo.toml"])
+            self.assertNotEqual(loop.index.entries["bin/foo"].status, reviewer.Status.DONE)
+
     def test_repeated_noop_edit_requests_stop_run(self) -> None:
         persona_dir = Path(__file__).resolve().parents[1] / "personas" / "friendly-mentor"
 

@@ -5592,7 +5592,7 @@ Output ONLY the lesson entry, nothing else."""
                     return f"BUILD_SUCCESS but commit/push failed: {output}\n" \
                            "Please commit manually."
             else:
-                # Build failed - use SELECTIVE REVERT to keep good changes
+                # Build failed.
                 self.session.build_failures += 1
                 
                 # Log build failure
@@ -5603,13 +5603,25 @@ Output ONLY the lesson entry, nothing else."""
                     error_summary=result.errors[0].message if result.errors else None,
                 )
                 
+                error_report = result.get_error_report()
+
+                if self.workflow_mode == "rewrite":
+                    return (
+                        "BUILD_FAILED: Build errors detected\n\n"
+                        "No changes were committed. Rewrite units are atomic: source, Rust artifacts, "
+                        "build glue, and configured contract checks must pass together before the unit "
+                        "can be marked complete.\n\n"
+                        f"BUILD ERROR REPORT:\n{error_report}\n\n"
+                        "NEXT STEPS:\n"
+                        "1. Keep the active scope.\n"
+                        "2. Fix the source/build integration that caused this failure.\n"
+                        "3. BUILD again when the complete rewrite unit is ready.\n"
+                    )
+
                 print("\n*** BUILD FAILED - Analyzing which files caused errors...")
                 
                 # Use selective revert - only revert failing files, commit successful ones
                 reverted_files, committed_files, commit_msg = self._selective_revert_and_commit(result)
-                
-                # Get error report for AI context
-                error_report = result.get_error_report()
                 
                 # Mark directories with reverted files as needing retry
                 reverted_dirs = set(str(Path(f).parent) for f in reverted_files)
