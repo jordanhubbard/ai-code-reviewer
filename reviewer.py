@@ -985,7 +985,7 @@ class GitHelper:
     def changed_files_list(self, include_untracked: bool = False) -> List[str]:
         """Get list of changed files."""
         if include_untracked:
-            code, output = self._run_raw(['status', '--porcelain', '-z'])
+            code, output = self._run_raw(['status', '--porcelain', '-z', '--untracked-files=all'])
             if code != 0 or not output:
                 return []
             return self._parse_status_porcelain_z(output)

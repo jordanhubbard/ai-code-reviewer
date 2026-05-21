@@ -44,12 +44,37 @@ class GitHelperWorktreeTests(unittest.TestCase):
             "R  new-name.c\0"
             "old-name.c\0"
         )
-        with patch.object(git, "_run_raw", return_value=(0, sample)):
+        with patch.object(git, "_run_raw", return_value=(0, sample)) as run_raw:
             result = git.changed_files_list(include_untracked=True)
 
         self.assertEqual(
             result,
             [".reviewer-log/ops.jsonl", ".ai-code-reviewer/new.json", "new-name.c"],
+        )
+        run_raw.assert_called_once_with([
+            "status",
+            "--porcelain",
+            "-z",
+            "--untracked-files=all",
+        ])
+
+    def test_changed_files_list_expands_untracked_rust_directories(self) -> None:
+        git = reviewer.GitHelper(Path("/tmp/repo"))
+        sample = (
+            " M usr.bin/true/Makefile\0"
+            "?? usr.bin/true/rust/Cargo.toml\0"
+            "?? usr.bin/true/rust/src/main.rs\0"
+        )
+        with patch.object(git, "_run_raw", return_value=(0, sample)):
+            result = git.changed_files_list(include_untracked=True)
+
+        self.assertEqual(
+            result,
+            [
+                "usr.bin/true/Makefile",
+                "usr.bin/true/rust/Cargo.toml",
+                "usr.bin/true/rust/src/main.rs",
+            ],
         )
 
     def test_ensure_repository_ready_uses_fallback_branch_when_in_worktree(self) -> None:
