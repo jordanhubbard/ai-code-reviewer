@@ -481,6 +481,12 @@ class WorkflowModeTests(unittest.TestCase):
                 "equivalence": {
                     "cli": [
                         {
+                            "unit": "bin/bar",
+                            "source_command": "false",
+                            "rust_command": "false",
+                        },
+                        {
+                            "unit": "bin/foo",
                             "source_command": "printf source",
                             "rust_command": "printf rust",
                         }
@@ -495,8 +501,9 @@ class WorkflowModeTests(unittest.TestCase):
             )
 
             equal = subprocess.CompletedProcess(args="", returncode=0, stdout="same", stderr="")
-            with patch.object(loop, "_run_contract_process", side_effect=[equal, equal]):
+            with patch.object(loop, "_run_contract_process", side_effect=[equal, equal]) as run_case:
                 self.assertIsNone(loop._rewrite_build_completion_error(build_result, ["bin/foo/main.c"]))
+            self.assertEqual(run_case.call_count, 2)
 
             source = subprocess.CompletedProcess(args="", returncode=0, stdout="source", stderr="")
             rust = subprocess.CompletedProcess(args="", returncode=0, stdout="rust", stderr="")

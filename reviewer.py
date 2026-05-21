@@ -23,6 +23,7 @@ Architecture:
 
 import argparse
 import datetime
+import fnmatch
 import hashlib
 import logging
 import os
@@ -2657,6 +2658,23 @@ class ReviewLoop:
             timeout=timeout,
         )
 
+    def _contract_cli_case_applies_to_unit(self, case: Dict[str, Any]) -> bool:
+        selectors: List[str] = []
+        for key in ("unit", "scope", "when_unit"):
+            raw = case.get(key)
+            if not raw:
+                continue
+            if isinstance(raw, list):
+                selectors.extend(str(item) for item in raw)
+            else:
+                selectors.append(str(raw))
+
+        if not selectors:
+            return True
+
+        current_unit = self.session.current_directory or ""
+        return any(fnmatch.fnmatch(current_unit, selector) for selector in selectors)
+
     def _rewrite_contract_cli_error(self, contract: Dict[str, Any], values: Dict[str, str]) -> Optional[str]:
         equivalence = contract.get("equivalence")
         if not isinstance(equivalence, dict):
@@ -2670,6 +2688,8 @@ class ReviewLoop:
         for idx, case in enumerate(cases, 1):
             if not isinstance(case, dict):
                 return f"CONTRACT_REJECTED: CLI equivalence case {idx} must be a mapping."
+            if not self._contract_cli_case_applies_to_unit(case):
+                continue
             timeout = int(case.get("timeout", 60))
 
             source_template = case.get("source_command")

@@ -169,7 +169,8 @@ review:
         external_crates: ""
       equivalence:
         # Optional CLI checks. Each case may either compare source_command and rust_command,
-        # or run command and compare exit_code/stdout/stderr.
+        # or run command and compare exit_code/stdout/stderr. Add unit, scope, or when_unit
+        # with an exact or fnmatch-style work-unit pattern to restrict a case to one unit.
         cli: []
 
   # File chunking settings (prevents timeouts on large files)
