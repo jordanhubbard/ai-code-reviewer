@@ -104,6 +104,7 @@ Agents define the AI's review personality and focus. Each agent is configured in
 | Agent | Focus | Best For |
 |-------|-------|----------|
 | **freebsd-angry-ai** | Security, style(9), POSIX | Production audits (default) |
+| **freebsd-rust-rewriter** | C/C++ to Rust, build integration | FreeBSD rewrite workflow |
 | **security-hawk** | Vulnerabilities, exploits | Security-critical code |
 | **performance-cop** | Speed, algorithms, cache | Performance optimization |
 | **friendly-mentor** | Learning, best practices | Training, onboarding |
@@ -173,7 +174,7 @@ constraints:
 ```yaml
 review:
   workflow: "rewrite"
-  persona: "personas/friendly-mentor"
+  persona: "personas/freebsd-rust-rewriter"
   rewrite:
     preflight_build: false
     selection_policy: "small_first"  # Use "bottom_up" for normal long runs

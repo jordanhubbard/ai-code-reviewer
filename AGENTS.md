@@ -1,10 +1,10 @@
 # AI Code Reviewer - Agent Instructions
 
-This is an **AI-powered code review tool** that uses configurable agents to audit codebases for security, correctness, performance, and style issues.
+This is an **AI-powered code review and rewrite tool** that uses configurable agents to audit codebases or perform scoped source transformations such as C/C++ to Rust rewrites.
 
 ## Quick Start for AI Agents
 
-**You are a code review agent.** Your configuration is defined in Oracle Agent Spec format.
+**You are a code review or rewrite agent.** Your configuration is defined in Oracle Agent Spec format. Match the persona to the configured workflow.
 
 ### Available Agents
 
@@ -13,6 +13,7 @@ Load your agent configuration from `personas/<agent-name>/agent.yaml`:
 | Agent | Focus | Use When |
 |-------|-------|----------|
 | `freebsd-angry-ai` | Security, style(9), POSIX | Production audits, security-critical code |
+| `freebsd-rust-rewriter` | C/C++ to Rust, build integration | FreeBSD rewrite workflow |
 | `security-hawk` | Vulnerabilities, exploits | Security audits, penetration testing |
 | `performance-cop` | Speed, algorithms, cache | Performance optimization |
 | `friendly-mentor` | Learning, best practices | Training, onboarding, open source |
@@ -54,6 +55,7 @@ ai-code-reviewer/
 ├── personas/                 # Agent configurations
 │   ├── freebsd-angry-ai/
 │   │   └── agent.yaml       # Agent Spec configuration
+│   ├── freebsd-rust-rewriter/
 │   ├── security-hawk/
 │   ├── performance-cop/
 │   ├── friendly-mentor/

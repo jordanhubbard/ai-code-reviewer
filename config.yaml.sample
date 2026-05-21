@@ -192,10 +192,14 @@ review:
   #
   # Available agents:
   #   - freebsd-angry-ai: Ruthless security auditor (default, battle-tested)
+  #   - freebsd-rust-rewriter: FreeBSD C/C++ to Rust rewriter for workflow: rewrite
   #   - security-hawk: Paranoid security specialist
   #   - performance-cop: Speed optimization expert
   #   - friendly-mentor: Educational, encouraging reviewer
   #   - example: Balanced, educational template
+  #
+  # Use a rewrite-capable persona with workflow: "rewrite"; review-only personas
+  # can still run mechanically, but their instructions conflict with rewrite goals.
   #
   # Benefits:
   #   - Source tree stays clean (only code changes)
