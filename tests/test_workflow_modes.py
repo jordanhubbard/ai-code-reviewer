@@ -54,6 +54,14 @@ def _make_freebsd_smoke_selection_tree(root: Path) -> None:
     (root / "usr.bin" / "command").mkdir(parents=True)
     (root / "usr.bin" / "command" / "Makefile").write_text("SCRIPTS=command.sh\n")
     (root / "usr.bin" / "command" / "command.sh").write_text("#!/bin/sh\nexit 0\n")
+    (root / "usr.bin" / "tiny").mkdir(parents=True)
+    (root / "usr.bin" / "tiny" / "Makefile").write_text("PROG=tiny\n")
+    (root / "usr.bin" / "tiny" / "tiny.c").write_text("int main(void) { return 0; }\n")
+    (root / "libexec" / "flua" / "libfreebsd" / "sys" / "linker").mkdir(parents=True)
+    (root / "libexec" / "flua" / "libfreebsd" / "sys" / "linker" / "Makefile").write_text("PROG=linker\n")
+    (root / "libexec" / "flua" / "libfreebsd" / "sys" / "linker" / "linker.c").write_text(
+        "int main(void) { return 0; }\n"
+    )
     (root / "usr.bin" / "clang" / "llvm-dwp").mkdir(parents=True)
     (root / "usr.bin" / "clang" / "llvm-dwp" / "Makefile").write_text("PROG=llvm-dwp\n")
     (root / "usr.bin" / "clang" / "llvm-dwp" / "llvm-dwp-driver.cpp").write_text(
@@ -91,6 +99,8 @@ def _mock_git_for_loop(root: Path) -> MagicMock:
     mock_git.diff_all.return_value = "diff --git a/bin/foo/main.c b/bin/foo/main.c\n"
     mock_git.is_ignored.return_value = False
     mock_git.has_changes.return_value = False
+    mock_git.checkout_paths.return_value = (True, "")
+    mock_git.clean_paths.return_value = (True, "")
     mock_git.ensure_commit_prefix.side_effect = (
         lambda message: message
         if message.startswith(reviewer.COMMIT_PREFIX)
@@ -230,6 +240,14 @@ class WorkflowModeTests(unittest.TestCase):
                     required_source_suffixes=[".c", ".cc", ".cpp", ".cxx"],
                 ),
                 "bin/foo",
+            )
+            index.mark_done("bin/foo", selection_policy="small_first")
+            self.assertEqual(
+                index.get_next_pending(
+                    selection_policy="small_first",
+                    required_source_suffixes=[".c", ".cc", ".cpp", ".cxx"],
+                ),
+                "usr.bin/tiny",
             )
 
     def test_rewrite_index_scans_generic_rust_project(self) -> None:
@@ -468,6 +486,27 @@ class WorkflowModeTests(unittest.TestCase):
             self.assertLess(loop._estimate_history_tokens(), loop._history_token_budget(aggressive=True))
             self.assertIn("history compacted", loop.history[-1]["content"])
 
+    def test_beads_manager_keeps_database_in_tool_checkout(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source_root = root / "freebsd-src"
+            tool_root = root / "ai-code-reviewer"
+            source_root.mkdir()
+            tool_root.mkdir()
+            (tool_root / ".beads").mkdir()
+
+            manager = reviewer.BeadsManager(
+                source_root=source_root,
+                tool_root=tool_root,
+                bd_cmd=shutil.which("true") or "/bin/true",
+                workflow_mode="rewrite",
+            )
+
+            self.assertTrue(manager.enabled)
+            self.assertEqual(manager.repo_root, tool_root)
+            self.assertTrue((tool_root / ".beads").exists())
+            self.assertFalse((source_root / ".beads").exists())
+
     def test_rewrite_contract_cli_equivalence_checks(self) -> None:
         with TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -650,6 +689,39 @@ class WorkflowModeTests(unittest.TestCase):
             self.assertTrue(loop.session.pending_changes)
             self.assertEqual(loop.session.changed_files, ["bin/foo/Makefile", "bin/foo/rust/Cargo.toml"])
             self.assertNotEqual(loop.index.entries["bin/foo"].status, reviewer.Status.DONE)
+
+    def test_abandon_active_scope_cleans_untracked_and_marks_skipped(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _make_two_unit_source_tree(root)
+            ops = OpsLogger(log_dir=root / ".ops-log", session_id="test-session")
+            mock_git = _mock_git_for_loop(root)
+            mock_git.changed_files_list.return_value = [
+                "bin/foo/Makefile",
+                "bin/foo/rust/Cargo.toml",
+                "bin/foo/rust/src/main.rs",
+                ".reviewer-log/ops.jsonl",
+            ]
+            loop = _make_rewrite_loop(root, mock_git, ops)
+            loop.session.current_directory = "bin/foo"
+            loop.session.pending_changes = True
+            loop.session.changed_files = [
+                "bin/foo/Makefile",
+                "bin/foo/rust/Cargo.toml",
+            ]
+
+            result = loop._abandon_active_scope("test failure")
+
+            self.assertIn("SCOPE_ABANDONED: bin/foo was marked skipped", result)
+            self.assertIn("NEXT: Use SET_SCOPE bin/bar", result)
+            self.assertEqual(loop.index.entries["bin/foo"].status, reviewer.Status.SKIPPED)
+            self.assertIsNone(loop.session.current_directory)
+            self.assertFalse(loop.session.pending_changes)
+            self.assertEqual(loop.session.changed_files, [])
+            mock_git.checkout_paths.assert_any_call(["bin/foo/Makefile"])
+            mock_git.checkout_paths.assert_any_call(["bin/foo/rust/Cargo.toml"])
+            mock_git.checkout_paths.assert_any_call(["bin/foo/rust/src/main.rs"])
+            mock_git.clean_paths.assert_called_with(["bin/foo"])
 
     def test_repeated_noop_edit_requests_stop_run(self) -> None:
         persona_dir = Path(__file__).resolve().parents[1] / "personas" / "friendly-mentor"

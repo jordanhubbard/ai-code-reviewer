@@ -912,6 +912,20 @@ class GitHelper:
             return True
         code, _ = self._run(['add', '--'] + list(paths))
         return code == 0
+
+    def checkout_paths(self, paths: List[str]) -> Tuple[bool, str]:
+        """Restore tracked paths from HEAD."""
+        if not paths:
+            return True, ""
+        code, output = self._run(['checkout', '--'] + list(paths))
+        return code == 0, output
+
+    def clean_paths(self, paths: List[str]) -> Tuple[bool, str]:
+        """Remove untracked files under the given paths."""
+        if not paths:
+            return True, ""
+        code, output = self._run(['clean', '-fd', '--'] + list(paths))
+        return code == 0, output
     
     def add_all(self) -> bool:
         """Stage all changes."""
@@ -1157,7 +1171,7 @@ class BeadsManager:
     ):
         self.source_root = source_root
         self.tool_root = tool_root or Path(__file__).resolve().parent
-        self.repo_root = source_root
+        self.repo_root = self.tool_root
         self.git_helper = git_helper
         self.bd_cmd = bd_cmd or shutil.which(os.environ.get('BD_CMD', 'bd'))
         self.workflow_mode = normalize_workflow_mode({"workflow": workflow_mode})
@@ -1172,12 +1186,12 @@ class BeadsManager:
             self.enabled = False
             return
         
-        self._ensure_beads_location()
-
-        # Auto-initialize beads if .beads doesn't exist
+        # Keep the issue database with the reviewer checkout.  The reviewed
+        # source tree may be a different repository, and moving the tool's
+        # .beads directory into that target tree corrupts both workflows.
         if not (self.repo_root / '.beads').exists():
-            logger.info("Beads not initialized in source tree, initializing automatically...")
-            print("*** Initializing beads issue tracker in source tree...")
+            logger.info("Beads not initialized in reviewer checkout, initializing automatically...")
+            print("*** Initializing beads issue tracker in reviewer checkout...")
             if self._initialize_beads():
                 logger.info("Beads initialized successfully")
                 print("*** Beads initialized and committed successfully")
@@ -1617,7 +1631,7 @@ class BeadsManager:
             # Check for obvious external path markers
             if directory.startswith('../'):
                 external_count += 1
-            elif '/' in directory and not (self.repo_root / directory.split('/')[0]).exists():
+            elif '/' in directory and not (self.source_root / directory.split('/')[0]).exists():
                 external_count += 1
         
         # If more than half look external, this is probably the wrong source tree
@@ -1632,7 +1646,7 @@ class BeadsManager:
                 continue
             description = (
                 f"AI code {self.workflow['noun']} of all relevant files in {directory} directory "
-                f"(relative to source root: {self.repo_root})"
+                f"(relative to source root: {self.source_root})"
             )
             output = self._run_bd([
                 'create',
@@ -1667,7 +1681,7 @@ class BeadsManager:
             return issue_id
         description = (
             f"AI code {self.workflow['noun']} of all relevant files in {directory} directory "
-            f"(relative to source root: {self.repo_root})"
+            f"(relative to source root: {self.source_root})"
         )
         output = self._run_bd([
             'create',
@@ -4537,6 +4551,38 @@ Output ONLY the lesson entry, nothing else."""
         self.current_chunk_index = 0
         self.chunked_file_path = None
 
+    def _abandon_active_scope(self, reason: str) -> str:
+        """Clean, mark skipped, and clear the current scope after a control failure."""
+        abandoned_dir = self.session.current_directory
+        if not abandoned_dir:
+            self._cleanup_dirty_state()
+            self._clear_active_scope()
+            return "SCOPE_ABANDONED: No active scope was set."
+
+        self._cleanup_dirty_state()
+        if abandoned_dir in self.index.entries:
+            self.index.mark_skipped(
+                abandoned_dir,
+                reason=reason,
+                selection_policy=self._rewrite_selection_policy()
+                if self.workflow_mode == "rewrite" else None,
+            )
+            self.index.save()
+        self._beads_mark_open(abandoned_dir)
+        self._clear_active_scope()
+
+        next_dir = self._next_pending_work_unit()
+        response = (
+            f"SCOPE_ABANDONED: {abandoned_dir} was marked skipped.\n\n"
+            f"Reason: {reason}\n"
+            "Any tracked edits were reverted and untracked files created under the scope were removed."
+        )
+        if next_dir:
+            response += f"\nNEXT: Use SET_SCOPE {next_dir}"
+        else:
+            response += "\nNo other pending directories remain."
+        return response
+
     def _commit_tool_metadata_changes(self, message: str) -> Optional[str]:
         """Commit currently dirty reviewer-managed metadata paths."""
         changed_paths = self.git.changed_files_list(include_untracked=True)
@@ -5939,7 +5985,9 @@ Output ONLY the lesson entry, nothing else."""
             return (True, 'temporary', self.RECOVERABLE_ERRORS['temporary'])
         if 'temporarily' in error_lower or 'try again' in error_lower:
             return (True, 'temporary', self.RECOVERABLE_ERRORS['temporary'])
-        
+        if 'unexpected non-text response' in error_lower or 'unexpected response shape' in error_lower:
+            return (True, 'invalid_response', 'LLM provider returned no text content')
+
         # Check for unrecoverable errors
         if 'does not exist' in error_lower or 'not found' in error_lower:
             if 'model' in error_lower:
@@ -6270,16 +6318,33 @@ TO FIX:
 
     def _cleanup_dirty_state(self) -> None:
         """Clean up any uncommitted changes before ending session."""
-        if self.session.pending_changes or self.git.has_changes():
+        dirty_source_paths = self._dirty_non_metadata_paths()
+        if self.session.pending_changes or dirty_source_paths or self.git.has_changes():
             print("\n*** Cleaning up uncommitted changes...")
-            # Revert any modified source files
-            for file_path in self.session.changed_files:
-                full_path = self.source_root / file_path
-                if full_path.exists():
-                    code, output = self.git._run(['checkout', str(full_path)])
-                    if code == 0:
-                        print(f"    Reverted: {file_path}")
-            
+
+            paths_to_restore: List[str] = []
+            for file_path in [*self.session.changed_files, *dirty_source_paths]:
+                if is_tool_metadata_path(file_path):
+                    continue
+                if file_path not in paths_to_restore:
+                    paths_to_restore.append(file_path)
+
+            if paths_to_restore:
+                restored_paths: List[str] = []
+                failed_outputs = []
+                for file_path in paths_to_restore:
+                    ok, output = self.git.checkout_paths([file_path])
+                    if ok:
+                        restored_paths.append(file_path)
+                    elif output:
+                        failed_outputs.append(output)
+                for file_path in restored_paths[:20]:
+                    print(f"    Reverted: {file_path}")
+                if len(restored_paths) > 20:
+                    print(f"    Reverted {len(restored_paths) - 20} more path(s)")
+                if failed_outputs and not restored_paths:
+                    print(f"    WARNING: Failed to revert tracked paths: {failed_outputs[0]}")
+
             # Also revert workflow index files if modified (check legacy and metadata locations)
             index_paths = [
                 'REVIEW-INDEX.md',
@@ -6287,10 +6352,24 @@ TO FIX:
                 '.ai-code-reviewer/REWRITE-INDEX.md',
             ]
             for index_path in index_paths:
-                code, output = self.git._run(['checkout', index_path])
-                if code == 0:
+                ok, _ = self.git.checkout_paths([index_path])
+                if ok:
                     print(f"    Reverted: {index_path}")
-            
+
+            clean_roots: List[str] = []
+            if self.session.current_directory:
+                clean_roots.append(self.session.current_directory)
+            else:
+                clean_roots.extend(paths_to_restore)
+            if clean_roots:
+                ok, output = self.git.clean_paths(clean_roots)
+                if ok:
+                    if output:
+                        for line in output.splitlines()[:20]:
+                            print(f"    {line}")
+                else:
+                    print(f"    WARNING: Failed to remove untracked files: {output}")
+
             self.session.pending_changes = False
             self.session.changed_files = []
             print("*** Working tree cleaned")
@@ -6346,8 +6425,8 @@ TO FIX:
             if directory_iterations > self.max_iterations_per_directory:
                 stuck_dir = self.session.current_directory
                 print(f"\n*** WARNING: Exceeded {self.max_iterations_per_directory} iterations on {stuck_dir}")
-                self._cleanup_dirty_state()
                 if self.forever_mode:
+                    self._cleanup_dirty_state()
                     # In forever mode, rotate to next directory but don't abandon this one
                     next_dir = self._next_pending_work_unit()
                     if next_dir and next_dir != stuck_dir:
@@ -6369,10 +6448,15 @@ TO FIX:
                         })
                 else:
                     print("*** Cleaning up and moving to next directory...")
+                    abandonment = self._abandon_active_scope(
+                        f"Exceeded {self.max_iterations_per_directory} iterations without completing the scope"
+                    )
                     self.history.append({
                         "role": "user",
-                        "content": f"TIMEOUT: You have spent too many iterations on {stuck_dir}. "
-                                   f"This directory is being skipped. Use SET_SCOPE to move to the next directory."
+                        "content": (
+                            f"TIMEOUT: You have spent too many iterations on {stuck_dir}. "
+                            f"This directory is being skipped.\n\n{abandonment}"
+                        )
                     })
                 directory_iterations = 0
                 continue
@@ -6428,16 +6512,23 @@ TO FIX:
                     if self.session.llm_retry_count <= 3:
                         continue
                     print("Context remained too large after repeated compaction attempts.")
+                    if self.workflow_mode == "rewrite" and self.session.current_directory:
+                        abandonment = self._abandon_active_scope(
+                            "LLM context remained too large after repeated compaction attempts"
+                        )
+                        self.history.append({"role": "user", "content": abandonment})
+                        directory_iterations = 0
+                        continue
                     break
-                
+
                 if is_recoverable and self.forever_mode:
                     # In forever mode, recoverable errors should retry, not stop
                     self.session.llm_retry_count += 1
-                    
+
                     # Calculate backoff with exponential increase, capped at 5 minutes
                     backoff = min(self.session.llm_retry_backoff, 300)
                     self.session.llm_retry_backoff = min(self.session.llm_retry_backoff * 2, 300)
-                    
+
                     print(f"\n{'='*60}")
                     print(f"⚠️  RECOVERABLE ERROR (attempt {self.session.llm_retry_count})")
                     print('='*60)
@@ -6446,23 +6537,23 @@ TO FIX:
                     print(f"\nThis error is recoverable. Retrying in {backoff} seconds...")
                     print("Forever mode continues automatically (will retry indefinitely).")
                     print('='*60)
-                    
+
                     # Commit any pending lessons before we wait
                     if self.session.llm_retry_count == 1:
                         self._commit_lessons_and_continue(f"Preserving lessons before retry ({error_type})")
-                    
+
                     # Wait with backoff
                     time.sleep(backoff)
                     continue  # Retry the loop iteration
-                    
+
                 elif not is_recoverable:
                     # Unrecoverable error - emergency stop with instructions
                     self._commit_lessons_and_continue(f"Unrecoverable error: {error_type}")
                     self._emergency_stop(error_type, error_msg)
                     break
-                    
+
                 else:
-                    # Not in forever mode - show error and stop (legacy behavior)
+                    # Not in forever mode - show error and stop unless the active rewrite scope can be abandoned.
                     print(f"\n{'='*60}")
                     print(f"ERROR: {description}")
                     print('='*60)
@@ -6477,6 +6568,17 @@ TO FIX:
                         print("\nTo see available models, run 'make validate'.")
                         print("Update config.yaml llm.model or leave blank to auto-discover.")
                     print('='*60)
+                    if (
+                        self.workflow_mode == "rewrite"
+                        and error_type == "invalid_response"
+                        and self.session.current_directory
+                    ):
+                        abandonment = self._abandon_active_scope(
+                            f"LLM returned an invalid response while working this scope: {description}"
+                        )
+                        self.history.append({"role": "user", "content": abandonment})
+                        directory_iterations = 0
+                        continue
                     break
             
             last_user_msg = self.history[-1]['content'] if self.history else ""

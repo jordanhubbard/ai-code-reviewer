@@ -96,6 +96,26 @@ class GitHelperWorktreeTests(unittest.TestCase):
         self.assertIn("bad", diff)
         self.assertIn("\ufffd", diff)
 
+    def test_clean_paths_removes_untracked_scope_files(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            repo_root = Path(tmpdir)
+            subprocess.run(["git", "init", "-q"], cwd=repo_root, check=True)
+            subprocess.run(["git", "config", "user.email", "test@example.invalid"], cwd=repo_root, check=True)
+            subprocess.run(["git", "config", "user.name", "Test User"], cwd=repo_root, check=True)
+            scope = repo_root / "usr.bin" / "true"
+            scope.mkdir(parents=True)
+            (scope / "Makefile").write_text("PROG=true\n")
+            subprocess.run(["git", "add", "usr.bin/true/Makefile"], cwd=repo_root, check=True)
+            subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=repo_root, check=True)
+            (scope / "rust" / "src").mkdir(parents=True)
+            (scope / "rust" / "Cargo.toml").write_text("[package]\nname=\"true\"\n")
+            (scope / "rust" / "src" / "main.rs").write_text("fn main() {}\n")
+
+            ok, output = reviewer.GitHelper(repo_root).clean_paths(["usr.bin/true"])
+
+            self.assertTrue(ok, output)
+            self.assertFalse((scope / "rust").exists())
+
     def test_ensure_repository_ready_uses_fallback_branch_when_in_worktree(self) -> None:
         git = reviewer.GitHelper(Path("/tmp/repo"))
 

@@ -139,6 +139,16 @@ REWRITE_SMALL_FIRST_KIND_ORDER = {
     "freebsd-kernel": 9,
 }
 
+REWRITE_SMALL_FIRST_PATH_ORDER = {
+    "bin": 0,
+    "usr.bin": 1,
+    "sbin": 2,
+    "usr.sbin": 3,
+    "libexec": 4,
+    "lib": 5,
+    "include": 6,
+}
+
 REWRITE_IMPLEMENTATION_SUFFIXES = {
     ".c", ".cc", ".cpp", ".cxx",
     ".m", ".mm",
@@ -1132,10 +1142,12 @@ class ReviewIndex:
     @staticmethod
     def _small_first_selection_key(item: Any) -> tuple:
         path, entry = item
+        top = path.split("/", 1)[0]
         return (
             0 if entry.build_command else 1,
             0 if ReviewIndex._has_rewrite_implementation_source(entry) else 1,
             REWRITE_SMALL_FIRST_KIND_ORDER.get(entry.unit_kind, 50),
+            REWRITE_SMALL_FIRST_PATH_ORDER.get(top, 50),
             entry.total_lines,
             len(entry.files),
             REWRITE_STAGE_ORDER.get(entry.stage, REWRITE_STAGE_ORDER["unknown"]),
@@ -1202,11 +1214,17 @@ class ReviewIndex:
         # Move current position to next
         self.current_position = self.get_next_pending(selection_policy=selection_policy)
 
-    def mark_skipped(self, path: str, reason: str = "") -> None:
+    def mark_skipped(
+        self,
+        path: str,
+        reason: str = "",
+        selection_policy: Optional[str] = None,
+    ) -> None:
         """Mark a directory as skipped."""
         if path in self.entries:
             self.entries[path].status = Status.SKIPPED
             self.entries[path].notes = reason
+            self.current_position = self.get_next_pending(selection_policy=selection_policy)
 
     def get_summary_for_ai(self) -> str:
         """
