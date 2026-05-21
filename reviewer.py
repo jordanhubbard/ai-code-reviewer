@@ -607,7 +607,13 @@ class GitHelper:
         """Run a git command and return (returncode, output)."""
         cmd = ['git', '-C', str(self.repo_root)] + args
         if capture:
-            result = subprocess.run(cmd, capture_output=True, text=True)
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                encoding='utf-8',
+                errors='replace',
+            )
             return result.returncode, (result.stdout + result.stderr).strip()
         else:
             result = subprocess.run(cmd)
@@ -616,7 +622,13 @@ class GitHelper:
     def _run_raw(self, args: List[str]) -> Tuple[int, str]:
         """Run a git command and return unstripped output."""
         cmd = ['git', '-C', str(self.repo_root)] + args
-        result = subprocess.run(cmd, capture_output=True, text=True)
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            encoding='utf-8',
+            errors='replace',
+        )
         return result.returncode, result.stdout + result.stderr
 
     def _path_exists(self, relative: str) -> bool:

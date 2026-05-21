@@ -1,5 +1,7 @@
+import subprocess
 import unittest
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 import reviewer
@@ -76,6 +78,23 @@ class GitHelperWorktreeTests(unittest.TestCase):
                 "usr.bin/true/rust/src/main.rs",
             ],
         )
+
+    def test_diff_all_replaces_invalid_utf8_bytes(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            repo_root = Path(tmpdir)
+            subprocess.run(["git", "init", "-q"], cwd=repo_root, check=True)
+            subprocess.run(["git", "config", "user.email", "test@example.invalid"], cwd=repo_root, check=True)
+            subprocess.run(["git", "config", "user.name", "Test User"], cwd=repo_root, check=True)
+            path = repo_root / "invalid.txt"
+            path.write_bytes(b"ok\n")
+            subprocess.run(["git", "add", "invalid.txt"], cwd=repo_root, check=True)
+            subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=repo_root, check=True)
+            path.write_bytes(b"bad \xe6\n")
+
+            diff = reviewer.GitHelper(repo_root).diff_all()
+
+        self.assertIn("bad", diff)
+        self.assertIn("\ufffd", diff)
 
     def test_ensure_repository_ready_uses_fallback_branch_when_in_worktree(self) -> None:
         git = reviewer.GitHelper(Path("/tmp/repo"))
