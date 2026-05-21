@@ -120,6 +120,7 @@ source:
   #     DESTDIR: "/tmp/buildroot"
   #     WITHOUT_CLEAN: "yes"
   #     CROSS_TOOLCHAIN: "aarch64-gcc12"
+  #     CARGO_NET_OFFLINE: "true"  # Rust rewrites should not fetch crates
   #
   # Default: empty (inherit current environment unmodified)
   build_environment: {}
@@ -130,9 +131,56 @@ review:
   # and success framing. "review" is the historical defect-finding workflow.
   # "rewrite" is for scoped source rewrites: translation, API migration,
   # decomposition, simplification, hardening rewrites, or other transformations.
+  #
+  # Workflow and persona must agree:
+  #   - workflow: "review"  + persona: "personas/freebsd-angry-ai"
+  #   - workflow: "rewrite" + persona: "personas/freebsd-rust-rewriter"
+  #
+  # Do not pair workflow: "rewrite" with a review-only persona unless you are
+  # intentionally testing a bad configuration.
   workflow: "review"                # Options: review, rewrite
 
   # Rewrite workflow settings. Used only when workflow: "rewrite".
+  #
+  # FreeBSD C/C++ to Rust rewrite profile:
+  #
+  #   workflow: "rewrite"
+  #   persona: "personas/freebsd-rust-rewriter"
+  #   target_directories: 5
+  #   max_iterations_per_directory: 120
+  #   max_parallel_files: 1
+  #
+  # In source.build_environment:
+  #   CARGO_NET_OFFLINE: "true"
+  #
+  #   rewrite:
+  #     preflight_build: false
+  #     selection_policy: "small_first"
+  #     require_rust_build: true
+  #     target_language: "rust"
+  #     objective: >-
+  #       Translate FreeBSD userland C/C++ libraries and commands to Rust in
+  #       small, buildable, behavior-preserving work-unit increments.
+  #     strategy: >-
+  #       Start with small buildable bin/usr.bin/lib/libexec units. Create or
+  #       extend a side-by-side Rust crate inside the active work unit,
+  #       integrate it into that unit Makefile, run the normal active unit
+  #       build, then move to the next pending unit after a successful commit.
+  #     output_policy: >-
+  #       For commands, produce a Rust binary that can replace the original
+  #       program once behavior is validated. For libraries, produce a Rust
+  #       crate whose FreeBSD-facing artifact is a C ABI compatible lib*.a or
+  #       lib*.so as appropriate; keep public headers and consumers compatible.
+  #     contract:
+  #       integrated_build_must_invoke:
+  #         - "cargo"
+  #       rust_build: "cargo build --manifest-path {manifest} --offline --target-dir {target_dir}"
+  #       artifacts:
+  #         rust_files_required: true
+  #         cargo_manifest_required: true
+  #         external_crates: "vendored_only"
+  #       equivalence:
+  #         cli: []
   rewrite:
     # Full source.build_command preflight is skipped by default in rewrite mode.
     # Rewrites start from indexed bottom-up work units and validate each unit
