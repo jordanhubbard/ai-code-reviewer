@@ -33,6 +33,13 @@ def _make_source_tree(root: Path) -> None:
     (root / "bin" / "foo" / "main.c").write_text("int main(void) { return 0; }\n")
 
 
+def _make_two_unit_source_tree(root: Path) -> None:
+    _make_source_tree(root)
+    (root / "bin" / "bar").mkdir(parents=True)
+    (root / "bin" / "bar" / "Makefile").write_text("PROG=bar\n")
+    (root / "bin" / "bar" / "main.c").write_text("int main(void) { return 0; }\n")
+
+
 def _make_freebsd_smoke_selection_tree(root: Path) -> None:
     _make_source_tree(root)
     (root / "sbin" / "tests").mkdir(parents=True)
@@ -70,6 +77,39 @@ def _make_rust_source_tree(root: Path) -> None:
     )
     (root / "src" / "main.rs").write_text("fn main() { println!(\"hello\"); }\n")
     (root / "tests" / "cli.rs").write_text("#[test]\nfn smoke() {}\n")
+
+
+def _mock_git_for_loop(root: Path) -> MagicMock:
+    mock_git = MagicMock(spec=reviewer.GitHelper)
+    mock_git.repo_root = root
+    mock_git._run.return_value = (0, "abc123456789\n")
+    mock_git.diff.return_value = "diff --git a/bin/foo/main.c b/bin/foo/main.c\n"
+    mock_git.diff_all.return_value = "diff --git a/bin/foo/main.c b/bin/foo/main.c\n"
+    mock_git.is_ignored.return_value = False
+    mock_git.has_changes.return_value = False
+    mock_git.ensure_commit_prefix.side_effect = (
+        lambda message: message
+        if message.startswith(reviewer.COMMIT_PREFIX)
+        else f"{reviewer.COMMIT_PREFIX}{message}"
+    )
+    return mock_git
+
+
+def _make_rewrite_loop(root: Path, mock_git: MagicMock, ops: OpsLogger) -> reviewer.ReviewLoop:
+    persona_dir = Path(__file__).resolve().parents[1] / "personas" / "friendly-mentor"
+    with patch.object(reviewer.ReviewLoop, "_init_beads_manager", return_value=None), \
+         patch("reviewer.GitHelper", return_value=mock_git):
+        return reviewer.ReviewLoop(
+            ollama_client=_FakeLLM(),
+            build_executor=_FakeBuildExecutor(),
+            source_root=root,
+            persona_dir=persona_dir,
+            review_config={"workflow": "rewrite"},
+            target_directories=2,
+            max_iterations_per_directory=10,
+            max_parallel_files=0,
+            ops_logger=ops,
+        )
 
 
 class WorkflowModeTests(unittest.TestCase):
@@ -365,6 +405,110 @@ class WorkflowModeTests(unittest.TestCase):
             self.assertTrue(compacted)
             self.assertLess(loop._estimate_history_tokens(), loop._history_token_budget(aggressive=True))
             self.assertIn("history compacted", loop.history[-1]["content"])
+
+    def test_scope_change_ignores_metadata_only_dirty_state(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _make_two_unit_source_tree(root)
+            ops = OpsLogger(log_dir=root / ".ops-log", session_id="test-session")
+            mock_git = _mock_git_for_loop(root)
+            mock_git.changed_files_list.return_value = [".reviewer-log/ops.jsonl"]
+            loop = _make_rewrite_loop(root, mock_git, ops)
+
+            loop.session.current_directory = "bin/foo"
+            loop.session.pending_changes = False
+            loop.session.changed_files = []
+
+            with patch.object(loop, "_record_directory_attempt", return_value=1):
+                result = loop._execute_action({"action": "SET_SCOPE", "directory": "bin/bar"})
+
+            self.assertIn("Now rewriting bin/bar", result)
+            self.assertEqual(loop.session.current_directory, "bin/bar")
+
+    def test_completed_work_unit_cannot_be_reopened_or_edited(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _make_two_unit_source_tree(root)
+            ops = OpsLogger(log_dir=root / ".ops-log", session_id="test-session")
+            mock_git = _mock_git_for_loop(root)
+            mock_git.changed_files_list.return_value = []
+            loop = _make_rewrite_loop(root, mock_git, ops)
+            loop.index.mark_done("bin/foo", "done")
+
+            set_scope = loop._execute_action({"action": "SET_SCOPE", "directory": "bin/foo"})
+            edit = loop._execute_action({
+                "action": "EDIT_FILE",
+                "file_path": "bin/foo/main.c",
+                "old_text": "return 0;",
+                "new_text": "return 1;",
+            })
+            write = loop._execute_action({
+                "action": "WRITE_FILE",
+                "file_path": "bin/foo/new.rs",
+                "content": "fn main() {}\n",
+            })
+
+            self.assertIn("already marked complete", set_scope)
+            self.assertIn("Refusing to edit", edit)
+            self.assertIn("already complete", edit)
+            self.assertIn("Refusing to write", write)
+            self.assertIn("NEXT: Use SET_SCOPE bin/bar", set_scope)
+
+    def test_build_without_source_changes_is_rejected_before_build_runs(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _make_source_tree(root)
+            ops = OpsLogger(log_dir=root / ".ops-log", session_id="test-session")
+            mock_git = _mock_git_for_loop(root)
+            mock_git.changed_files_list.return_value = [".reviewer-log/ops.jsonl"]
+            loop = _make_rewrite_loop(root, mock_git, ops)
+            loop.session.current_directory = "bin/foo"
+            loop.session.pending_changes = False
+            loop.session.changed_files = []
+
+            with patch.object(loop, "_run_build_with_live_output") as build_mock:
+                result = loop._execute_action({"action": "BUILD"})
+
+            self.assertIn("BUILD_REJECTED: No pending source or build-file changes", result)
+            self.assertIn("Only reviewer metadata is dirty", result)
+            build_mock.assert_not_called()
+
+    def test_successful_build_clears_active_scope_after_commit(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _make_two_unit_source_tree(root)
+            ops = OpsLogger(log_dir=root / ".ops-log", session_id="test-session")
+            mock_git = _mock_git_for_loop(root)
+            mock_git.changed_files_list.return_value = [
+                "bin/foo/Makefile",
+                "bin/foo/rust/Cargo.toml",
+            ]
+            loop = _make_rewrite_loop(root, mock_git, ops)
+            loop.session.current_directory = "bin/foo"
+            loop.session.pending_changes = True
+            loop.session.changed_files = ["bin/foo/Makefile", "bin/foo/rust/Cargo.toml"]
+            build_result = reviewer.BuildResult(
+                success=True,
+                return_code=0,
+                duration_seconds=0.1,
+                raw_output="cargo build --manifest-path bin/foo/rust/Cargo.toml\n",
+            )
+
+            with patch.object(loop, "_run_build_with_live_output", return_value=build_result), \
+                 patch.object(loop, "_generate_commit_message", return_value="[ai-code-reviewer] foo: rewrite"), \
+                 patch.object(loop, "_commit_and_push", return_value=(True, "pushed")), \
+                 patch.object(loop, "_commit_tool_metadata_after_success", return_value="metacommit"):
+                result = loop._execute_action({"action": "BUILD"})
+
+            self.assertIn("BUILD_SUCCESS", result)
+            self.assertIn("Directory bin/foo is now complete", result)
+            self.assertIn("NEXT: Use SET_SCOPE bin/bar", result)
+            self.assertIsNone(loop.session.current_directory)
+            self.assertFalse(loop.session.pending_changes)
+            self.assertEqual(loop.session.changed_files, [])
+            self.assertEqual(loop.session.directories_completed, 1)
+            self.assertEqual(loop.session.completed_directories, ["bin/foo"])
+            self.assertEqual(loop.index.entries["bin/foo"].status, reviewer.Status.DONE)
 
     def test_repeated_noop_edit_requests_stop_run(self) -> None:
         persona_dir = Path(__file__).resolve().parents[1] / "personas" / "friendly-mentor"

@@ -38,6 +38,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed, Future
 from difflib import SequenceMatcher
 
 from index_generator import (
+    Status,
     generate_index,
     normalize_index_workflow,
     normalize_rewrite_selection_policy,
@@ -4230,6 +4231,41 @@ Output ONLY the lesson entry, nothing else."""
             if not is_tool_metadata_path(path)
         ]
 
+    def _work_unit_for_path(self, rel_path: str) -> Optional[str]:
+        """Return the most specific indexed work unit containing rel_path."""
+        normalized = rel_path.strip("/")
+        matches = [
+            path for path in self.index.entries.keys()
+            if normalized == path or normalized.startswith(path + "/")
+        ]
+        if not matches:
+            return None
+        return max(matches, key=len)
+
+    def _completed_work_unit_for_path(self, rel_path: str) -> Optional[str]:
+        work_unit = self._work_unit_for_path(rel_path)
+        if not work_unit:
+            return None
+        entry = self.index.entries.get(work_unit)
+        if entry and entry.status == Status.DONE:
+            return work_unit
+        return None
+
+    def _clear_active_scope(self) -> None:
+        """Clear in-memory scope state after a successful unit commit."""
+        self.session.current_directory = None
+        self.session.files_in_current_directory = []
+        self.session.files_reviewed_in_directory = 0
+        self.session.current_file = None
+        self.session.current_file_chunks_total = 0
+        self.session.current_file_chunks_reviewed = 0
+        self.session.visited_files_in_directory = set()
+        self.session.pending_changes = False
+        self.session.changed_files = []
+        self.current_chunks = []
+        self.current_chunk_index = 0
+        self.chunked_file_path = None
+
     def _commit_tool_metadata_changes(self, message: str) -> Optional[str]:
         """Commit currently dirty reviewer-managed metadata paths."""
         changed_paths = self.git.changed_files_list(include_untracked=True)
@@ -4583,6 +4619,29 @@ Output ONLY the lesson entry, nothing else."""
             # Normalize path (remove leading ./ or /)
             directory = directory.lstrip('./')
 
+            entry = self.index.entries.get(directory)
+            if entry and entry.status == Status.DONE:
+                next_dir = self._next_pending_work_unit()
+                response = (
+                    f"SET_SCOPE_ERROR: {directory} is already marked complete.\n\n"
+                    "Completed work units are closed after a successful build and commit; "
+                    "do not reopen the same unit for incremental polish."
+                )
+                if next_dir:
+                    response += f"\nNEXT: Use SET_SCOPE {next_dir}"
+                else:
+                    response += "\nNo other pending directories remain."
+                return response
+            if entry and entry.status == Status.SKIPPED:
+                next_dir = self._next_pending_work_unit()
+                response = (
+                    f"SET_SCOPE_ERROR: {directory} is marked skipped.\n\n"
+                    "Choose a pending work unit instead."
+                )
+                if next_dir:
+                    response += f"\nNEXT: Use SET_SCOPE {next_dir}"
+                return response
+
             if self._should_auto_skip(directory):
                 attempts = self._get_retry_record(directory).get('attempts', 0)
                 self.index.mark_skipped(directory, reason=f"Auto-skipped after {attempts} retries")
@@ -4600,12 +4659,14 @@ Output ONLY the lesson entry, nothing else."""
             
             # IMPORTANT: Prevent changing directories with uncommitted changes
             if self.session.current_directory and self.session.current_directory != directory:
-                if self.session.pending_changes or self.git.has_changes():
+                dirty_source_paths = self._dirty_non_metadata_paths()
+                if self.session.pending_changes or dirty_source_paths:
+                    changed = self.session.changed_files or dirty_source_paths
                     return (
                         f"SET_SCOPE_ERROR: Cannot change directory with uncommitted changes\n\n"
                         f"Current directory: {self.session.current_directory}\n"
-                        f"Pending changes: {len(self.session.changed_files)} files modified\n"
-                        f"Files: {', '.join(self.session.changed_files)}\n\n"
+                        f"Pending source/build changes: {len(changed)} files modified\n"
+                        f"Files: {', '.join(changed)}\n\n"
                         f"You MUST complete the current directory first:\n"
                         f"1. {self.workflow['verb'].capitalize()} all relevant files in {self.session.current_directory}\n"
                         f"2. Run ACTION: BUILD to test changes\n"
@@ -4951,6 +5012,17 @@ Output ONLY the lesson entry, nothing else."""
             
             # Check if file is within current scope (warn but don't block)
             rel_path = str(path.relative_to(self.source_root))
+            completed_unit = self._completed_work_unit_for_path(rel_path)
+            if completed_unit:
+                next_dir = self._next_pending_work_unit()
+                response = (
+                    f"EDIT_FILE_ERROR: Refusing to edit {rel_path}; work unit "
+                    f"{completed_unit} is already complete.\n\n"
+                    "Completed units are closed after a successful build and commit."
+                )
+                if next_dir:
+                    response += f"\nNEXT: Use SET_SCOPE {next_dir}"
+                return response
             if self.session.current_directory:
                 if not rel_path.startswith(self.session.current_directory):
                     print(f"\n*** WARNING: Editing {rel_path} outside current scope ({self.session.current_directory})")
@@ -5077,12 +5149,24 @@ Output ONLY the lesson entry, nothing else."""
             except ValueError as e:
                 return f"WRITE_FILE_ERROR: {e}"
             content = action.get('content', '')
+            rel_path = str(path.relative_to(self.source_root))
             
             if not content:
                 return "WRITE_FILE_ERROR: Missing CONTENT block"
+
+            completed_unit = self._completed_work_unit_for_path(rel_path)
+            if completed_unit:
+                next_dir = self._next_pending_work_unit()
+                response = (
+                    f"WRITE_FILE_ERROR: Refusing to write {rel_path}; work unit "
+                    f"{completed_unit} is already complete.\n\n"
+                    "Completed units are closed after a successful build and commit."
+                )
+                if next_dir:
+                    response += f"\nNEXT: Use SET_SCOPE {next_dir}"
+                return response
             
             success, message, diff = self.editor.write_file(path, content)
-            rel_path = str(path.relative_to(self.source_root))
             
             if success:
                 self.session.noop_edit_count = 0
@@ -5111,15 +5195,43 @@ Output ONLY the lesson entry, nothing else."""
                 return f"WRITE_FILE_ERROR: {message}"
         
         elif action_type == 'BUILD':
-            if not self.session.pending_changes:
-                print("\n*** WARNING: No pending changes to build")
-            
             current_dir = self.session.current_directory or "(no scope set)"
+            if self.session.current_directory:
+                entry = self.index.entries.get(self.session.current_directory)
+                if entry and entry.status == Status.DONE:
+                    next_dir = self._next_pending_work_unit()
+                    response = (
+                        f"BUILD_REJECTED: {self.session.current_directory} is already complete.\n\n"
+                        "A completed work unit cannot be built and committed again in the same lifecycle."
+                    )
+                    if next_dir:
+                        response += f"\nNEXT: Use SET_SCOPE {next_dir}"
+                    return response
+
+            changed_files = self._dirty_non_metadata_paths()
+            if not changed_files:
+                metadata_paths = [
+                    path for path in self.git.changed_files_list(include_untracked=True)
+                    if is_tool_metadata_path(path)
+                ]
+                detail = ""
+                if metadata_paths:
+                    detail = (
+                        "\n\nOnly reviewer metadata is dirty: "
+                        + ", ".join(metadata_paths[:8])
+                        + (" ..." if len(metadata_paths) > 8 else "")
+                    )
+                return (
+                    "BUILD_REJECTED: No pending source or build-file changes for the active scope.\n\n"
+                    "Do not run BUILD just to satisfy the loop. Choose a pending work unit with SET_SCOPE "
+                    "or make a real source/build-file change first."
+                    f"{detail}"
+                )
+
             print(f"\n*** Building with changes in: {current_dir}")
             
             # Get full diff before build
             full_diff = self.git.diff_all()
-            changed_files = self.git.changed_files_list()
             
             # Run build with live output
             result = self._run_build_with_live_output()
@@ -5162,11 +5274,13 @@ Output ONLY the lesson entry, nothing else."""
                     changed_files, commit_msg, self.session.current_directory
                 )
                 
+                completed_dir = self.session.current_directory
+
                 # Mark directory as done in the persistent index BEFORE commit
                 # so updated workflow metadata is included in the commit
-                if self.session.current_directory:
+                if completed_dir:
                     self.index.mark_done(
-                        self.session.current_directory,
+                        completed_dir,
                         f"{self.workflow['past_tense'].capitalize()} by session {self.session.session_id}",
                         selection_policy=self._rewrite_selection_policy()
                         if self.workflow_mode == "rewrite" else None,
@@ -5182,19 +5296,19 @@ Output ONLY the lesson entry, nothing else."""
                     
                     # Log commit success
                     self.ops.commit_success(commit_hash, changed_files)
-                    if self.session.current_directory:
-                        self._beads_mark_completed(self.session.current_directory, commit_hash)
+                    if completed_dir:
+                        self._beads_mark_completed(completed_dir, commit_hash)
                     
                     # Mark directory as completed in session
-                    if self.session.current_directory:
-                        if self.session.current_directory not in self.session.completed_directories:
-                            self.session.completed_directories.append(self.session.current_directory)
-                        self.session.directories_completed += 1
-                        self._clear_directory_attempt(self.session.current_directory)
+                    if completed_dir:
+                        if completed_dir not in self.session.completed_directories:
+                            self.session.completed_directories.append(completed_dir)
+                            self.session.directories_completed += 1
+                        self._clear_directory_attempt(completed_dir)
                         
                         # Log directory complete
                         self.ops.directory_complete(
-                            self.session.current_directory,
+                            completed_dir,
                             files_changed=changed_files,
                             commit_hash=commit_hash,
                         )
@@ -5203,15 +5317,14 @@ Output ONLY the lesson entry, nothing else."""
                         commit_hash
                     )
                     
-                    self.session.pending_changes = False
-                    self.session.changed_files = []
+                    self._clear_active_scope()
                     
                     # Get next suggested directory from index
                     next_dir = self._next_pending_work_unit()
                     next_msg = f"\nNEXT: Use SET_SCOPE {next_dir}" if next_dir else "\nNo more directories pending."
                     
                     return f"BUILD_SUCCESS: Build completed successfully.\n" \
-                           f"Directory {current_dir} is now complete.\n" \
+                           f"Directory {completed_dir or current_dir} is now complete.\n" \
                            f"Changes committed and pushed.\n" \
                            f"Post-success metadata commit: {metadata_commit_hash or 'none'}.\n\n" \
                            f"Completed directories so far: {self.session.directories_completed}" \
