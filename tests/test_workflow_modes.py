@@ -44,7 +44,7 @@ def _make_two_unit_source_tree(root: Path) -> None:
     (root / "bin" / "bar" / "main.c").write_text("int main(void) { return 0; }\n")
 
 
-def _make_freebsd_smoke_selection_tree(root: Path) -> None:
+def _make_mixed_source_selection_tree(root: Path) -> None:
     _make_source_tree(root)
     (root / "sbin" / "tests").mkdir(parents=True)
     (root / "sbin" / "tests" / "Makefile").write_text("SUBDIR=ifconfig\n")
@@ -213,22 +213,22 @@ class WorkflowModeTests(unittest.TestCase):
             self.assertIn("=== REWRITE INDEX SUMMARY ===", index.get_summary_for_ai())
             self.assertFalse((root / ".ai-code-reviewer" / "REVIEW-INDEX.md").exists())
 
-    def test_rewrite_small_first_policy_prefers_buildable_smoke_units(self) -> None:
+    def test_rewrite_small_first_policy_prefers_small_source_units(self) -> None:
         with TemporaryDirectory() as tmp:
             root = Path(tmp)
-            _make_freebsd_smoke_selection_tree(root)
+            _make_mixed_source_selection_tree(root)
 
             index = generate_index(root, force_rebuild=True, workflow_mode="rewrite")
 
-            self.assertEqual(index.get_next_pending(), "include/arpa")
+            self.assertEqual(index.get_next_pending(), "bin/foo")
             self.assertIsNone(index.entries["usr.sbin/hyperv/tools"].build_command)
-            self.assertEqual(index.entries["sbin/tests"].build_command, "make -C sbin/tests")
-            self.assertEqual(index.entries["sbin/tests"].unit_kind, "freebsd-tests")
+            self.assertIsNone(index.entries["sbin/tests"].build_command)
+            self.assertEqual(index.entries["sbin/tests"].unit_kind, "tests")
             self.assertEqual(
                 index.entries["libexec/rtld-elf/tests/libval"].unit_kind,
-                "freebsd-tests",
+                "tests",
             )
-            self.assertEqual(index.entries["usr.bin/clang/llvm-dwp"].unit_kind, "bootstrap-tool")
+            self.assertEqual(index.entries["usr.bin/clang/llvm-dwp"].unit_kind, "directory")
             self.assertEqual(
                 index.get_next_pending(selection_policy="small_first"),
                 "bin/foo",
@@ -242,15 +242,14 @@ class WorkflowModeTests(unittest.TestCase):
                 "bin/foo",
             )
             index.mark_done("bin/foo", selection_policy="small_first")
-            self.assertEqual(
-                index.get_next_pending(
-                    selection_policy="small_first",
-                    required_source_suffixes=[".c", ".cc", ".cpp", ".cxx"],
-                ),
-                "usr.bin/tiny",
+            next_unit = index.get_next_pending(
+                selection_policy="small_first",
+                required_source_suffixes=[".c", ".cc", ".cpp", ".cxx"],
             )
+            self.assertIsNotNone(next_unit)
+            self.assertNotEqual(next_unit, "bin/foo")
 
-    def test_rewrite_index_scans_generic_rust_project(self) -> None:
+    def test_rewrite_index_scans_generic_project_without_build_assumptions(self) -> None:
         with TemporaryDirectory() as tmp:
             root = Path(tmp)
             _make_rust_source_tree(root)
@@ -262,23 +261,23 @@ class WorkflowModeTests(unittest.TestCase):
             self.assertTrue(valid, error)
             self.assertIn("src", index.entries)
             self.assertEqual(index.entries["src"].total_lines, 1)
-            self.assertEqual(index.entries["src"].unit_kind, "rust-binary")
-            self.assertEqual(index.entries["src"].stage, "application")
-            self.assertEqual(index.entries["src"].build_command, "cargo test")
-            self.assertIn("Cargo.toml", index.entries["src"].files)
-            self.assertIn("tests/cli.rs", index.entries["src"].files)
-            self.assertEqual(index.entries["tests"].unit_kind, "rust-tests")
-            self.assertEqual(index.entries["tests"].stage, "validation")
-            self.assertEqual(index.entries["tests"].depends_on, ["src"])
+            self.assertEqual(index.entries["src"].unit_kind, "directory")
+            self.assertEqual(index.entries["src"].stage, "unknown")
+            self.assertIsNone(index.entries["src"].build_command)
+            self.assertIn("src/main.rs", index.entries["src"].files)
+            self.assertNotIn("Cargo.toml", index.entries["src"].files)
+            self.assertEqual(index.entries["tests"].unit_kind, "tests")
+            self.assertEqual(index.entries["tests"].stage, "unknown")
+            self.assertEqual(index.entries["tests"].depends_on, [])
             self.assertEqual(index.get_next_pending(), "src")
 
             content = index.index_path.read_text()
-            self.assertIn("## Stage: application", content)
+            self.assertIn("## Stage: unknown", content)
             self.assertIn("<!-- unit:", content)
 
             loaded = generate_index(root, force_rebuild=False, workflow_mode="rewrite")
-            self.assertEqual(loaded.entries["src"].unit_kind, "rust-binary")
-            self.assertEqual(loaded.entries["tests"].depends_on, ["src"])
+            self.assertEqual(loaded.entries["src"].unit_kind, "directory")
+            self.assertEqual(loaded.entries["tests"].depends_on, [])
 
     @unittest.skipIf(shutil.which("git") is None, "git command not available")
     def test_rewrite_index_skips_gitignored_directories(self) -> None:
@@ -334,7 +333,6 @@ class WorkflowModeTests(unittest.TestCase):
                         "workflow": "rewrite",
                         "rewrite": {
                             "objective": "Rewrite small userland utilities side-by-side.",
-                            "target_language": "rust",
                             "source_suffixes": [".c", ".cc"],
                         },
                     },
@@ -359,25 +357,24 @@ class WorkflowModeTests(unittest.TestCase):
             init_message = loop.history[1]["content"]
             self.assertIn("code rewriting AI", system_prompt)
             self.assertIn("broader than translation", system_prompt)
-            self.assertIn("Do not create placeholder crates", system_prompt)
+            self.assertIn("Do not create placeholder modules", system_prompt)
             self.assertIn("choose another scope instead of fabricating a rewrite", system_prompt)
-            self.assertIn("normal active unit build must build the Rust version", system_prompt)
             self.assertNotIn("FreeBSD source code", system_prompt)
+            self.assertNotIn("cargo/rustc", system_prompt)
             self.assertIn("Rewrite small userland utilities side-by-side.", init_message)
             self.assertIn("Required source suffixes: .c, .cc", init_message)
-            self.assertIn("FreeBSD Rust command Makefile template", init_message)
-            self.assertIn("--offline --target-dir", init_message)
+            self.assertNotIn("FreeBSD Rust command Makefile template", init_message)
 
             with patch.object(loop, "_record_directory_attempt", return_value=1):
                 result = loop._execute_action({"action": "SET_SCOPE", "directory": "bin/foo"})
 
             self.assertIn("Now rewriting bin/foo", result)
             self.assertIn("WORK UNIT:", result)
-            self.assertIn("Kind: freebsd-command", result)
-            self.assertIn("Stage: application", result)
-            self.assertIn("Build command: make -C bin/foo", result)
+            self.assertIn("Kind: directory", result)
+            self.assertIn("Stage: unknown", result)
+            self.assertNotIn("Build command:", result)
             self.assertIn("FILES TO REWRITE", result)
-            self.assertEqual(loop._current_build_command(), "make -C bin/foo")
+            self.assertEqual(loop._current_build_command(), "true")
 
             with patch.object(loop, "_ask_ai_simple", return_value=None):
                 commit_msg = loop._generate_commit_message("", [], "bin/foo")
@@ -386,98 +383,28 @@ class WorkflowModeTests(unittest.TestCase):
 
             changed_files = [
                 "bin/foo/Makefile",
-                "bin/foo/crates/foo/Cargo.toml",
-                "bin/foo/crates/foo/src/main.rs",
+                "bin/foo/generated/main.rewrite",
             ]
-            c_only_build = reviewer.BuildResult(
+            build_result = reviewer.BuildResult(
                 success=True,
                 return_code=0,
                 duration_seconds=1.0,
-                raw_output="cc -o foo foo.o\n",
+                raw_output="translator --unit bin/foo\n",
             )
-            rejection = loop._rewrite_build_completion_error(c_only_build, changed_files)
-            self.assertIsNotNone(rejection)
-            self.assertIn("BUILD_REJECTED", rejection)
-            self.assertIn("normal active unit build produce the Rust version", rejection)
+            self.assertIsNone(loop._rewrite_build_completion_error(build_result, changed_files))
 
-            rust_build = reviewer.BuildResult(
-                success=True,
-                return_code=0,
-                duration_seconds=1.0,
-                raw_output="cargo build --manifest-path crates/foo/Cargo.toml\n",
-            )
-            self.assertIsNone(loop._rewrite_build_completion_error(rust_build, changed_files))
-
-            no_rust_changes = reviewer.BuildResult(
-                success=True,
-                return_code=0,
-                duration_seconds=1.0,
-                raw_output="cargo build --manifest-path crates/foo/Cargo.toml\n",
-            )
-            no_rust_rejection = loop._rewrite_build_completion_error(
-                no_rust_changes,
-                ["bin/foo/Makefile"],
-            )
-            self.assertIsNotNone(no_rust_rejection)
-            self.assertIn("requires Rust source or Cargo manifest changes", no_rust_rejection)
-
-            (root / "bin" / "foo" / "rust").mkdir()
-            (root / "bin" / "foo" / "rust" / "Cargo.toml").write_text(
-                "[package]\nname = \"foo\"\nversion = \"0.0.0\"\nedition = \"2021\"\n"
-            )
             loop.session.current_directory = "bin/foo"
             loop.rewrite_config["contract"] = {
-                "integrated_build_must_invoke": ["cargo"],
-                "rust_build": "cargo build --manifest-path {manifest} --offline --target-dir {target_dir}",
-                "artifacts": {
-                    "rust_files_required": True,
-                    "cargo_manifest_required": True,
-                    "external_crates": "vendored_only",
-                },
+                "build_must_invoke": ["translator"],
+                "required_changed_files": ["**/*.rewrite"],
             }
-            contract_files = [
-                "bin/foo/rust/Cargo.toml",
-                "bin/foo/rust/src/main.rs",
-            ]
-            contract_build = reviewer.BuildResult(
-                success=True,
-                return_code=0,
-                duration_seconds=1.0,
-                raw_output="cargo build --manifest-path bin/foo/rust/Cargo.toml\n",
+            self.assertIsNone(loop._rewrite_build_completion_error(build_result, changed_files))
+            contract_rejection = loop._rewrite_build_completion_error(
+                build_result,
+                ["bin/foo/Makefile"],
             )
-            with patch.object(
-                loop,
-                "_run_contract_command",
-                return_value=reviewer.BuildResult(
-                    success=True,
-                    return_code=0,
-                    duration_seconds=0.1,
-                    raw_output="Finished `dev` profile",
-                ),
-            ) as contract_run:
-                self.assertIsNone(loop._rewrite_build_completion_error(contract_build, contract_files))
-            contract_run.assert_called_once()
-
-            with patch.object(
-                loop,
-                "_run_contract_command",
-                return_value=reviewer.BuildResult(
-                    success=False,
-                    return_code=101,
-                    duration_seconds=0.1,
-                    raw_output="cargo error",
-                ),
-            ):
-                contract_failure = loop._rewrite_build_completion_error(contract_build, contract_files)
-            self.assertIsNotNone(contract_failure)
-            self.assertIn("configured Rust build failed", contract_failure)
-
-            loop.rewrite_config["contract"]["rust_build"] = (
-                "cargo build --manifest-path {manifest} --target-dir {target_dir}"
-            )
-            offline_failure = loop._rewrite_build_completion_error(contract_build, contract_files)
-            self.assertIsNotNone(offline_failure)
-            self.assertIn("requires offline/vendored Cargo", offline_failure)
+            self.assertIsNotNone(contract_rejection)
+            self.assertIn("requires a changed file matching", contract_rejection)
 
             loop.history.extend(
                 [
@@ -522,19 +449,18 @@ class WorkflowModeTests(unittest.TestCase):
             mock_git = _mock_git_for_loop(root)
             loop = _make_rewrite_loop(root, mock_git, ops)
             loop.session.current_directory = "bin/foo"
-            loop.rewrite_config["require_rust_build"] = False
             loop.rewrite_config["contract"] = {
                 "equivalence": {
                     "cli": [
                         {
                             "unit": "bin/bar",
-                            "source_command": "false",
-                            "rust_command": "false",
+                            "baseline_command": "false",
+                            "candidate_command": "false",
                         },
                         {
                             "unit": "bin/foo",
-                            "source_command": "printf source",
-                            "rust_command": "printf rust",
+                            "baseline_command": "printf baseline",
+                            "candidate_command": "printf candidate",
                         }
                     ]
                 }
@@ -551,9 +477,9 @@ class WorkflowModeTests(unittest.TestCase):
                 self.assertIsNone(loop._rewrite_build_completion_error(build_result, ["bin/foo/main.c"]))
             self.assertEqual(run_case.call_count, 2)
 
-            source = subprocess.CompletedProcess(args="", returncode=0, stdout="source", stderr="")
-            rust = subprocess.CompletedProcess(args="", returncode=0, stdout="rust", stderr="")
-            with patch.object(loop, "_run_contract_process", side_effect=[source, rust]):
+            baseline = subprocess.CompletedProcess(args="", returncode=0, stdout="baseline", stderr="")
+            candidate = subprocess.CompletedProcess(args="", returncode=0, stdout="candidate", stderr="")
+            with patch.object(loop, "_run_contract_process", side_effect=[baseline, candidate]):
                 mismatch = loop._rewrite_build_completion_error(build_result, ["bin/foo/main.c"])
             self.assertIsNotNone(mismatch)
             self.assertIn("stdout mismatch", mismatch)
@@ -568,7 +494,6 @@ class WorkflowModeTests(unittest.TestCase):
             mock_git = _mock_git_for_loop(root)
             loop = _make_rewrite_loop(root, mock_git, ops)
             loop.session.current_directory = "bin/foo"
-            loop.rewrite_config["require_rust_build"] = False
             loop.rewrite_config["contract"] = {
                 "build_must_invoke": "go test",
                 "required_changed_files": {
@@ -605,7 +530,7 @@ class WorkflowModeTests(unittest.TestCase):
                 self.assertIsNone(loop._rewrite_build_completion_error(build_result, changed_files))
 
             run_contract.assert_called_once()
-            self.assertIn("checked:bin/foo:make -C bin/foo", run_contract.call_args.args[0])
+            self.assertIn("checked:bin/foo:true", run_contract.call_args.args[0])
 
             missing_required_file = loop._rewrite_build_completion_error(
                 build_result,
@@ -622,7 +547,6 @@ class WorkflowModeTests(unittest.TestCase):
             mock_git = _mock_git_for_loop(root)
             loop = _make_rewrite_loop(root, mock_git, ops)
             loop.session.current_directory = "bin/foo"
-            loop.rewrite_config["require_rust_build"] = False
             loop.rewrite_config["contract"] = {
                 "commands": [
                     {
@@ -729,17 +653,17 @@ class WorkflowModeTests(unittest.TestCase):
             mock_git = _mock_git_for_loop(root)
             mock_git.changed_files_list.return_value = [
                 "bin/foo/Makefile",
-                "bin/foo/rust/Cargo.toml",
+                "bin/foo/rewrite/generated.txt",
             ]
             loop = _make_rewrite_loop(root, mock_git, ops)
             loop.session.current_directory = "bin/foo"
             loop.session.pending_changes = True
-            loop.session.changed_files = ["bin/foo/Makefile", "bin/foo/rust/Cargo.toml"]
+            loop.session.changed_files = ["bin/foo/Makefile", "bin/foo/rewrite/generated.txt"]
             build_result = reviewer.BuildResult(
                 success=True,
                 return_code=0,
                 duration_seconds=0.1,
-                raw_output="cargo build --manifest-path bin/foo/rust/Cargo.toml\n",
+                raw_output="rewrite build completed\n",
             )
 
             with patch.object(loop, "_run_build_with_live_output", return_value=build_result), \
@@ -766,17 +690,17 @@ class WorkflowModeTests(unittest.TestCase):
             mock_git = _mock_git_for_loop(root)
             mock_git.changed_files_list.return_value = [
                 "bin/foo/Makefile",
-                "bin/foo/rust/Cargo.toml",
+                "bin/foo/rewrite/generated.txt",
             ]
             loop = _make_rewrite_loop(root, mock_git, ops)
             loop.session.current_directory = "bin/foo"
             loop.session.pending_changes = True
-            loop.session.changed_files = ["bin/foo/Makefile", "bin/foo/rust/Cargo.toml"]
+            loop.session.changed_files = ["bin/foo/Makefile", "bin/foo/rewrite/generated.txt"]
             build_result = reviewer.BuildResult(
                 success=False,
                 return_code=2,
                 duration_seconds=0.1,
-                raw_output="make: Could not find bsd.rust.mk\n",
+                raw_output="build integration failed\n",
             )
 
             with patch.object(loop, "_run_build_with_live_output", return_value=build_result), \
@@ -790,7 +714,7 @@ class WorkflowModeTests(unittest.TestCase):
             mock_git.push.assert_not_called()
             self.assertEqual(loop.session.current_directory, "bin/foo")
             self.assertTrue(loop.session.pending_changes)
-            self.assertEqual(loop.session.changed_files, ["bin/foo/Makefile", "bin/foo/rust/Cargo.toml"])
+            self.assertEqual(loop.session.changed_files, ["bin/foo/Makefile", "bin/foo/rewrite/generated.txt"])
             self.assertNotEqual(loop.index.entries["bin/foo"].status, reviewer.Status.DONE)
 
     def test_abandon_active_scope_cleans_untracked_and_marks_skipped(self) -> None:
@@ -801,8 +725,8 @@ class WorkflowModeTests(unittest.TestCase):
             mock_git = _mock_git_for_loop(root)
             mock_git.changed_files_list.return_value = [
                 "bin/foo/Makefile",
-                "bin/foo/rust/Cargo.toml",
-                "bin/foo/rust/src/main.rs",
+                "bin/foo/rewrite/generated.txt",
+                "bin/foo/rewrite/driver.txt",
                 ".reviewer-log/ops.jsonl",
             ]
             loop = _make_rewrite_loop(root, mock_git, ops)
@@ -810,7 +734,7 @@ class WorkflowModeTests(unittest.TestCase):
             loop.session.pending_changes = True
             loop.session.changed_files = [
                 "bin/foo/Makefile",
-                "bin/foo/rust/Cargo.toml",
+                "bin/foo/rewrite/generated.txt",
             ]
 
             result = loop._abandon_active_scope("test failure")
@@ -822,8 +746,8 @@ class WorkflowModeTests(unittest.TestCase):
             self.assertFalse(loop.session.pending_changes)
             self.assertEqual(loop.session.changed_files, [])
             mock_git.checkout_paths.assert_any_call(["bin/foo/Makefile"])
-            mock_git.checkout_paths.assert_any_call(["bin/foo/rust/Cargo.toml"])
-            mock_git.checkout_paths.assert_any_call(["bin/foo/rust/src/main.rs"])
+            mock_git.checkout_paths.assert_any_call(["bin/foo/rewrite/generated.txt"])
+            mock_git.checkout_paths.assert_any_call(["bin/foo/rewrite/driver.txt"])
             mock_git.clean_paths.assert_called_with(["bin/foo"])
 
     def test_repeated_noop_edit_requests_stop_run(self) -> None:

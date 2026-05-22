@@ -16,7 +16,6 @@ The index file contains:
 import os
 import subprocess
 import json
-import shlex
 from pathlib import Path
 from dataclasses import dataclass, field
 from typing import Any, Iterable, List, Dict, Optional, Iterator, Set
@@ -126,27 +125,8 @@ REWRITE_SELECTION_POLICY_ALIASES = {
 }
 
 REWRITE_SMALL_FIRST_KIND_ORDER = {
-    "freebsd-command": 0,
-    "rust-binary": 0,
-    "rust-library": 1,
-    "rust-module": 1,
-    "freebsd-library": 2,
-    "makefile-module": 3,
-    "bootstrap-tool": 4,
-    "rust-tests": 5,
-    "freebsd-tests": 5,
-    "directory": 6,
-    "freebsd-kernel": 9,
-}
-
-REWRITE_SMALL_FIRST_PATH_ORDER = {
-    "bin": 0,
-    "usr.bin": 1,
-    "sbin": 2,
-    "usr.sbin": 3,
-    "libexec": 4,
-    "lib": 5,
-    "include": 6,
+    "directory": 0,
+    "tests": 5,
 }
 
 REWRITE_IMPLEMENTATION_SUFFIXES = {
@@ -158,16 +138,6 @@ REWRITE_IMPLEMENTATION_SUFFIXES = {
     ".sh", ".bash", ".ksh", ".zsh",
     ".py", ".awk", ".sed", ".perl", ".pl",
 }
-
-REWRITE_TOOLCHAIN_PATH_MARKERS = {
-    "clang",
-    "compiler-rt",
-    "libclang_rt",
-    "lld",
-    "lldb",
-    "llvm",
-}
-
 
 # ============================================================================
 # Utility Functions
@@ -563,7 +533,7 @@ class ReviewIndex:
             entry.status, entry.reviewed_date, entry.notes = existing_status[rel_path]
 
     def ensure_rewrite_work_units(self) -> bool:
-        """Refresh inferred rewrite work-unit metadata for a loaded index."""
+        """Refresh generic rewrite work-unit metadata for a loaded index."""
         if self.workflow_mode != "rewrite":
             return False
 
@@ -583,22 +553,18 @@ class ReviewIndex:
         }
 
     def _infer_rewrite_work_units(self) -> None:
-        """Infer functional rewrite units from the source tree layout."""
+        """Populate generic rewrite-unit metadata from the scanned source tree."""
         if self.workflow_mode != "rewrite":
             return
 
         for entry in self.entries.values():
             entry.files = self._candidate_files_for_entry(entry.path)
-            entry.unit_kind = "directory"
+            entry.unit_kind = self._generic_rewrite_unit_kind(entry.path)
             entry.stage = "unknown"
             entry.depends_on = []
             entry.build_command = None
             entry.test_command = None
             entry.install_command = None
-
-            if self._infer_rust_work_unit(entry):
-                continue
-            self._infer_makefile_work_unit(entry)
 
     def _candidate_files_for_entry(self, rel_path: str) -> List[str]:
         """Return direct source/build files that belong to a directory entry."""
@@ -621,181 +587,10 @@ class ReviewIndex:
 
         return files
 
-    def _infer_rust_work_unit(self, entry: DirectoryEntry) -> bool:
-        """Infer Rust package/module/test work-unit metadata."""
-        directory = self.source_root / entry.path
-        cargo_root = self._find_cargo_root(directory)
-        if cargo_root is None:
-            return False
-
-        cargo_rel = self._rel_or_dot(cargo_root)
-        cargo_manifest = "Cargo.toml" if cargo_rel == "." else f"{cargo_rel}/Cargo.toml"
-        package_name = self._read_cargo_package_name(cargo_root / "Cargo.toml")
-        command = self._cargo_test_command(cargo_root, package_name)
-
-        entry.files = self._unique_paths([*entry.files, cargo_manifest])
-        entry.build_command = command
-        entry.test_command = command
-
-        parts = Path(entry.path).parts
-        direct_names = {Path(f).name for f in entry.files}
-        src_unit = self._rust_src_unit_for(cargo_root)
-
-        if parts and parts[-1] == "tests":
-            entry.unit_kind = "rust-tests"
-            entry.stage = "validation"
-            if src_unit and src_unit in self.entries and src_unit != entry.path:
-                entry.depends_on = [src_unit]
-            return True
-
-        if Path(entry.path).name == "src":
-            tests_dir = cargo_root / "tests"
-            if tests_dir.is_dir():
-                try:
-                    test_files = [
-                        str(p.relative_to(self.source_root))
-                        for p in sorted(tests_dir.glob("*.rs"))
-                        if p.is_file()
-                    ]
-                    entry.files = self._unique_paths([*entry.files, *test_files])
-                except ValueError:
-                    pass
-
-        has_lib = "lib.rs" in direct_names or (directory / "lib.rs").exists()
-        has_main = "main.rs" in direct_names or (directory / "main.rs").exists()
-
-        if has_lib and not has_main:
-            entry.unit_kind = "rust-library"
-            entry.stage = "foundation"
-        elif has_main or "bin" in parts:
-            entry.unit_kind = "rust-binary"
-            entry.stage = "application"
-            if src_unit and src_unit in self.entries and src_unit != entry.path:
-                entry.depends_on = [src_unit]
-        else:
-            entry.unit_kind = "rust-module"
-            entry.stage = "foundation"
-            if src_unit and src_unit in self.entries and src_unit != entry.path:
-                entry.depends_on = [src_unit]
-
-        return True
-
-    def _infer_makefile_work_unit(self, entry: DirectoryEntry) -> None:
-        """Infer FreeBSD/Makefile-oriented rewrite-unit metadata."""
-        directory = self.source_root / entry.path
-        has_build_makefile = (
-            (directory / "Makefile").exists()
-            or (directory / "BSDmakefile").exists()
-        )
-        top = entry.path.split("/", 1)[0]
-        parts = Path(entry.path).parts
-
-        if "tests" in parts:
-            entry.stage = "validation"
-            entry.unit_kind = "freebsd-tests"
-        elif self._is_toolchain_rewrite_unit(entry.path):
-            entry.stage = "bootstrap"
-            entry.unit_kind = "bootstrap-tool"
-        elif top in {"include", "lib"}:
-            entry.stage = "foundation"
-            entry.unit_kind = "freebsd-library"
-        elif top in {"tools", "targets"}:
-            entry.stage = "bootstrap"
-            entry.unit_kind = "bootstrap-tool"
-        elif top in {"bin", "sbin", "usr.bin", "usr.sbin", "libexec"}:
-            entry.stage = "application"
-            entry.unit_kind = "freebsd-command"
-        elif top == "tests":
-            entry.stage = "validation"
-            entry.unit_kind = "freebsd-tests"
-        elif top == "sys":
-            entry.stage = "kernel"
-            entry.unit_kind = "freebsd-kernel"
-        else:
-            entry.stage = "integration"
-            entry.unit_kind = "makefile-module" if has_build_makefile else "directory"
-
-        if has_build_makefile:
-            entry.build_command = f"make -C {shlex.quote(entry.path)}"
-
     @staticmethod
-    def _is_toolchain_rewrite_unit(rel_path: str) -> bool:
-        """Return True for compiler/toolchain units that should come after basics."""
-        for part in Path(rel_path).parts:
-            name = part.lower()
-            if name in REWRITE_TOOLCHAIN_PATH_MARKERS:
-                return True
-            if name.startswith(("clang-", "llvm-", "lld-", "lldb-")):
-                return True
-        return False
-
-    def _find_cargo_root(self, directory: Path) -> Optional[Path]:
-        """Find the nearest Cargo.toml at or above a directory."""
-        current = directory
-        while True:
-            try:
-                current.relative_to(self.source_root)
-            except ValueError:
-                return None
-
-            if (current / "Cargo.toml").exists():
-                return current
-            if current == self.source_root:
-                return None
-            current = current.parent
-
-    def _rust_src_unit_for(self, cargo_root: Path) -> Optional[str]:
-        """Return the relative src unit path for a Cargo package if it exists."""
-        src_dir = cargo_root / "src"
-        if not src_dir.exists():
-            return None
-        return self._rel_or_dot(src_dir)
-
-    def _cargo_test_command(self, cargo_root: Path, package_name: Optional[str]) -> str:
-        """Build a Cargo command that validates a package-sized rewrite unit."""
-        if cargo_root == self.source_root:
-            return "cargo test"
-
-        root_manifest = self.source_root / "Cargo.toml"
-        if package_name and root_manifest.exists() and self._cargo_has_workspace(root_manifest):
-            return f"cargo test -p {shlex.quote(package_name)}"
-
-        manifest_rel = self._rel_or_dot(cargo_root / "Cargo.toml")
-        return f"cargo test --manifest-path {shlex.quote(manifest_rel)}"
-
-    @staticmethod
-    def _read_cargo_package_name(manifest: Path) -> Optional[str]:
-        """Extract package.name from Cargo.toml without requiring TOML dependencies."""
-        try:
-            text = manifest.read_text(encoding="utf-8")
-        except OSError:
-            return None
-
-        in_package = False
-        for raw_line in text.splitlines():
-            line = raw_line.split("#", 1)[0].strip()
-            if not line:
-                continue
-            if line.startswith("[") and line.endswith("]"):
-                in_package = line == "[package]"
-                continue
-            if in_package and line.startswith("name"):
-                match = re.match(r'name\s*=\s*["\']([^"\']+)["\']', line)
-                if match:
-                    return match.group(1)
-        return None
-
-    @staticmethod
-    def _cargo_has_workspace(manifest: Path) -> bool:
-        try:
-            text = manifest.read_text(encoding="utf-8")
-        except OSError:
-            return False
-        return bool(re.search(r"^\s*\[workspace\]\s*$", text, flags=re.MULTILINE))
-
-    def _rel_or_dot(self, path: Path) -> str:
-        rel = path.relative_to(self.source_root)
-        return "." if str(rel) == "." else rel.as_posix()
+    def _generic_rewrite_unit_kind(rel_path: str) -> str:
+        """Return generic metadata without assuming a language, OS, or build tool."""
+        return "tests" if "tests" in Path(rel_path).parts else "directory"
 
     @staticmethod
     def _unique_paths(paths: List[str]) -> List[str]:
@@ -1020,7 +815,7 @@ class ReviewIndex:
         return lines
 
     def _format_rewrite_work_unit_groups(self) -> List[str]:
-        """Format rewrite entries by inferred bottom-up stages."""
+        """Format rewrite entries by stage metadata."""
         lines = []
         stages = sorted(
             {entry.stage for entry in self.entries.values()},
@@ -1142,12 +937,10 @@ class ReviewIndex:
     @staticmethod
     def _small_first_selection_key(item: Any) -> tuple:
         path, entry = item
-        top = path.split("/", 1)[0]
         return (
             0 if entry.build_command else 1,
             0 if ReviewIndex._has_rewrite_implementation_source(entry) else 1,
             REWRITE_SMALL_FIRST_KIND_ORDER.get(entry.unit_kind, 50),
-            REWRITE_SMALL_FIRST_PATH_ORDER.get(top, 50),
             entry.total_lines,
             len(entry.files),
             REWRITE_STAGE_ORDER.get(entry.stage, REWRITE_STAGE_ORDER["unknown"]),

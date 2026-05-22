@@ -512,7 +512,7 @@ def create_executor_from_config(config_dict: Dict[str, Any], run_pre_build: bool
     config = BuildConfig(
         source_root=source_root,
         build_command=build_config.get('build_command',
-            "sudo make -j$(sysctl -n hw.ncpu) buildworld"),
+            "make"),
         build_timeout=build_config.get('build_timeout', 7200),
         pre_build_command=build_config.get('pre_build_command', 'sudo -v'),
         build_environment=build_environment,

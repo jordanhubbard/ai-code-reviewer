@@ -103,23 +103,22 @@ review:
   rewrite:
     preflight_build: false
     selection_policy: "small_first"
-    objective: "Rewrite small userland utilities into Rust side-by-side."
+    objective: "Refactor selected modules without changing public behavior."
     constraints:
-      - "Preserve CLI behavior and exit statuses."
+      - "Preserve CLI behavior, APIs, file formats, and exit statuses."
     contract:
       required_changed_files:
-        any: ["**/*.rs"]
-      build_must_invoke: ["cargo"]
+        any: ["**/*.c", "**/*.h", "**/*.py", "**/*.go", "**/*.rs"]
       commands:
-        - name: "unit tests"
+        - name: "project validation"
           command: "{build_command}"
 ```
 
 Rewrite mode skips the full `source.build_command` preflight by default so it
-can start with bottom-up work units such as commands or libraries. Set
+can start with indexed source-backed work units. Set
 `review.rewrite.preflight_build: true` to force the full preflight first.
 Normal long runs use `selection_policy: "bottom_up"`; smoke/e2e runs can use
-`selection_policy: "small_first"` to start with small buildable units.
+`selection_policy: "small_first"` to start with small source units.
 The optional `review.rewrite.contract` is not FreeBSD-specific: after the active
 build succeeds it can check changed-file globs, required artifact paths,
 build-output markers, and arbitrary validation commands for any project with a

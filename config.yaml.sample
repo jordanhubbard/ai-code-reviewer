@@ -76,8 +76,8 @@ source:
   # Default ".." assumes config is in a subdirectory like angry-ai/
   root: ".."
   
-  # Build command to validate ALL changes in current directory
-  # This is the ONLY project-specific configuration!
+  # Build command to validate changes.
+  # This is the central project-specific validation hook.
   # The script chdir's to source root before running this command.
   #
   # Examples for different projects:
@@ -89,10 +89,10 @@ source:
   #   Go:          "go build ./..."
   #   Python:      "python -m pytest" or "tox"
   #   Node.js:     "npm test"
-  build_command: "sudo make -j$(sysctl -n hw.ncpu) buildworld"
+  build_command: "make"
   
   # Build timeout in seconds (adjust for your project)
-  # FreeBSD buildworld: ~2 hours
+  # Large OS trees: ~2 hours
   # Linux kernel: ~30 minutes
   # Most projects: ~5-10 minutes
   build_timeout: 7200  # 2 hours
@@ -120,7 +120,7 @@ source:
   #     DESTDIR: "/tmp/buildroot"
   #     WITHOUT_CLEAN: "yes"
   #     CROSS_TOOLCHAIN: "aarch64-gcc12"
-  #     CARGO_NET_OFFLINE: "true"  # Rust rewrites should not fetch crates
+  #     TOOL_OFFLINE: "true"
   #
   # Default: empty (inherit current environment unmodified)
   build_environment: {}
@@ -142,49 +142,37 @@ review:
 
   # Rewrite workflow settings. Used only when workflow: "rewrite".
   #
-  # FreeBSD C/C++ to Rust rewrite profile:
+  # Generic rewrite profile:
   #
   #   workflow: "rewrite"
-  #   persona: "personas/freebsd-rust-rewriter"
+  #   persona: "personas/friendly-mentor"
   #   target_directories: 5
   #   max_iterations_per_directory: 120
   #   max_parallel_files: 1
   #
-  # In source.build_environment:
-  #   CARGO_NET_OFFLINE: "true"
-  #
   #   rewrite:
   #     preflight_build: false
   #     selection_policy: "small_first"
-  #     require_rust_build: true
-  #     target_language: "rust"
   #     objective: >-
-  #       Translate FreeBSD userland C/C++ libraries and commands to Rust in
-  #       small, buildable, behavior-preserving work-unit increments.
+  #       Refactor the selected modules into a cleaner internal API without
+  #       changing public behavior.
   #     strategy: >-
-  #       Start with small buildable bin/usr.bin/lib/libexec units. Create or
-  #       extend a side-by-side Rust crate inside the active work unit,
-  #       integrate it into that unit Makefile, run the normal active unit
-  #       build, then move to the next pending unit after a successful commit.
+  #       Work one small directory at a time. Keep build integration and tests
+  #       in the same commit as the source rewrite.
   #     output_policy: >-
-  #       For commands, produce a Rust binary that can replace the original
-  #       program once behavior is validated. For libraries, produce a Rust
-  #       crate whose FreeBSD-facing artifact is a C ABI compatible lib*.a or
-  #       lib*.so as appropriate; keep public headers and consumers compatible.
+  #       Modify the source tree directly and preserve external interfaces.
   #     contract:
-  #       integrated_build_must_invoke:
-  #         - "cargo"
-  #       rust_build: "cargo build --manifest-path {manifest} --offline --target-dir {target_dir}"
-  #       artifacts:
-  #         rust_files_required: true
-  #         cargo_manifest_required: true
-  #         external_crates: "vendored_only"
+  #       required_changed_files:
+  #         any: ["**/*.c", "**/*.h", "**/*.py", "**/*.go", "**/*.rs"]
+  #       commands:
+  #         - name: "project validation"
+  #           command: "{build_command}"
   #       equivalence:
   #         cli: []
   rewrite:
     # Full source.build_command preflight is skipped by default in rewrite mode.
-    # Rewrites start from indexed bottom-up work units and validate each unit
-    # with its inferred build command. Set true to force a full preflight first.
+    # Rewrites start from indexed work units and validate with the configured
+    # build command. Set true to force a full preflight first.
     preflight_build: false
     # Work-unit selection policy:
     #   bottom_up   - normal long-run behavior; stage/dependency order
@@ -197,13 +185,13 @@ review:
       - "Preserve externally visible behavior unless explicitly instructed otherwise."
       - "Keep changes scoped to the active directory and necessary build glue."
     success_criteria:
-      - "The active work-unit build command succeeds."
+      - "The configured build command succeeds."
       - "The configured full build command succeeds when used as an integration gate."
       - "The rewritten code is coherent, maintainable, and behavior-preserving for the selected scope."
     # Optional machine-checked acceptance contract. These checks run after the
-    # active unit build succeeds and before the unit is marked done.
+    # configured build command succeeds and before the unit is marked done.
     contract:
-      # Require that the normal active unit build output shows these tools or markers.
+      # Require that the configured build output shows these tools or markers.
       integrated_build_must_invoke: []
       # Alias for generic contracts that do not want the legacy "integrated" name.
       build_must_invoke: []
@@ -222,22 +210,16 @@ review:
       # a mapping with name, command, and timeout.
       # Variables available:
       #   {unit}, {scope}, {unit_dir}, {source_root}, {project_root},
-      #   {build_command}, {active_build_command}, {manifest}, {target_dir}
+      #   {build_command}, {active_build_command}, {target_dir}
       commands: []
-      # Optional legacy Rust build shortcut. Prefer commands for new generic
-      # contracts unless the Rust-specific manifest lookup is useful.
-      # Example:
-      # rust_build: "cargo build --manifest-path {manifest} --offline --target-dir {target_dir}"
-      rust_build: ""
       artifacts:
-        rust_files_required: false
-        cargo_manifest_required: false
-        # Set to vendored_only to require --offline or CARGO_NET_OFFLINE=true for cargo commands.
-        external_crates: ""
+        required_changed_files: []
+        required_files: []
       equivalence:
-        # Optional CLI checks. Each case may either compare source_command and rust_command,
-        # or run command and compare exit_code/stdout/stderr. Add unit, scope, or when_unit
-        # with an exact or fnmatch-style work-unit pattern to restrict a case to one unit.
+        # Optional CLI checks. Each case may compare baseline_command and
+        # candidate_command, or run command and compare exit_code/stdout/stderr.
+        # Add unit, scope, or when_unit with an exact or fnmatch-style work-unit
+        # pattern to restrict a case to one unit.
         cli: []
 
   # File chunking settings (prevents timeouts on large files)

@@ -2,7 +2,7 @@
 """
 Angry AI Reviewer
 
-Main application for the FreeBSD code review agent.
+Main application for the configurable code review agent.
 Implements the review → edit → build → fix loop using a remote Ollama server.
 
 Usage:
@@ -16,7 +16,7 @@ Architecture:
        - AI reviews code and suggests edits
        - Apply edits to source files
        - Show git diff to confirm changes
-       - Run build (make buildworld) with live output
+       - Run configured build command with live output
        - If errors: feed back to AI for fixing, update LESSONS.md
        - If success: AI generates commit message, update REVIEW-SUMMARY.md, push
 """
@@ -2532,86 +2532,21 @@ class ReviewLoop:
         )
         return normalize_rewrite_source_suffixes(raw)
 
-    def _rewrite_requires_rust_build(self, changed_files: Optional[List[str]] = None) -> bool:
-        if self.workflow_mode != "rewrite":
-            return False
-
-        raw = self.rewrite_config.get("require_rust_build")
-        if raw is not None:
-            return _config_bool(raw, default=True)
-
-        if changed_files and self._changed_files_include_rust_artifact(changed_files):
-            return True
-
-        text_parts = [
-            self.rewrite_config.get("objective"),
-            self.rewrite_config.get("goal"),
-            self.rewrite_config.get("strategy"),
-            self.rewrite_config.get("style"),
-            self.rewrite_config.get("output_policy"),
-            self.rewrite_config.get("target_language"),
-            self.rewrite_config.get("language"),
-        ]
-        return "rust" in " ".join(str(part) for part in text_parts if part).lower()
-
-    @staticmethod
-    def _changed_files_include_rust_artifact(changed_files: List[str]) -> bool:
-        for file_path in changed_files:
-            path = Path(file_path)
-            if path.suffix.lower() == ".rs" or path.name in {"Cargo.toml", "Cargo.lock"}:
-                return True
-        return False
-
-    @staticmethod
-    def _build_output_has_rust_invocation(raw_output: str) -> bool:
-        patterns = [
-            r"(^|\s)(cargo|rustc)(\s|$)",
-            r"\bCompiling\s+\S+\s+v\d",
-            r"\bFinished\s+`(?:dev|release)` profile",
-        ]
-        return any(re.search(pattern, raw_output, re.MULTILINE) for pattern in patterns)
-
     @staticmethod
     def _build_output_has_invocation(raw_output: str, invocation: str) -> bool:
         invocation = str(invocation).strip()
         if not invocation:
             return True
-        if invocation in {"cargo", "rustc"}:
-            return bool(re.search(rf"(^|\s|/){re.escape(invocation)}(\s|$)", raw_output, re.MULTILINE))
         return invocation in raw_output
 
     def _rewrite_contract(self) -> Dict[str, Any]:
         contract = self.rewrite_config.get("contract")
         return contract if isinstance(contract, dict) else {}
 
-    def _find_contract_cargo_manifest(self, changed_files: List[str]) -> Optional[Path]:
-        current_dir = self.session.current_directory
-        candidates: List[Path] = []
-        for rel_path in changed_files:
-            path = Path(rel_path)
-            if path.name == "Cargo.toml":
-                candidates.append(self.source_root / path)
-
-        if current_dir:
-            unit_root = self.source_root / current_dir
-            if unit_root.exists():
-                candidates.extend(sorted(unit_root.glob("**/Cargo.toml")))
-
-        seen: Set[Path] = set()
-        for candidate in candidates:
-            resolved = candidate.resolve()
-            if resolved in seen:
-                continue
-            seen.add(resolved)
-            if candidate.exists():
-                return candidate
-        return None
-
-    def _contract_vars(self, manifest_path: Optional[Path] = None) -> Dict[str, str]:
+    def _contract_vars(self) -> Dict[str, str]:
         unit = self.session.current_directory or ""
         safe_unit = re.sub(r"[^A-Za-z0-9_.-]+", "_", unit or "unit")
-        target_dir = Path("/tmp") / f"ai-code-reviewer-rust-{self.session.session_id}" / safe_unit
-        crate_dir = manifest_path.parent if manifest_path else (self.source_root / unit if unit else self.source_root)
+        target_dir = Path("/tmp") / f"ai-code-reviewer-{self.session.session_id}" / safe_unit
         active_build_command = self._current_build_command()
         values = {
             "project_root": str(self.source_root),
@@ -2619,9 +2554,6 @@ class ReviewLoop:
             "scope": unit,
             "unit": unit,
             "unit_dir": str(self.source_root / unit) if unit else str(self.source_root),
-            "crate": str(crate_dir),
-            "crate_dir": str(crate_dir),
-            "manifest": str(manifest_path) if manifest_path else "",
             "target_dir": str(target_dir),
             "objdir": str(target_dir),
             "build_command": active_build_command,
@@ -2636,12 +2568,6 @@ class ReviewLoop:
             return None, f"Unknown rewrite contract variable {{{exc.args[0]}}} in command: {template}"
         except Exception as exc:
             return None, f"Unable to format rewrite contract command {template!r}: {exc}"
-
-    def _cargo_offline_enforced(self, command: str) -> bool:
-        if not re.search(r"(^|\s|/)cargo(\s|$)", command):
-            return True
-        env = self.builder.config.build_environment or {}
-        return "--offline" in command or str(env.get("CARGO_NET_OFFLINE", "")).lower() in {"1", "true", "yes", "on"}
 
     def _run_contract_command(self, command: str, timeout: int = 600) -> BuildResult:
         start = time.time()
@@ -2880,10 +2806,8 @@ class ReviewLoop:
     def _rewrite_contract_commands_error(
         self,
         contract: Dict[str, Any],
-        artifacts: Dict[str, Any],
         values: Dict[str, str],
     ) -> Optional[str]:
-        external_crates = str(artifacts.get("external_crates", "")).lower()
         for idx, spec in enumerate(self._contract_command_specs(contract), 1):
             command_template = spec.get("command") or spec.get("run")
             if not command_template:
@@ -2893,16 +2817,6 @@ class ReviewLoop:
             if err:
                 return f"CONTRACT_REJECTED: {err}"
             timeout = int(spec.get("timeout", contract.get("timeout", 600)))
-            if (
-                str(spec.get("external_crates", external_crates)).lower()
-                in {"vendored_only", "offline", "vendored-only"}
-                and not self._cargo_offline_enforced(command or "")
-            ):
-                return (
-                    "CONTRACT_REJECTED: rewrite contract requires offline/vendored Cargo use, "
-                    f"but contract command {name!r} does not include --offline and "
-                    "CARGO_NET_OFFLINE is not enabled."
-                )
             result = self._run_contract_command(command or "", timeout=timeout)
             if result.success:
                 continue
@@ -2959,27 +2873,27 @@ class ReviewLoop:
                 continue
             timeout = int(case.get("timeout", 60))
 
-            source_template = case.get("source_command")
-            rust_template = case.get("rust_command")
+            baseline_template = case.get("baseline_command")
+            candidate_template = case.get("candidate_command")
             command_template = case.get("command")
 
-            if source_template and rust_template:
-                source_command, err = self._format_contract_command(str(source_template), values)
+            if baseline_template and candidate_template:
+                baseline_command, err = self._format_contract_command(str(baseline_template), values)
                 if err:
                     return f"CONTRACT_REJECTED: {err}"
-                rust_command, err = self._format_contract_command(str(rust_template), values)
+                candidate_command, err = self._format_contract_command(str(candidate_template), values)
                 if err:
                     return f"CONTRACT_REJECTED: {err}"
-                source_result = self._run_contract_process(source_command or "", timeout=timeout)
-                rust_result = self._run_contract_process(rust_command or "", timeout=timeout)
-                if source_result.returncode != rust_result.returncode:
+                baseline_result = self._run_contract_process(baseline_command or "", timeout=timeout)
+                candidate_result = self._run_contract_process(candidate_command or "", timeout=timeout)
+                if baseline_result.returncode != candidate_result.returncode:
                     return (
                         f"CONTRACT_REJECTED: CLI case {idx} exit-code mismatch "
-                        f"(source={source_result.returncode}, rust={rust_result.returncode})."
+                        f"(baseline={baseline_result.returncode}, candidate={candidate_result.returncode})."
                     )
-                if source_result.stdout != rust_result.stdout:
+                if baseline_result.stdout != candidate_result.stdout:
                     return f"CONTRACT_REJECTED: CLI case {idx} stdout mismatch."
-                if source_result.stderr != rust_result.stderr:
+                if baseline_result.stderr != candidate_result.stderr:
                     return f"CONTRACT_REJECTED: CLI case {idx} stderr mismatch."
                 continue
 
@@ -3003,7 +2917,7 @@ class ReviewLoop:
                 continue
 
             return (
-                f"CONTRACT_REJECTED: CLI equivalence case {idx} needs source_command/rust_command "
+                f"CONTRACT_REJECTED: CLI equivalence case {idx} needs baseline_command/candidate_command "
                 "or command with expected outputs."
             )
         return None
@@ -3026,13 +2940,6 @@ class ReviewLoop:
         if required_changed_files_error:
             return required_changed_files_error
 
-        if _config_bool(artifacts.get("rust_files_required"), default=False):
-            if not any(Path(path).suffix.lower() == ".rs" for path in changed_files):
-                return "CONTRACT_REJECTED: rewrite contract requires a changed Rust .rs source file."
-        if _config_bool(artifacts.get("cargo_manifest_required"), default=False):
-            if not any(Path(path).name == "Cargo.toml" for path in changed_files):
-                return "CONTRACT_REJECTED: rewrite contract requires a changed Cargo.toml manifest."
-
         required_invocations = []
         required_invocations.extend(self._config_items(contract.get("integrated_build_must_invoke")))
         required_invocations.extend(self._config_items(contract.get("build_must_invoke")))
@@ -3044,35 +2951,12 @@ class ReviewLoop:
                     f"Command was: {self._current_build_command()}"
                 )
 
-        manifest = self._find_contract_cargo_manifest(changed_files)
-        values = self._contract_vars(manifest)
+        values = self._contract_vars()
         required_files_error = self._contract_required_files_error(contract, artifacts, values)
         if required_files_error:
             return required_files_error
 
-        rust_build = contract.get("rust_build")
-        if rust_build:
-            if not manifest:
-                return "CONTRACT_REJECTED: rewrite contract rust_build requires a Cargo.toml manifest in the active unit."
-            rust_command, err = self._format_contract_command(str(rust_build), values)
-            if err:
-                return f"CONTRACT_REJECTED: {err}"
-            external_crates = str(artifacts.get("external_crates", "")).lower()
-            if external_crates in {"vendored_only", "offline", "vendored-only"} and not self._cargo_offline_enforced(rust_command or ""):
-                return (
-                    "CONTRACT_REJECTED: rewrite contract requires offline/vendored Cargo use, "
-                    "but rust_build does not include --offline and CARGO_NET_OFFLINE is not enabled."
-                )
-            result = self._run_contract_command(rust_command or "", timeout=int(contract.get("timeout", 600)))
-            if not result.success:
-                return (
-                    "CONTRACT_REJECTED: configured Rust build failed.\n\n"
-                    f"Command: {rust_command}\n"
-                    f"Exit code: {result.return_code}\n"
-                    f"Output:\n{self._compact_text(result.raw_output, 4000)}"
-                )
-
-        command_error = self._rewrite_contract_commands_error(contract, artifacts, values)
+        command_error = self._rewrite_contract_commands_error(contract, values)
         if command_error:
             return command_error
 
@@ -3087,31 +2971,7 @@ class ReviewLoop:
         build_result: BuildResult,
         changed_files: List[str],
     ) -> Optional[str]:
-        if not self._rewrite_requires_rust_build(changed_files):
-            return self._rewrite_contract_completion_error(build_result, changed_files)
-
-        current_dir = self.session.current_directory or "(current scope)"
-        if not self._changed_files_include_rust_artifact(changed_files):
-            return (
-                "BUILD_REJECTED: Rust rewrite completion requires Rust source or Cargo manifest changes.\n\n"
-                "The active build succeeded, but this scope did not add or modify any .rs file, "
-                "Cargo.toml, or Cargo.lock. This is not a completed Rust rewrite.\n\n"
-                f"Keep working in {current_dir}: add the Rust replacement and update the build files "
-                "so the normal unit build compiles it."
-            )
-
-        if self._build_output_has_rust_invocation(build_result.raw_output):
-            return self._rewrite_contract_completion_error(build_result, changed_files)
-
-        return (
-            "BUILD_REJECTED: Rust rewrite build did not compile the Rust replacement.\n\n"
-            "The active build command exited successfully, but its output did not show cargo or "
-            "rustc running. A side target that must be invoked manually is not enough: the task is "
-            "not done until the build files make the normal active unit build produce the Rust version "
-            "instead of the previous C/C++ implementation.\n\n"
-            f"Keep working in {current_dir}: modify the Makefile/build glue so "
-            f"`{self._current_build_command()}` invokes the Rust build, then run BUILD again."
-        )
+        return self._rewrite_contract_completion_error(build_result, changed_files)
 
     def _next_pending_work_unit(self) -> Optional[str]:
         if self.workflow_mode == "rewrite":
@@ -3129,48 +2989,6 @@ class ReviewLoop:
         if entry is not None and entry.status == "current":
             return current
         return None
-
-    def _rewrite_build_template_context(self) -> str:
-        """Return deterministic build guidance for common Rust rewrite targets."""
-        if not self._rewrite_requires_rust_build():
-            return ""
-        return """
-FreeBSD Rust command Makefile template:
-Use this local template for simple command rewrites when no real Rust make
-fragment exists. Replace <prog> with the command name and adjust paths only when
-the active unit needs them.
-
-```make
-PROG=	<prog>
-BINDIR?=	/usr/bin
-BINOWN?=	root
-BINGRP?=	wheel
-BINMODE?=	555
-
-CARGO?=		cargo
-CARGO_TARGET_DIR?=	${.OBJDIR}/cargo-target
-
-${PROG}: ${.CURDIR}/Cargo.toml ${.CURDIR}/src/main.rs
-	${CARGO} build --manifest-path ${.CURDIR}/Cargo.toml \
-	    --offline --target-dir ${CARGO_TARGET_DIR}
-	${CP} ${CARGO_TARGET_DIR}/debug/${PROG} ${.TARGET}
-
-all: ${PROG}
-
-install: ${PROG}
-	${INSTALL} -o ${BINOWN} -g ${BINGRP} -m ${BINMODE} \
-	    ${PROG} ${DESTDIR}${BINDIR}/${PROG}
-
-clean:
-	${RM} ${PROG}
-	${RM} -rf ${CARGO_TARGET_DIR}
-
-CLEANFILES+=	${PROG} ${CARGO_TARGET_DIR}
-```
-
-Do not include bsd.prog.mk or invent bsd.rust.mk unless the included file exists
-and the resulting normal active unit build still invokes cargo or rustc.
-"""
 
     def _rewrite_prompt_context(self) -> str:
         objective = (
@@ -3199,7 +3017,6 @@ and the resulting normal active unit build still invokes cargo or rustc.
             self.rewrite_config.get("success_criteria"),
             [
                 "The configured build command succeeds.",
-                "For Rust translations, the normal active unit build compiles the Rust replacement.",
                 "The rewritten code is coherent, maintainable, and behavior-preserving for the selected scope.",
                 "Any translation, refactor, API migration, or decomposition is documented in the commit message.",
             ],
@@ -3219,7 +3036,6 @@ Strategy: {strategy}
 Output policy: {output_policy}
 	Work-unit selection: {selection_policy}
 	{suffix_text}
-	{self._rewrite_build_template_context()}
 
 	Constraints:
 	{constraints_text}
@@ -3348,14 +3164,14 @@ Check this list before every EDIT_FILE action to ensure you're not repeating a d
 
     def _build_review_system_prompt(self) -> str:
         """Build the system prompt for the historical review workflow."""
-        return """You are an autonomous code review AI for FreeBSD source code.
+        return """You are an autonomous code review AI for source code.
 
-IMPORTANT: Work ONE DIRECTORY AT A TIME. Each directory (bin/cpuset/, sbin/mount/, etc.)
-is a complete unit with its own Makefile. Review ALL files in a directory before moving on.
+IMPORTANT: Work ONE DIRECTORY AT A TIME. Each directory is a review unit. Review
+all relevant files in the active directory before moving on.
 
 ACTIONS:
 
-ACTION: SET_SCOPE bin/cpuset
+ACTION: SET_SCOPE path/to/directory
   - Declare which directory you are reviewing
   - MUST be set before making edits
   - All edits will be committed together when BUILD succeeds
@@ -3398,30 +3214,26 @@ replacement text
 CRITICAL EDIT_FILE RULES:
 - OLD block must be COPIED EXACTLY from the file you just read
 - Do NOT paraphrase or summarize - copy the EXACT characters
-- FreeBSD code uses TABS for indentation, not spaces!
+- Preserve the file's existing formatting conventions and language idioms
 - Include enough context lines to make it unique
 - The <<< and >>> delimiters are REQUIRED
-- If the code already has the fix (e.g., strtonum already present), SKIP IT
 
 EXAMPLE (correct):
-ACTION: EDIT_FILE bin/cpuset/cpuset.c
+ACTION: EDIT_FILE src/example.c
 OLD:
 <<<
-		case 'd':
-			dflag = 1;
-			which = CPU_WHICH_DOMAIN;
-			id = atoi(optarg);
-			break;
+	if (buffer == NULL)
+		return -1;
+
+	strcpy(buffer, input);
 >>>
 NEW:
 <<<
-		case 'd':
-			dflag = 1;
-			which = CPU_WHICH_DOMAIN;
-			id = strtonum(optarg, 0, INT_MAX, &errstr);
-			if (errstr)
-				errx(1, "domain id %s: %s", errstr, optarg);
-			break;
+	if (buffer == NULL)
+		return -1;
+
+	if (snprintf(buffer, buffer_size, "%s", input) >= buffer_size)
+		return -1;
 >>>
 
 ACTION: WRITE_FILE path/to/file
@@ -3432,7 +3244,7 @@ file content
   - Create or overwrite a file
 
 ACTION: BUILD
-  - Run make buildworld to validate ALL changes in current scope
+  - Run the configured build command to validate ALL changes in current scope
   - If succeeds: all changes in scope directory are committed together
   - If fails: analyze errors, fix them, rebuild
 
@@ -3444,26 +3256,19 @@ ACTION: HALT
     * There are still reviewable directories and less than 3 completed
   - Keep working until all target directories are done
 
-FREEBSD SOURCE TREE STRUCTURE:
-- bin/       - Essential user commands (cpuset, chio, chmod, cp, etc.)
-- sbin/      - Essential system commands (mount, ifconfig, init, etc.)
-- usr.bin/   - Non-essential user commands
-- usr.sbin/  - Non-essential system commands
-- lib/       - System libraries
-- sys/       - Kernel source
-
-Each subdirectory (bin/cpuset/, bin/chio/, sbin/mount/, etc.) has its own Makefile
-and represents a complete tool or library. Review ALL files in a directory together.
+SOURCE TREE STRUCTURE:
+- Follow the project layout, build files, module boundaries, and active persona instructions
+- Use LIST_DIR, READ_FILE, FIND_FILE, and GREP to understand project-specific structure
 
 WORKFLOW:
 1. Read REVIEW-SUMMARY.md to see completed directories (marked with ✓)
 2. Pick a directory that is NOT already marked complete
 3. SET_SCOPE to that directory
 4. LIST_DIR to see all files in it
-5. READ each .c and .h file
-6. CHECK if the file already has fixes (e.g., strtonum already used)
-   - If already fixed: SKIP this file, note it's done
-   - If needs fixes: proceed to EDIT
+5. READ each relevant source, header, test, and build file
+6. CHECK whether the suspected issue is actually present before editing
+   - If already correct: move to the next file or directory
+   - If it needs a fix: proceed to EDIT
 7. EDIT files to fix issues (security, correctness, style)
 8. When all files in directory are reviewed, run BUILD
 9. If build fails: fix errors, rebuild
@@ -3471,8 +3276,7 @@ WORKFLOW:
 11. HALT only when all directories reviewed or stuck
 
 SKIP FILES THAT ARE ALREADY FIXED:
-- If you see strtonum() already in use where atoi() would be, it's fixed
-- If you see error checking already present, it's fixed
+- If the relevant safety/correctness/error handling is already present, do not re-fix it
 - Move to the NEXT file or directory instead of re-fixing
 
 RULES:
@@ -3492,14 +3296,13 @@ Respond with analysis followed by a single ACTION line.
         rewrite_context = self._rewrite_prompt_context()
         return f"""You are an autonomous code rewriting AI for source code.
 
-IMPORTANT: Work ONE REWRITE UNIT AT A TIME. Each scope may be a directory,
-library, command, test unit, package, or bootstrap component inferred from the
-source tree. Rewrite ALL relevant files for that unit before moving on.
+IMPORTANT: Work ONE REWRITE UNIT AT A TIME. Each scope is a source-tree unit
+from the rewrite index. Rewrite ALL relevant files for that unit before moving on.
 
-The rewrite index is a bottom-up work-unit graph. Prefer foundation units first,
-then bootstrap components, then applications, then validation/integration units.
-Each unit may include related files outside its directory, dependencies, and a
-unit-specific build/test command.
+The rewrite index is a work-unit graph. Prefer units in the order provided by
+the index unless the configured objective or dependencies require a different
+choice. Unit metadata may include related files, dependencies, and optional
+build/test commands supplied by configuration or metadata.
 
 A rewrite is broader than translation. Translation to another language is one possible
 rewrite, but the workflow also covers behavior-preserving refactors, API migrations,
@@ -3510,7 +3313,7 @@ side-by-side replacement work.
 
 ACTIONS:
 
-ACTION: SET_SCOPE bin/cpuset
+ACTION: SET_SCOPE path/to/directory
   - Declare which directory you are rewriting
   - MUST be set before making edits
   - All changes will be committed together when BUILD succeeds
@@ -3553,7 +3356,7 @@ replacement text
 CRITICAL EDIT_FILE RULES:
 - OLD block must be COPIED EXACTLY from the file you just read
 - Do NOT paraphrase or summarize - copy the EXACT characters
-- Preserve the file's existing formatting conventions; Rust rewrites should remain rustfmt-compatible
+- Preserve the file's existing formatting conventions and language idioms
 - Include enough context lines to make the replacement unique
 - The <<< and >>> delimiters are REQUIRED
 - Prefer coherent, minimal replacement blocks over giant rewrites when possible
@@ -3570,7 +3373,6 @@ ACTION: BUILD
   - Run the configured build command to validate ALL changes in current scope
   - If succeeds: all changes in scope directory are committed together
   - If fails: analyze errors, fix them, rebuild
-  - For Rust translations: the normal active build command must invoke cargo/rustc and build the Rust replacement
 
 ACTION: HALT
   - Signal completely done with rewrite session
@@ -3581,9 +3383,8 @@ ACTION: HALT
   - Keep working until all target directories are done
 
 SOURCE TREE STRUCTURE:
-- FreeBSD trees commonly use bin/, sbin/, usr.bin/, usr.sbin/, lib/, sys/, and tests/
-- Rust trees commonly use Cargo.toml, src/, crates/, examples/, benches/, and tests/
-- Other projects should be followed according to their local build and module layout
+- Follow the local project layout, build files, module boundaries, and configured rewrite objective
+- Treat the rewrite index metadata and persona instructions as the source of project-specific policy
 
 REWRITE WORKFLOW:
 1. Pick a work unit that is not already marked complete in the rewrite index
@@ -3606,10 +3407,9 @@ RULES:
 4. Use relative paths from source root
 5. Preserve public interfaces, CLI behavior, ABI, file formats, and tests unless instructed
 6. If translating to another language, include the build integration needed to compile it
-7. For Rust translations, a side target is not completion; the normal active unit build must build the Rust version instead of the previous implementation
-8. Do not create placeholder crates, stub binaries, or synthetic support files just to satisfy the rewrite objective
-9. If the selected unit has no source relevant to the configured objective, choose another scope instead of fabricating a rewrite
-10. CONSULT LESSONS.md before making edits to avoid repeating failed approaches
+7. Do not create placeholder modules, stub binaries, or synthetic support files just to satisfy the rewrite objective
+8. If the selected unit has no source relevant to the configured objective, choose another scope instead of fabricating a rewrite
+9. CONSULT LESSONS.md before making edits to avoid repeating failed approaches
 
 Respond with analysis followed by a single ACTION line.
 """
@@ -3655,16 +3455,15 @@ Respond with analysis followed by a single ACTION line.
                 content = content[:50000] + "\n\n[... TRUNCATED for parallel review ...]"
         
         # Build a focused prompt for this single file
-        system_prompt = """You are a code reviewer for FreeBSD source code.
+        system_prompt = """You are a code reviewer for source code.
 Review the file and suggest specific edits to fix issues like:
-- Security vulnerabilities (buffer overflows, unsafe functions)
-- Replace atoi/atol with strtonum for better error handling
+- Security vulnerabilities
 - Memory leaks and resource management
 - Error handling improvements
 - Code correctness issues
 
 IMPORTANT: Only suggest edits if there are REAL issues to fix.
-If the code is already correct (e.g., already uses strtonum), say "NO_EDITS_NEEDED".
+If the code is already correct, say "NO_EDITS_NEEDED".
 
 For each edit, use this EXACT format:
 
@@ -3680,7 +3479,7 @@ replacement text
 >>>
 
 Include 3-5 lines of context in OLD blocks for uniqueness.
-Use TABS for indentation (FreeBSD style).
+Preserve the file's existing formatting conventions and language idioms.
 You may suggest multiple edits."""
 
         user_prompt = f"""Review this file and suggest edits:
@@ -4521,7 +4320,7 @@ If no changes needed, respond with just: NO_EDITS_NEEDED"""
         
         # Determine component name from directory or files
         if directory:
-            # Extract component name (e.g., "bin/cpuset" -> "cpuset")
+            # Extract component name (e.g., "src/parser" -> "parser")
             component = directory.split('/')[-1] if '/' in directory else directory
         else:
             # Try to extract from first file path
@@ -4552,12 +4351,11 @@ Write a commit message following these rules:
 6. This commit covers ALL changes in the {component} directory
 
 Example format:
-[ai-code-reviewer] cpuset: Replace atoi() with strtonum()
+[ai-code-reviewer] parser: validate input length
 
-- atoi() doesn't detect overflow or invalid input
-- strtonum() provides proper bounds checking and error reporting
-- Fixes potential integer overflow vulnerability
-- Also fixed unchecked printf() calls
+- Reject oversized input before copying into the parser buffer
+- Preserve existing success and error paths
+- Add validation coverage through the configured build command
 
 Output ONLY the commit message, no other text."""
 
@@ -4610,7 +4408,7 @@ Output ONLY the lesson entry, nothing else."""
         lesson = self._ask_ai_simple(prompt)
         
         if not lesson or len(lesson) < 10:
-            lesson = f"### BUILD: Build failure\n- Error occurred during buildworld\n- Review compiler output carefully"
+            lesson = f"### BUILD: Build failure\n- The configured build command failed\n- Review compiler or test output carefully"
         
         # Append to LESSONS.md
         lessons_path = self.lessons_file
@@ -5857,8 +5655,8 @@ Output ONLY the lesson entry, nothing else."""
                 if result.success else None
             )
 
-            # Record build result in metrics. A Rust rewrite build that skips
-            # the Rust artifact is a workflow failure even if make exits 0.
+            # Record build result in metrics. Contract rejection is a workflow
+            # failure even if the configured build command exits 0.
             self.metrics.record_build(success=result.success and not rewrite_completion_error)
             self.metrics.total_iterations = self.session.action_history.__len__() if hasattr(self.session, 'action_history') else 0
 
@@ -5868,7 +5666,7 @@ Output ONLY the lesson entry, nothing else."""
                     result.duration_seconds,
                     error_count=0,
                     warning_count=result.warning_count,
-                    error_summary="Rust rewrite build did not compile Rust artifact",
+                    error_summary="Rewrite contract rejected the successful build",
                 )
                 return rewrite_completion_error
 
@@ -5968,7 +5766,7 @@ Output ONLY the lesson entry, nothing else."""
                 if self.workflow_mode == "rewrite":
                     return (
                         "BUILD_FAILED: Build errors detected\n\n"
-                        "No changes were committed. Rewrite units are atomic: source, Rust artifacts, "
+                        "No changes were committed. Rewrite units are atomic: source changes, "
                         "build glue, and configured contract checks must pass together before the unit "
                         "can be marked complete.\n\n"
                         f"BUILD ERROR REPORT:\n{error_report}\n\n"
@@ -6978,7 +6776,7 @@ TO FIX:
                 if "OLD:" in response and "<<<" not in response:
                     feedback += "ERROR: OLD and NEW blocks must use <<< and >>> delimiters\n"
                 
-                feedback += "\nCorrect format:\nACTION: EDIT_FILE bin/cpuset/cpuset.c\nOLD:\n<<<\nexact text\n>>>\nNEW:\n<<<\nnew text\n>>>"
+                feedback += "\nCorrect format:\nACTION: EDIT_FILE src/example.c\nOLD:\n<<<\nexact text\n>>>\nNEW:\n<<<\nnew text\n>>>"
                 
                 self.history.append({
                     "role": "user",
@@ -7471,7 +7269,7 @@ def should_run_preflight_build(
 def main():
     """Main entry point."""
     parser = argparse.ArgumentParser(
-        description="Angry AI - FreeBSD Code Reviewer",
+        description="AI Code Reviewer",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
@@ -7594,7 +7392,7 @@ Examples:
             print("Please fix config.yaml:")
             print(f"  1. Open: {config_path}")
             print("  2. Set source.root (or build.source_root) to a valid directory")
-            print(f"  3. Example: source.root: \"{Path.home()}/freebsd-src\"")
+            print(f"  3. Example: source.root: \"{Path.home()}/src/my-project\"")
             print("=" * 70 + "\n")
             sys.exit(1)
     
@@ -7676,7 +7474,7 @@ Examples:
         print("Please fix config.yaml:")
         print(f"  1. Open: {config_path}")
         print(f"  2. Set source.root to your source tree path")
-        print(f"  3. Example: source.root: \"{Path.home()}/freebsd-src\"")
+        print(f"  3. Example: source.root: \"{Path.home()}/src/my-project\"")
         print(f"  4. Set source.build_command to your build command")
         print()
         print(f"Current source.root: {source_root}")
@@ -7769,7 +7567,7 @@ Examples:
         elif workflow_mode == "rewrite":
             logger.info("Rewrite workflow: skipping full-tree preflight build")
             print("\n*** Rewrite workflow: skipping full-tree preflight build")
-            print("*** Work-unit build commands from REWRITE-INDEX.md will validate each rewrite increment.")
+            print("*** The configured build command and rewrite contract will validate each rewrite increment.")
             print("*** Set review.rewrite.preflight_build: true to opt into full preflight.\n")
         else:
             logger.warning("Skipping pre-flight build check by configuration")

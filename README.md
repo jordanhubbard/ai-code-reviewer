@@ -174,52 +174,50 @@ constraints:
 ```yaml
 review:
   workflow: "rewrite"
-  persona: "personas/freebsd-rust-rewriter"
+  persona: "personas/friendly-mentor"
   rewrite:
     preflight_build: false
     selection_policy: "small_first"  # Use "bottom_up" for normal long runs
-    objective: "Rewrite small userland utilities into Rust side-by-side."
-    strategy: "Complete one buildable directory at a time."
-    output_policy: "Create replacement files beside the original implementation."
+    objective: "Refactor selected modules without changing public behavior."
+    strategy: "Complete one small directory at a time."
+    output_policy: "Modify the source tree directly and preserve external interfaces."
     constraints:
-      - "Preserve CLI behavior and exit statuses."
-      - "Do not start kernel rewrites."
+      - "Preserve CLI behavior, APIs, file formats, and exit statuses."
     success_criteria:
-      - "The active work-unit build command succeeds."
+      - "The configured build command succeeds."
       - "Existing tests still pass."
     contract:
       required_changed_files:
-        any: ["**/*.go", "**/*.rs"]
+        any: ["**/*.c", "**/*.h", "**/*.py", "**/*.go", "**/*.rs"]
       commands:
         - name: "unit tests"
-          command: "go test ./..."
+          command: "{build_command}"
           timeout: 300
 ```
 
-Rewrite indexes are work-unit graphs, not just flat directory checklists. During
-index generation the tool infers units such as FreeBSD commands/libraries,
-Rust packages, Rust test units, bootstrap tools, and validation stages. Each
-unit can carry:
+Rewrite indexes are work-unit graphs, not just flat directory checklists. The
+engine records generic directory units and the files directly related to each
+unit. Project-specific meaning comes from the selected persona and rewrite
+configuration, not hard-coded language or OS rules. Each unit can carry:
 
-- `kind` - command, library, Rust package, tests, bootstrap component, etc.
-- `stage` - foundation, bootstrap, application, validation, integration, kernel
+- `kind` - generic directory/test metadata
+- `stage` - generic ordering metadata
 - `depends_on` - earlier units that should be completed first
-- `files` - related source, test, manifest, and build-glue files
-- `build_command` / `test_command` - unit-sized validation commands when known
+- `files` - related source, test, manifest, and build files
+- `build_command` / `test_command` - optional validation commands supplied by metadata
 
 Rewrite mode processes these units bottom-up by stage and dependency by default.
 For smoke/e2e runs, set `review.rewrite.selection_policy: "small_first"` to
-prefer quick buildable commands and packages before large foundational headers.
-`SET_SCOPE` shows the selected unit metadata, and `BUILD` uses the unit-specific
-build command when the index can infer one.
+prefer smaller source-backed units first. `SET_SCOPE` shows the selected unit
+metadata, and `BUILD` runs the configured project build command unless unit
+metadata explicitly supplies a narrower command.
 
-Rewrite contracts are project-generic. After the active build command succeeds,
+Rewrite contracts are project-generic. After the configured build command succeeds,
 the runner can require changed-file globs, required artifact paths, build-output
 markers, and arbitrary validation commands. Contract command templates can use
 variables such as `{unit}`, `{unit_dir}`, `{source_root}`, and `{build_command}`.
-The older `rust_build` and Rust artifact options still work for C/C++ to Rust
-translations, but new non-Rust rewrites should use `contract.commands` and the
-generic artifact checks.
+Language-specific rewrite requirements belong in the persona and
+`review.rewrite.contract`, not in runner code.
 
 ## How It Works
 
@@ -227,9 +225,9 @@ generic artifact checks.
 
 ```
 Source Tree (entire codebase)
-  └─ Rewrite Unit (library, command, crate, bootstrap tool)  ← BUILD + COMMIT HERE
+  └─ Rewrite Unit (directory or configured source unit)  ← BUILD + COMMIT HERE
       └─ Related files (source, tests, manifests, build glue)
-          └─ File (e.g., tcp.c)
+          └─ File
               └─ Chunks (individual functions)
 ```
 
