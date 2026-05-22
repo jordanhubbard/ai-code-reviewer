@@ -106,6 +106,13 @@ review:
     objective: "Rewrite small userland utilities into Rust side-by-side."
     constraints:
       - "Preserve CLI behavior and exit statuses."
+    contract:
+      required_changed_files:
+        any: ["**/*.rs"]
+      build_must_invoke: ["cargo"]
+      commands:
+        - name: "unit tests"
+          command: "{build_command}"
 ```
 
 Rewrite mode skips the full `source.build_command` preflight by default so it
@@ -113,6 +120,10 @@ can start with bottom-up work units such as commands or libraries. Set
 `review.rewrite.preflight_build: true` to force the full preflight first.
 Normal long runs use `selection_policy: "bottom_up"`; smoke/e2e runs can use
 `selection_policy: "small_first"` to start with small buildable units.
+The optional `review.rewrite.contract` is not FreeBSD-specific: after the active
+build succeeds it can check changed-file globs, required artifact paths,
+build-output markers, and arbitrary validation commands for any project with a
+configured build command.
 
 ### Agent Configuration
 

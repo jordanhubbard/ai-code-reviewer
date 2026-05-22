@@ -203,10 +203,29 @@ review:
     # Optional machine-checked acceptance contract. These checks run after the
     # active unit build succeeds and before the unit is marked done.
     contract:
-      # Require that the normal active unit build output shows these tools.
+      # Require that the normal active unit build output shows these tools or markers.
       integrated_build_must_invoke: []
-      # Optional explicit Rust build. Variables available:
-      #   {unit}, {source_root}, {crate}, {crate_dir}, {manifest}, {target_dir}, {objdir}
+      # Alias for generic contracts that do not want the legacy "integrated" name.
+      build_must_invoke: []
+      # Require changed files that match these globs.
+      # A list means every pattern is required. Use any/all for finer control:
+      #   required_changed_files:
+      #     any: ["**/*.go", "**/*.rs"]
+      #     all: ["**/go.mod"]
+      required_changed_files:
+        any: []
+        all: []
+      # Require that generated or integrated artifacts exist after the build.
+      # Variables are expanded before checking.
+      required_files: []
+      # Optional generic post-build validation commands. Each may be a string or
+      # a mapping with name, command, and timeout.
+      # Variables available:
+      #   {unit}, {scope}, {unit_dir}, {source_root}, {project_root},
+      #   {build_command}, {active_build_command}, {manifest}, {target_dir}
+      commands: []
+      # Optional legacy Rust build shortcut. Prefer commands for new generic
+      # contracts unless the Rust-specific manifest lookup is useful.
       # Example:
       # rust_build: "cargo build --manifest-path {manifest} --offline --target-dir {target_dir}"
       rust_build: ""

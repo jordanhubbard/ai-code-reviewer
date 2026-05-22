@@ -187,6 +187,13 @@ review:
     success_criteria:
       - "The active work-unit build command succeeds."
       - "Existing tests still pass."
+    contract:
+      required_changed_files:
+        any: ["**/*.go", "**/*.rs"]
+      commands:
+        - name: "unit tests"
+          command: "go test ./..."
+          timeout: 300
 ```
 
 Rewrite indexes are work-unit graphs, not just flat directory checklists. During
@@ -205,6 +212,14 @@ For smoke/e2e runs, set `review.rewrite.selection_policy: "small_first"` to
 prefer quick buildable commands and packages before large foundational headers.
 `SET_SCOPE` shows the selected unit metadata, and `BUILD` uses the unit-specific
 build command when the index can infer one.
+
+Rewrite contracts are project-generic. After the active build command succeeds,
+the runner can require changed-file globs, required artifact paths, build-output
+markers, and arbitrary validation commands. Contract command templates can use
+variables such as `{unit}`, `{unit_dir}`, `{source_root}`, and `{build_command}`.
+The older `rust_build` and Rust artifact options still work for C/C++ to Rust
+translations, but new non-Rust rewrites should use `contract.commands` and the
+generic artifact checks.
 
 ## How It Works
 

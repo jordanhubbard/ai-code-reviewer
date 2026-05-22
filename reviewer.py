@@ -24,6 +24,7 @@ Architecture:
 import argparse
 import datetime
 import fnmatch
+import glob
 import hashlib
 import logging
 import os
@@ -2085,7 +2086,7 @@ class ReviewLoop:
     ):
         self.ollama = ollama_client
         self.builder = build_executor
-        self.source_root = source_root
+        self.source_root = Path(source_root).resolve()
         self.persona_dir = persona_dir
         self.target_directories = target_directories
         self.max_iterations_per_directory = max_iterations_per_directory
@@ -2120,14 +2121,14 @@ class ReviewLoop:
         
         # Source-specific files (lessons learned and progress - per project)
         # These live in the source tree so each project has its own history
-        self.source_meta_dir = source_root / ".ai-code-reviewer"
+        self.source_meta_dir = self.source_root / ".ai-code-reviewer"
         self.source_meta_dir.mkdir(parents=True, exist_ok=True)
         self.lessons_file = self.source_meta_dir / "LESSONS.md"
         self.review_summary_file = self.source_meta_dir / self.workflow["summary_file"]
         
         # One-time migration from legacy locations
         if self.workflow_mode == "review":
-            self._migrate_legacy_files(source_root, persona_dir)
+            self._migrate_legacy_files(self.source_root, persona_dir)
         
         # Initialize files if they don't exist
         if not self.lessons_file.exists():
@@ -2144,10 +2145,10 @@ class ReviewLoop:
             )
         
         # Run logs are source-specific work artifacts.
-        self.log_dir = log_dir or (source_root / ".ai-code-reviewer" / "logs")
+        self.log_dir = log_dir or (self.source_root / ".ai-code-reviewer" / "logs")
         self.log_dir.mkdir(parents=True, exist_ok=True)
         
-        self.git = GitHelper(source_root)
+        self.git = GitHelper(self.source_root)
         self.editor = FileEditor(self.git)
         self.parser = ActionParser()
         
@@ -2220,7 +2221,7 @@ class ReviewLoop:
         if env_rebuild is not None:
             force_rebuild = env_rebuild.strip().lower() in {'1', 'true', 'yes', 'on'}
         self.index = generate_index(
-            source_root,
+            self.source_root,
             force_rebuild=force_rebuild,
             workflow_mode=self.workflow_mode,
         )
@@ -2611,14 +2612,20 @@ class ReviewLoop:
         safe_unit = re.sub(r"[^A-Za-z0-9_.-]+", "_", unit or "unit")
         target_dir = Path("/tmp") / f"ai-code-reviewer-rust-{self.session.session_id}" / safe_unit
         crate_dir = manifest_path.parent if manifest_path else (self.source_root / unit if unit else self.source_root)
+        active_build_command = self._current_build_command()
         values = {
+            "project_root": str(self.source_root),
             "source_root": str(self.source_root),
+            "scope": unit,
             "unit": unit,
+            "unit_dir": str(self.source_root / unit) if unit else str(self.source_root),
             "crate": str(crate_dir),
             "crate_dir": str(crate_dir),
             "manifest": str(manifest_path) if manifest_path else "",
             "target_dir": str(target_dir),
             "objdir": str(target_dir),
+            "build_command": active_build_command,
+            "active_build_command": active_build_command,
         }
         return values
 
@@ -2673,6 +2680,239 @@ class ReviewLoop:
                 duration_seconds=time.time() - start,
                 raw_output=f"Command failed: {exc}",
             )
+
+    @staticmethod
+    def _config_items(value: Any) -> List[Any]:
+        if value is None:
+            return []
+        if isinstance(value, list):
+            return value
+        if isinstance(value, tuple):
+            return list(value)
+        if isinstance(value, set):
+            return list(value)
+        return [value]
+
+    @staticmethod
+    def _pattern_from_contract_item(item: Any) -> Optional[str]:
+        if isinstance(item, dict):
+            raw = item.get("pattern") or item.get("glob") or item.get("path") or item.get("file")
+        else:
+            raw = item
+        if raw is None:
+            return None
+        pattern = str(raw).strip().replace("\\", "/")
+        return pattern or None
+
+    @staticmethod
+    def _changed_file_matches_pattern(file_path: str, pattern: str) -> bool:
+        normalized = str(file_path).strip().replace("\\", "/")
+        pattern = str(pattern).strip().replace("\\", "/")
+        if not normalized or not pattern:
+            return False
+        if fnmatch.fnmatch(normalized, pattern):
+            return True
+        basename = Path(normalized).name
+        if fnmatch.fnmatch(basename, pattern):
+            return True
+        if "/" not in pattern and normalized.endswith(f"/{pattern}"):
+            return True
+        return False
+
+    @classmethod
+    def _changed_files_match_any(cls, changed_files: List[str], patterns: List[str]) -> bool:
+        return any(
+            cls._changed_file_matches_pattern(path, pattern)
+            for path in changed_files
+            for pattern in patterns
+        )
+
+    @classmethod
+    def _contract_pattern_list(cls, value: Any) -> List[str]:
+        patterns: List[str] = []
+        for item in cls._config_items(value):
+            pattern = cls._pattern_from_contract_item(item)
+            if pattern:
+                patterns.append(pattern)
+        return patterns
+
+    @classmethod
+    def _contract_required_changed_file_sets(
+        cls,
+        contract: Dict[str, Any],
+        artifacts: Dict[str, Any],
+    ) -> Tuple[List[str], List[str]]:
+        all_patterns: List[str] = []
+        any_patterns: List[str] = []
+
+        def add_required(raw: Any) -> None:
+            if raw is None:
+                return
+            if isinstance(raw, dict):
+                direct_pattern = cls._pattern_from_contract_item(raw)
+                if direct_pattern:
+                    all_patterns.append(direct_pattern)
+                all_patterns.extend(cls._contract_pattern_list(
+                    raw.get("all")
+                    or raw.get("required_all")
+                    or raw.get("all_of")
+                    or raw.get("patterns")
+                ))
+                any_patterns.extend(cls._contract_pattern_list(
+                    raw.get("any")
+                    or raw.get("required_any")
+                    or raw.get("any_of")
+                ))
+                return
+            all_patterns.extend(cls._contract_pattern_list(raw))
+
+        add_required(contract.get("required_changed_files"))
+        add_required(artifacts.get("required_changed_files"))
+        all_patterns.extend(cls._contract_pattern_list(contract.get("required_changed_files_all")))
+        all_patterns.extend(cls._contract_pattern_list(artifacts.get("required_changed_files_all")))
+        any_patterns.extend(cls._contract_pattern_list(contract.get("required_changed_files_any")))
+        any_patterns.extend(cls._contract_pattern_list(artifacts.get("required_changed_files_any")))
+        return all_patterns, any_patterns
+
+    def _contract_required_changed_files_error(
+        self,
+        contract: Dict[str, Any],
+        artifacts: Dict[str, Any],
+        changed_files: List[str],
+    ) -> Optional[str]:
+        all_patterns, any_patterns = self._contract_required_changed_file_sets(contract, artifacts)
+
+        for pattern in all_patterns:
+            if not self._changed_files_match_any(changed_files, [pattern]):
+                return (
+                    "CONTRACT_REJECTED: rewrite contract requires a changed file "
+                    f"matching {pattern!r}."
+                )
+
+        if any_patterns and not self._changed_files_match_any(changed_files, any_patterns):
+            return (
+                "CONTRACT_REJECTED: rewrite contract requires at least one changed file "
+                f"matching one of: {', '.join(repr(pattern) for pattern in any_patterns)}."
+            )
+
+        return None
+
+    @staticmethod
+    def _path_has_glob(pattern: str) -> bool:
+        return any(ch in pattern for ch in "*?[")
+
+    def _contract_required_files_error(
+        self,
+        contract: Dict[str, Any],
+        artifacts: Dict[str, Any],
+        values: Dict[str, str],
+    ) -> Optional[str]:
+        raw_required = []
+        raw_required.extend(self._config_items(contract.get("required_files")))
+        raw_required.extend(self._config_items(artifacts.get("required_files")))
+        raw_required.extend(self._config_items(contract.get("required_artifacts")))
+        raw_required.extend(self._config_items(artifacts.get("required_artifacts")))
+        raw_required.extend(self._config_items(artifacts.get("paths_required")))
+
+        for item in raw_required:
+            pattern = self._pattern_from_contract_item(item)
+            if not pattern:
+                continue
+            formatted, err = self._format_contract_command(pattern, values)
+            if err:
+                return f"CONTRACT_REJECTED: {err}"
+            assert formatted is not None
+            path = Path(formatted)
+            if not path.is_absolute():
+                path = self.source_root / path
+            if self._path_has_glob(str(path)):
+                if glob.glob(str(path), recursive=True):
+                    continue
+            elif path.exists():
+                continue
+            return (
+                "CONTRACT_REJECTED: rewrite contract requires artifact path "
+                f"{formatted!r} to exist."
+            )
+
+        return None
+
+    @staticmethod
+    def _contract_command_specs(contract: Dict[str, Any]) -> List[Dict[str, Any]]:
+        specs: List[Dict[str, Any]] = []
+
+        def add_one(item: Any, fallback_name: Optional[str] = None) -> None:
+            if item is None:
+                return
+            if isinstance(item, dict):
+                if "command" in item or "run" in item:
+                    command = item.get("command", item.get("run"))
+                    if command:
+                        spec = dict(item)
+                        spec["command"] = command
+                        specs.append(spec)
+                    return
+                for name, command in item.items():
+                    if isinstance(command, dict):
+                        spec = dict(command)
+                        spec.setdefault("name", str(name))
+                        add_one(spec)
+                    else:
+                        add_one({"name": str(name), "command": command})
+                return
+            command = str(item).strip()
+            if command:
+                specs.append({"name": fallback_name or command, "command": command})
+
+        add_one(contract.get("command"))
+        for key in ("commands", "validation_commands", "post_build_commands"):
+            raw = contract.get(key)
+            if raw is None:
+                continue
+            if isinstance(raw, dict) and not ("command" in raw or "run" in raw):
+                add_one(raw)
+            else:
+                for item in ReviewLoop._config_items(raw):
+                    add_one(item)
+
+        return specs
+
+    def _rewrite_contract_commands_error(
+        self,
+        contract: Dict[str, Any],
+        artifacts: Dict[str, Any],
+        values: Dict[str, str],
+    ) -> Optional[str]:
+        external_crates = str(artifacts.get("external_crates", "")).lower()
+        for idx, spec in enumerate(self._contract_command_specs(contract), 1):
+            command_template = spec.get("command") or spec.get("run")
+            if not command_template:
+                return f"CONTRACT_REJECTED: contract command {idx} is missing a command."
+            name = str(spec.get("name") or spec.get("title") or f"command {idx}")
+            command, err = self._format_contract_command(str(command_template), values)
+            if err:
+                return f"CONTRACT_REJECTED: {err}"
+            timeout = int(spec.get("timeout", contract.get("timeout", 600)))
+            if (
+                str(spec.get("external_crates", external_crates)).lower()
+                in {"vendored_only", "offline", "vendored-only"}
+                and not self._cargo_offline_enforced(command or "")
+            ):
+                return (
+                    "CONTRACT_REJECTED: rewrite contract requires offline/vendored Cargo use, "
+                    f"but contract command {name!r} does not include --offline and "
+                    "CARGO_NET_OFFLINE is not enabled."
+                )
+            result = self._run_contract_command(command or "", timeout=timeout)
+            if result.success:
+                continue
+            return (
+                f"CONTRACT_REJECTED: contract command {name!r} failed.\n\n"
+                f"Command: {command}\n"
+                f"Exit code: {result.return_code}\n"
+                f"Output:\n{self._compact_text(result.raw_output, 4000)}"
+            )
+        return None
 
     def _run_contract_process(self, command: str, timeout: int = 60) -> subprocess.CompletedProcess:
         return subprocess.run(
@@ -2778,6 +3018,14 @@ class ReviewLoop:
             return None
 
         artifacts = contract.get("artifacts") if isinstance(contract.get("artifacts"), dict) else {}
+        required_changed_files_error = self._contract_required_changed_files_error(
+            contract,
+            artifacts,
+            changed_files,
+        )
+        if required_changed_files_error:
+            return required_changed_files_error
+
         if _config_bool(artifacts.get("rust_files_required"), default=False):
             if not any(Path(path).suffix.lower() == ".rs" for path in changed_files):
                 return "CONTRACT_REJECTED: rewrite contract requires a changed Rust .rs source file."
@@ -2785,9 +3033,10 @@ class ReviewLoop:
             if not any(Path(path).name == "Cargo.toml" for path in changed_files):
                 return "CONTRACT_REJECTED: rewrite contract requires a changed Cargo.toml manifest."
 
-        required_invocations = contract.get("integrated_build_must_invoke") or []
-        if isinstance(required_invocations, str):
-            required_invocations = [required_invocations]
+        required_invocations = []
+        required_invocations.extend(self._config_items(contract.get("integrated_build_must_invoke")))
+        required_invocations.extend(self._config_items(contract.get("build_must_invoke")))
+        required_invocations.extend(self._config_items(contract.get("build_output_must_contain")))
         for invocation in required_invocations:
             if not self._build_output_has_invocation(build_result.raw_output, str(invocation)):
                 return (
@@ -2797,6 +3046,9 @@ class ReviewLoop:
 
         manifest = self._find_contract_cargo_manifest(changed_files)
         values = self._contract_vars(manifest)
+        required_files_error = self._contract_required_files_error(contract, artifacts, values)
+        if required_files_error:
+            return required_files_error
 
         rust_build = contract.get("rust_build")
         if rust_build:
@@ -2819,6 +3071,10 @@ class ReviewLoop:
                     f"Exit code: {result.return_code}\n"
                     f"Output:\n{self._compact_text(result.raw_output, 4000)}"
                 )
+
+        command_error = self._rewrite_contract_commands_error(contract, artifacts, values)
+        if command_error:
+            return command_error
 
         cli_error = self._rewrite_contract_cli_error(contract, values)
         if cli_error:

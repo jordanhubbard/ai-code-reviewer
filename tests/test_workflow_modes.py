@@ -347,10 +347,11 @@ class WorkflowModeTests(unittest.TestCase):
             self.assertEqual(loop.workflow_mode, "rewrite")
             self.assertEqual(loop.review_summary_file.name, "REWRITE-SUMMARY.md")
             self.assertEqual(loop.index.index_path.name, "REWRITE-INDEX.md")
-            self.assertEqual(loop.log_dir, root / ".ai-code-reviewer" / "logs")
+            resolved_root = root.resolve()
+            self.assertEqual(loop.log_dir, resolved_root / ".ai-code-reviewer" / "logs")
             self.assertEqual(
                 loop.retry_tracker_path,
-                root / ".ai-code-reviewer" / "friendly-mentor-retry-tracker.json",
+                resolved_root / ".ai-code-reviewer" / "friendly-mentor-retry-tracker.json",
             )
             self.assertFalse(loop._parallel_mode)
 
@@ -556,6 +557,102 @@ class WorkflowModeTests(unittest.TestCase):
                 mismatch = loop._rewrite_build_completion_error(build_result, ["bin/foo/main.c"])
             self.assertIsNotNone(mismatch)
             self.assertIn("stdout mismatch", mismatch)
+
+    def test_rewrite_contract_supports_generic_commands_and_artifacts(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _make_source_tree(root)
+            (root / "bin" / "foo" / "go.mod").write_text("module example.com/foo\n")
+            (root / "bin" / "foo" / "generated.out").write_text("ok\n")
+            ops = OpsLogger(log_dir=root / ".ops-log", session_id="test-session")
+            mock_git = _mock_git_for_loop(root)
+            loop = _make_rewrite_loop(root, mock_git, ops)
+            loop.session.current_directory = "bin/foo"
+            loop.rewrite_config["require_rust_build"] = False
+            loop.rewrite_config["contract"] = {
+                "build_must_invoke": "go test",
+                "required_changed_files": {
+                    "any": ["**/*.go"],
+                    "all": ["go.mod"],
+                },
+                "required_files": ["{unit}/generated.out"],
+                "commands": [
+                    {
+                        "name": "package tests",
+                        "command": "printf checked:{unit}:{build_command}",
+                        "timeout": 5,
+                    }
+                ],
+            }
+            build_result = reviewer.BuildResult(
+                success=True,
+                return_code=0,
+                duration_seconds=0.1,
+                raw_output="go test ./...\n",
+            )
+            changed_files = ["bin/foo/main.go", "bin/foo/go.mod"]
+
+            with patch.object(
+                loop,
+                "_run_contract_command",
+                return_value=reviewer.BuildResult(
+                    success=True,
+                    return_code=0,
+                    duration_seconds=0.1,
+                    raw_output="ok",
+                ),
+            ) as run_contract:
+                self.assertIsNone(loop._rewrite_build_completion_error(build_result, changed_files))
+
+            run_contract.assert_called_once()
+            self.assertIn("checked:bin/foo:make -C bin/foo", run_contract.call_args.args[0])
+
+            missing_required_file = loop._rewrite_build_completion_error(
+                build_result,
+                ["bin/foo/main.go"],
+            )
+            self.assertIsNotNone(missing_required_file)
+            self.assertIn("requires a changed file matching 'go.mod'", missing_required_file)
+
+    def test_rewrite_contract_reports_generic_command_failures(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _make_source_tree(root)
+            ops = OpsLogger(log_dir=root / ".ops-log", session_id="test-session")
+            mock_git = _mock_git_for_loop(root)
+            loop = _make_rewrite_loop(root, mock_git, ops)
+            loop.session.current_directory = "bin/foo"
+            loop.rewrite_config["require_rust_build"] = False
+            loop.rewrite_config["contract"] = {
+                "commands": [
+                    {
+                        "name": "project tests",
+                        "command": "false",
+                    }
+                ],
+            }
+            build_result = reviewer.BuildResult(
+                success=True,
+                return_code=0,
+                duration_seconds=0.1,
+                raw_output="",
+            )
+
+            with patch.object(
+                loop,
+                "_run_contract_command",
+                return_value=reviewer.BuildResult(
+                    success=False,
+                    return_code=1,
+                    duration_seconds=0.1,
+                    raw_output="failed",
+                ),
+            ):
+                failure = loop._rewrite_build_completion_error(build_result, ["bin/foo/main.c"])
+
+            self.assertIsNotNone(failure)
+            self.assertIn("contract command 'project tests' failed", failure)
+            self.assertIn("Command: false", failure)
 
     def test_scope_change_ignores_metadata_only_dirty_state(self) -> None:
         with TemporaryDirectory() as tmp:

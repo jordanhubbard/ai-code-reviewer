@@ -2,10 +2,9 @@
 """
 Build Executor for Angry AI
 
-Handles running FreeBSD build commands and parsing compiler errors.
-Designed to run locally on a FreeBSD system.
-
-This module is cross-platform Python but the build commands are FreeBSD-specific.
+Handles running the configured project build command and parsing compiler errors.
+The command runs from source_root so projects that rely on their working
+directory behave consistently.
 """
 
 import logging
@@ -248,8 +247,6 @@ class BuildConfig:
 class BuildExecutor:
     """
     Executes builds and parses results.
-    
-    Runs locally on the FreeBSD system where the source tree is mounted.
     """
     
     def __init__(self, config: BuildConfig, run_pre_build: bool = True):
@@ -313,9 +310,9 @@ class BuildExecutor:
         """
         Run the build command and parse results.
         
-        IMPORTANT: We chdir to source_root before running make because
-        FreeBSD's build system does path detection that won't work
-        properly with "cd /path && make" chaining.
+        IMPORTANT: We chdir to source_root before running the command because
+        many build systems do path detection that won't work properly with
+        "cd /path && command" chaining.
         
         Args:
             capture_output: If True, capture stdout/stderr for parsing
@@ -329,9 +326,7 @@ class BuildExecutor:
         start_time = time.time()
         
         try:
-            # Run the build command with cwd set to source root
-            # This is critical - FreeBSD's make buildworld needs to be
-            # run FROM the source directory, not via "cd ... && make"
+            # Run the build command with cwd set to source root.
             result = subprocess.run(
                 command,
                 shell=True,
@@ -553,4 +548,3 @@ make[5]: *** [pkill.o] Error 1
         print(f"  WARNING: {w}")
     
     print("\n✓ Error parser working")
-
