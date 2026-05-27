@@ -5072,7 +5072,10 @@ Output ONLY the lesson entry, nothing else."""
                     skip_msg += "\nNo other pending directories remain."
                 return skip_msg
             
-            # IMPORTANT: Prevent changing directories with uncommitted changes
+            # IMPORTANT: Scope is sticky. Once a work unit is active, the LLM
+            # must finish it (via BUILD) before switching. This prevents
+            # wandering through invalid pending units when the per-step
+            # context drifts from the established scope.
             if self.session.current_directory and self.session.current_directory != directory:
                 dirty_source_paths = self._dirty_non_metadata_paths()
                 if self.session.pending_changes or dirty_source_paths:
@@ -5091,6 +5094,24 @@ Output ONLY the lesson entry, nothing else."""
                         f"BUILD and COMMIT happen at directory level!\n"
                         f"Each directory is one logical unit.\n"
                     )
+                # No pending changes, but scope is set: still refuse the
+                # switch so the LLM re-anchors on the active work unit.
+                active = self.session.current_directory
+                files_hint = ""
+                if self.session.files_in_current_directory:
+                    sample = self.session.files_in_current_directory[:5]
+                    files_hint = "\nFiles in scope:\n" + "\n".join(f"  - {p}" for p in sample)
+                    if len(self.session.files_in_current_directory) > len(sample):
+                        files_hint += f"\n  ... and {len(self.session.files_in_current_directory) - len(sample)} more"
+                return (
+                    f"SET_SCOPE_ERROR: Already scoped to {active}. Do not switch work units.\n\n"
+                    f"Your active scope is `{active}` and has not been completed.\n"
+                    f"Continue working there instead of selecting a new directory:\n"
+                    f"  1. Use READ_FILE on files within {active}\n"
+                    f"  2. Make any required {self.workflow['verb']} edits (EDIT_FILE / WRITE_FILE)\n"
+                    f"  3. Run ACTION: BUILD to validate and commit the unit\n"
+                    f"{files_hint}"
+                )
             
             # Verify directory exists
             dir_path = self.source_root / directory
