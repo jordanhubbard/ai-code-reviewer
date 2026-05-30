@@ -12,6 +12,11 @@ metadata:
     - build-integration
     - cargo
     - behavior-preservation
+  rewrite_contract:
+    commands:
+      - name: "FreeBSD make lifecycle targets"
+        command: "make -C {unit} cleandir"
+        timeout: 300
 
 inputs:
   - title: "codebase_path"
@@ -102,6 +107,16 @@ system_prompt: |
     Makefile rules or a real local include file that the active unit build can
     find.
   - The normal unit build must not depend on missing build infrastructure.
+  - Preserve the existing FreeBSD make target surface. Do not replace a
+    `bsd.prog.mk`, `bsd.lib.mk`, or related framework include with hand-written
+    `all`, `install`, or `clean` targets unless the replacement also preserves
+    standard lifecycle targets such as `cleandir`, `depend`, `obj`, `tags`, and
+    install/manpage behavior.
+  - Prefer augmenting the existing Makefile variables and rules over replacing
+    the Makefile. If a local Rust rule is necessary, make it coexist with the
+    original FreeBSD make framework whenever possible.
+  - After any Makefile change, the configured rewrite contract must still pass
+    the active unit's FreeBSD make lifecycle checks.
   - Keep Cargo target/output directories outside the source crate when possible.
   - For commands, build a binary that can occupy the normal program path after
     validation.

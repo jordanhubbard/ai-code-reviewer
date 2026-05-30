@@ -22,6 +22,7 @@ Architecture:
 """
 
 import argparse
+import copy
 import datetime
 import fnmatch
 import glob
@@ -2540,8 +2541,54 @@ class ReviewLoop:
         return invocation in raw_output
 
     def _rewrite_contract(self) -> Dict[str, Any]:
-        contract = self.rewrite_config.get("contract")
-        return contract if isinstance(contract, dict) else {}
+        persona_contract = self._persona_rewrite_contract()
+        config_contract = self.rewrite_config.get("contract")
+        if not isinstance(config_contract, dict):
+            config_contract = {}
+        if not persona_contract:
+            return copy.deepcopy(config_contract)
+        return self._merge_contract_defaults(persona_contract, config_contract)
+
+    def _persona_rewrite_contract(self) -> Dict[str, Any]:
+        if not isinstance(self.agent_spec, dict):
+            return {}
+        metadata = self.agent_spec.get("metadata")
+        if not isinstance(metadata, dict):
+            return {}
+        raw = (
+            metadata.get("rewrite_contract")
+            or metadata.get("default_rewrite_contract")
+        )
+        return raw if isinstance(raw, dict) else {}
+
+    @classmethod
+    def _merge_contract_defaults(
+        cls,
+        defaults: Dict[str, Any],
+        overrides: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """Merge persona contract defaults with config additions."""
+        merged = copy.deepcopy(defaults)
+        for key, value in overrides.items():
+            if key not in merged:
+                merged[key] = copy.deepcopy(value)
+                continue
+            merged[key] = cls._merge_contract_value(merged[key], value)
+        return merged
+
+    @classmethod
+    def _merge_contract_value(cls, default: Any, override: Any) -> Any:
+        if isinstance(default, dict) and isinstance(override, dict):
+            merged = copy.deepcopy(default)
+            for key, value in override.items():
+                if key in merged:
+                    merged[key] = cls._merge_contract_value(merged[key], value)
+                else:
+                    merged[key] = copy.deepcopy(value)
+            return merged
+        if isinstance(default, list) and isinstance(override, list):
+            return copy.deepcopy(default) + copy.deepcopy(override)
+        return copy.deepcopy(override)
 
     def _contract_vars(self) -> Dict[str, str]:
         unit = self.session.current_directory or ""

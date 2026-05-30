@@ -190,6 +190,8 @@ review:
       - "The rewritten code is coherent, maintainable, and behavior-preserving for the selected scope."
     # Optional machine-checked acceptance contract. These checks run after the
     # configured build command succeeds and before the unit is marked done.
+    # A persona may also provide default contract checks in agent.yaml metadata;
+    # config entries here are merged with those defaults.
     contract:
       # Require that the configured build output shows these tools or markers.
       integrated_build_must_invoke: []

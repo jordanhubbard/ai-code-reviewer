@@ -109,8 +109,13 @@ def _mock_git_for_loop(root: Path) -> MagicMock:
     return mock_git
 
 
-def _make_rewrite_loop(root: Path, mock_git: MagicMock, ops: OpsLogger) -> reviewer.ReviewLoop:
-    persona_dir = Path(__file__).resolve().parents[1] / "personas" / "friendly-mentor"
+def _make_rewrite_loop(
+    root: Path,
+    mock_git: MagicMock,
+    ops: OpsLogger,
+    persona_name: str = "friendly-mentor",
+) -> reviewer.ReviewLoop:
+    persona_dir = Path(__file__).resolve().parents[1] / "personas" / persona_name
     with patch.object(reviewer.ReviewLoop, "_init_beads_manager", return_value=None), \
          patch("reviewer.GitHelper", return_value=mock_git):
         return reviewer.ReviewLoop(
@@ -578,7 +583,103 @@ class WorkflowModeTests(unittest.TestCase):
             self.assertIn("contract command 'project tests' failed", failure)
             self.assertIn("Command: false", failure)
 
-    def test_scope_change_ignores_metadata_only_dirty_state(self) -> None:
+    def test_persona_rewrite_contract_defaults_are_enforced(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _make_source_tree(root)
+            ops = OpsLogger(log_dir=root / ".ops-log", session_id="test-session")
+            mock_git = _mock_git_for_loop(root)
+            loop = _make_rewrite_loop(
+                root,
+                mock_git,
+                ops,
+                persona_name="freebsd-rust-rewriter",
+            )
+            loop.session.current_directory = "bin/foo"
+            build_result = reviewer.BuildResult(
+                success=True,
+                return_code=0,
+                duration_seconds=0.1,
+                raw_output="cargo build --manifest-path bin/foo/Cargo.toml\n",
+            )
+
+            with patch.object(
+                loop,
+                "_run_contract_command",
+                return_value=reviewer.BuildResult(
+                    success=True,
+                    return_code=0,
+                    duration_seconds=0.1,
+                    raw_output="ok",
+                ),
+            ) as run_contract:
+                self.assertIsNone(
+                    loop._rewrite_build_completion_error(
+                        build_result,
+                        ["bin/foo/Makefile", "bin/foo/src/main.rs"],
+                    )
+                )
+
+            run_contract.assert_called_once()
+            self.assertEqual(
+                run_contract.call_args.args[0],
+                "make -C bin/foo cleandir",
+            )
+
+    def test_persona_and_config_rewrite_contracts_are_merged(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _make_source_tree(root)
+            ops = OpsLogger(log_dir=root / ".ops-log", session_id="test-session")
+            mock_git = _mock_git_for_loop(root)
+            loop = _make_rewrite_loop(
+                root,
+                mock_git,
+                ops,
+                persona_name="freebsd-rust-rewriter",
+            )
+            loop.session.current_directory = "bin/foo"
+            loop.rewrite_config["contract"] = {
+                "commands": [
+                    {
+                        "name": "extra validation",
+                        "command": "printf extra:{unit}",
+                    }
+                ]
+            }
+            build_result = reviewer.BuildResult(
+                success=True,
+                return_code=0,
+                duration_seconds=0.1,
+                raw_output="cargo build --manifest-path bin/foo/Cargo.toml\n",
+            )
+
+            with patch.object(
+                loop,
+                "_run_contract_command",
+                return_value=reviewer.BuildResult(
+                    success=True,
+                    return_code=0,
+                    duration_seconds=0.1,
+                    raw_output="ok",
+                ),
+            ) as run_contract:
+                self.assertIsNone(
+                    loop._rewrite_build_completion_error(
+                        build_result,
+                        ["bin/foo/Makefile", "bin/foo/src/main.rs"],
+                    )
+                )
+
+            self.assertEqual(
+                [call.args[0] for call in run_contract.call_args_list],
+                [
+                    "make -C bin/foo cleandir",
+                    "printf extra:bin/foo",
+                ],
+            )
+
+    def test_scope_change_without_source_changes_keeps_sticky_scope(self) -> None:
         with TemporaryDirectory() as tmp:
             root = Path(tmp)
             _make_two_unit_source_tree(root)
@@ -594,8 +695,9 @@ class WorkflowModeTests(unittest.TestCase):
             with patch.object(loop, "_record_directory_attempt", return_value=1):
                 result = loop._execute_action({"action": "SET_SCOPE", "directory": "bin/bar"})
 
-            self.assertIn("Now rewriting bin/bar", result)
-            self.assertEqual(loop.session.current_directory, "bin/bar")
+            self.assertIn("Already scoped to bin/foo", result)
+            self.assertNotIn("Cannot change directory with uncommitted changes", result)
+            self.assertEqual(loop.session.current_directory, "bin/foo")
 
     def test_completed_work_unit_cannot_be_reopened_or_edited(self) -> None:
         with TemporaryDirectory() as tmp:

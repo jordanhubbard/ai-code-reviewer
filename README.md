@@ -219,6 +219,11 @@ variables such as `{unit}`, `{unit_dir}`, `{source_root}`, and `{build_command}`
 Language-specific rewrite requirements belong in the persona and
 `review.rewrite.contract`, not in runner code.
 
+Personas can ship default rewrite contract checks in `agent.yaml` metadata, and
+`config.yaml` contract entries are merged with those defaults. For example, the
+FreeBSD Rust rewriter validates that the active unit still supports the standard
+`cleandir` make lifecycle target after Makefile changes.
+
 ## How It Works
 
 ### Hierarchical Workflow
