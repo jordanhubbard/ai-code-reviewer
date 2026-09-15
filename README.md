@@ -347,6 +347,36 @@ source:
 - [AGENTS.md](AGENTS.md) - AI agent instructions
 - [docs/](docs/) - Additional documentation
 
+<!-- ai-template:narrative:start -->
+## The Totally True and Not At All Embellished History of AI Code Reviewer
+
+### The continuing adventures of Jordan Hubbard and Sir Reginald von Fluffington III
+
+> *Part 2 of an ongoing chronicle. [← Part 1: NanoLang](https://github.com/jordanhubbard/nanolang#the-totally-true-and-not-at-all-embellished-history-of-nanolang) | [Part 3: Aviation →](https://github.com/jordanhubbard/Aviation#the-totally-true-and-not-at-all-embellished-history-of-aviation)*
+> *[Chronicle index](https://github.com/jordanhubbard/ai-template/blob/main/CHRONICLE.md) · Ordered by first recorded AI-assisted commit.*
+
+The programmer had reached the stage of software development at which the code existed, the bugs existed, and the two had negotiated an arrangement that excluded him.
+
+“I need another reviewer,” he announced.
+
+Sir Reginald von Fluffington III, who was already reviewing the desk for objects that could be pushed off it, did not apply.
+
+The obvious solution was to ask an AI to read the code. The less obvious problem was that code tended to arrive in quantities larger than a model's attention span. The programmer therefore arranged the review into directories, files, and functions, as though conducting an inspection of a very large hotel whose occupants had all denied responsibility for the plumbing.
+
+Each reviewer needed a disposition. A friendly mentor could explain a mistake gently. A security hawk could regard it as evidence. A FreeBSD reviewer could bring the accumulated irritation of several decades to bear on a single questionable allocation. These became configurable personas, which the programmer considered an improvement over the traditional system of discovering a colleague's personality in the comments on a pull request.
+
+Sir Reginald selected the security role by sitting on the only available input device.
+
+There remained the question of whether the proposed fixes worked. An eloquent explanation was insufficient. The configured build command would have to run; a failed build would send the reviewer back to its work. Review and rewrite acquired separate workflows and progress records, because “I examined it” and “I replaced it” were statements the programmer preferred to keep distinguishable.
+
+“It will use the project's own build,” he said. “Any language. Whatever proves the change.”
+
+Sir Reginald knocked a pen off the desk. It reached the floor. The test was reproducible, the result unambiguous, and no second model was needed to judge it.
+
+The programmer called the arrangement elegant. Sir Reginald withheld endorsement, citing insufficient tuna and a review process that still permitted the programmer to submit code.
+
+<!-- ai-template:narrative:end -->
+
 ## License
 
 MIT License - See [LICENSE](LICENSE)
